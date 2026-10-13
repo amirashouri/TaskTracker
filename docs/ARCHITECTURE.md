@@ -98,6 +98,35 @@ the flag drops its cursor and pulls from the start — there is no separate
 client that has never synced is not flagged: it is already pulling everything
 that survived.
 
+## Wire compatibility
+
+The client is an installed mobile app that syncs offline and cannot be updated on
+this server's schedule. That makes **the installed client the fixed point**: when
+the two disagree, the server changes. Three mismatches have already shipped on
+that basis — `entityId` against `entityID`, an undeclared `resyncRequired`, and
+ISO-8601 timestamps against `int64` epoch millis — and two of them were invisible
+from the server side alone, because Go decodes JSON keys case-insensitively and
+because the pull path re-serves stored bytes rather than re-encoding them.
+
+The client leaves `ignoreUnknownKeys` off on purpose, which gives two rules:
+
+- **A response may not gain a field.** An undeclared key is a decoding failure,
+  not a value the client skips, so adding one breaks every installed build
+  exactly as removing one does.
+- **A response may not lose or rename a field the client declares without a
+  default.** Kotlin treats a property with a default as optional and one without
+  as required — `hasMore` is always sent, `resyncRequired` and `nextCursor` may
+  be omitted.
+
+A new response field therefore ships **client first**: a client that declares it
+with a default works against both servers, and only then may the server send it.
+Anything that cannot follow that order is a new `/v1` version and a migration
+path.
+
+`docs/API.md` is the written contract; `cmd/server/contract_test.go` is the
+executable one, and it compares key names rather than decoded values because a
+case-insensitive decode cannot see a case-only rename.
+
 ## Verification status
 
 | Check | Result |
@@ -105,8 +134,10 @@ that survived.
 | `go.mod` parses, `go.sum` complete | yes |
 | `gofmt -l .` | clean |
 | `go build ./...`, `go vet ./...` | pass |
-| `go test ./...` | passes (config only) |
-| server on SQLite | boots; signs in; push/pull round-trips a project and work item |
+| `go test ./...` | passes, 8 packages |
+| `go test -race ./...` | passes; also run in CI |
+| server on SQLite | boots; signs in; push/pull round-trips every entity type |
+| server on Postgres | covered by the CI `test-postgres` job |
 
 The blockers below were fixed in Milestone 0 and the runtime gaps in Milestone 1
 of `docs/PLAN.md`; they are kept here as the record of what was wrong. C1 and C2

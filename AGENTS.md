@@ -4,6 +4,8 @@ Working agreement for `TaskTrackerServer`. Read this before changing anything.
 
 - `docs/PLAN.md` — the ordered, task-by-task implementation roadmap. Work from
   this; one task, one branch, one MR.
+- `docs/API.md` — the HTTP wire contract. Read it before changing a request or
+  response shape.
 - `docs/ARCHITECTURE.md` — the design record and review: what exists, what is
   broken, and why.
 - `README.md` — how to configure and run the server.
@@ -16,6 +18,38 @@ here on purpose: an operator should need a `DATABASE_URL`, a `JWT_SECRET`, and
 `./server`. Do not add a service, a message bus, or a second deployable without
 a reason that survives that constraint.
 
+## The wire format is a contract with a client you cannot update
+
+The client is an installed mobile app that syncs offline and cannot be updated on
+this server's schedule. **The installed client is the fixed point**: when the two
+disagree, the server changes. Three contract mismatches have already shipped and
+been found this way — `entityId` vs `entityID`, an undeclared `resyncRequired`,
+and ISO-8601 timestamps against `int64` millis — and the first two were invisible
+from the server side alone.
+
+Two rules follow, and the second is the one that gets missed.
+
+**A response may not gain a field.** The client leaves `ignoreUnknownKeys` off,
+deliberately: its `JSONCoding` says a field renamed on the server "has to fail
+loudly at the boundary" rather than silently decode as null on every device. The
+same setting makes an *added* key a decoding failure rather than a value it
+skips, so a new response field breaks every installed build exactly as a removed
+one does.
+
+**A response may not lose or rename a field the client declares without a
+default.** Kotlin treats a property with a default as optional and one without as
+required.
+
+The safe order for a new response field is therefore **client first**: ship a
+client that declares it with a default — which works against both the old and the
+new server — and only then start sending it. Anything that cannot follow that
+order is a new `/v1` version and a migration path.
+
+`docs/API.md` is the written contract; `cmd/server/contract_test.go` is the
+executable one. It decodes responses into the client's own DTOs *and* compares the
+key names, because Go matches JSON keys case-insensitively and a decode-based
+check cannot see a case-only rename.
+
 ## The command that decides whether you are done
 
 ```bash
@@ -25,9 +59,9 @@ gofmt -l . && go build ./... && go vet ./... && go test ./...
 All four pass on `main`. Keep it that way: never make a check green by deleting
 code, stubbing a proof, or weakening an assertion.
 
-The server compiles and boots but cannot yet read or write data — Milestone 1 of
-`docs/PLAN.md` is the blocking work. A runtime failure that Milestone 1 lists is
-known, not a regression you caused.
+Run `go test -race ./...` before touching anything concurrent — the sync engine,
+the rate limiter and refresh-token rotation all are. CI runs it, so a plain local
+run is not the same check.
 
 ## Toolchain
 
@@ -58,11 +92,11 @@ decorative banners, no commented-out code.
 module can import it, which is the whole point of keeping the server one module.
 
 - `cmd/server/main.go` is the composition root. Concrete types are constructed
-  and wired here and nowhere else.
+  and wired here and nowhere else; `mount` is the route table.
 - `internal/entities` owns models and repositories. A repository is the only
-  place that knows SQL.
-- `internal/auth`, `internal/middleware`, `internal/sync` own their concerns;
-  they are empty today.
+  place that knows SQL, and `internal/entities/timestamp.go` is the only place
+  that knows the wire date format.
+- `internal/auth`, `internal/middleware`, `internal/sync` own their concerns.
 - A handler does not reach into the database directly. It calls a repository or
   the sync engine.
 
