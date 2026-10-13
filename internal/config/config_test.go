@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const testKeyJWT = "JWT_SECRET"
@@ -86,5 +87,38 @@ func TestLoadPrefersHostEnvironmentOverEnvFile(t *testing.T) {
 	}
 	if cfg.JWTSecret != hostSecret {
 		t.Errorf("JWTSecret = %q, want the host environment value to win", cfg.JWTSecret)
+	}
+}
+
+func TestLoadReadsSignInLimits(t *testing.T) {
+	isolate(t, testKeyJWT)
+	isolate(t, "SIGNIN_MAX_ATTEMPTS")
+	isolate(t, "SIGNIN_WINDOW")
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+	t.Setenv(testKeyJWT, strings.Repeat("a", 32))
+	t.Setenv("SIGNIN_MAX_ATTEMPTS", "5")
+	t.Setenv("SIGNIN_WINDOW", "2m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.SignInMaxAttempts != 5 {
+		t.Errorf("SignInMaxAttempts = %d, want 5", cfg.SignInMaxAttempts)
+	}
+	if cfg.SignInWindow != 2*time.Minute {
+		t.Errorf("SignInWindow = %v, want 2m", cfg.SignInWindow)
+	}
+}
+
+func TestLoadRejectsNegativeSignInAttempts(t *testing.T) {
+	isolate(t, testKeyJWT)
+	isolate(t, "SIGNIN_MAX_ATTEMPTS")
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+	t.Setenv(testKeyJWT, strings.Repeat("a", 32))
+	t.Setenv("SIGNIN_MAX_ATTEMPTS", "-1")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected an error when SIGNIN_MAX_ATTEMPTS is negative")
 	}
 }

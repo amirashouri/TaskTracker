@@ -5,18 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	DatabaseURL   string
-	JWTSecret     string
-	JWTAccessTTL  time.Duration
-	JWTRefreshTTL time.Duration
-	ServerPort    string
-	CORSOrigins   []string
-	LogLevel      string
+	DatabaseURL       string
+	JWTSecret         string
+	JWTAccessTTL      time.Duration
+	JWTRefreshTTL     time.Duration
+	ServerPort        string
+	CORSOrigins       []string
+	LogLevel          string
+	SignInMaxAttempts int
+	SignInWindow      time.Duration
 }
 
 // Load reads configuration from the environment, seeded from the file named by
@@ -29,13 +32,15 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		DatabaseURL:   getEnv("DATABASE_URL", "sqlite:///data/tasktracker.db"),
-		JWTSecret:     os.Getenv("JWT_SECRET"),
-		JWTAccessTTL:  getDurationEnv("JWT_ACCESS_TTL", 1*time.Hour),
-		JWTRefreshTTL: getDurationEnv("JWT_REFRESH_TTL", 720*time.Hour),
-		ServerPort:    getEnv("SERVER_PORT", "8080"),
-		CORSOrigins:   getCSVEnv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080"),
-		LogLevel:      getEnv("LOG_LEVEL", "info"),
+		DatabaseURL:       getEnv("DATABASE_URL", "sqlite:///data/tasktracker.db"),
+		JWTSecret:         os.Getenv("JWT_SECRET"),
+		JWTAccessTTL:      getDurationEnv("JWT_ACCESS_TTL", 1*time.Hour),
+		JWTRefreshTTL:     getDurationEnv("JWT_REFRESH_TTL", 720*time.Hour),
+		ServerPort:        getEnv("SERVER_PORT", "8080"),
+		CORSOrigins:       getCSVEnv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080"),
+		LogLevel:          getEnv("LOG_LEVEL", "info"),
+		SignInMaxAttempts: getIntEnv("SIGNIN_MAX_ATTEMPTS", 10),
+		SignInWindow:      getDurationEnv("SIGNIN_WINDOW", 15*time.Minute),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -51,6 +56,12 @@ func (c *Config) validate() error {
 	// HS256 signing requires at least 256 bits of key material.
 	if len(c.JWTSecret) < 32 {
 		return errors.New("JWT_SECRET must be set and at least 32 bytes; see .env.example")
+	}
+	if c.SignInMaxAttempts < 0 {
+		return errors.New("SIGNIN_MAX_ATTEMPTS must not be negative; use 0 to disable")
+	}
+	if c.SignInMaxAttempts > 0 && c.SignInWindow <= 0 {
+		return errors.New("SIGNIN_WINDOW must be positive when SIGNIN_MAX_ATTEMPTS is set")
 	}
 	return nil
 }
@@ -96,6 +107,15 @@ func getDurationEnv(key string, defaultValue time.Duration) time.Duration {
 	if value := os.Getenv(key); value != "" {
 		if d, err := time.ParseDuration(value); err == nil {
 			return d
+		}
+	}
+	return defaultValue
+}
+
+func getIntEnv(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if n, err := strconv.Atoi(value); err == nil {
+			return n
 		}
 	}
 	return defaultValue

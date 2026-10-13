@@ -18,6 +18,7 @@ import (
 	"github.com/amirashouri/tasktracker-server/internal/db"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
 	"github.com/amirashouri/tasktracker-server/internal/middleware"
+	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
 	"github.com/amirashouri/tasktracker-server/internal/sync"
 )
 
@@ -76,7 +77,8 @@ func runServer() {
 
 	// Initialize auth handler with token store
 	tokenStore := auth.NewTokenStore(database.DB)
-	authHandler := auth.NewHandler(jwtManager, userRepo, tokenStore)
+	limiter := ratelimit.New(cfg.SignInMaxAttempts, cfg.SignInWindow)
+	authHandler := auth.NewHandler(jwtManager, userRepo, tokenStore, limiter)
 
 	// Initialize admin handler
 	adminHandler := admin.NewHandler(userRepo)

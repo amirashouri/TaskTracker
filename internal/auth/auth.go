@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 
 	"github.com/amirashouri/tasktracker-server/internal/entities"
 	"github.com/amirashouri/tasktracker-server/internal/httpx"
+	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
 )
 
 // Token types carried in the "typ" claim so a refresh token cannot be replayed
@@ -134,13 +137,14 @@ func RoleFrom(ctx context.Context) (string, bool) {
 }
 
 type Handler struct {
-	jwt    *JWTManager
-	users  *entities.UserRepository
-	tokens *TokenStore
+	jwt     *JWTManager
+	users   *entities.UserRepository
+	tokens  *TokenStore
+	limiter *ratelimit.Limiter
 }
 
-func NewHandler(jwt *JWTManager, users *entities.UserRepository, tokens *TokenStore) *Handler {
-	return &Handler{jwt: jwt, users: users, tokens: tokens}
+func NewHandler(jwt *JWTManager, users *entities.UserRepository, tokens *TokenStore, limiter *ratelimit.Limiter) *Handler {
+	return &Handler{jwt: jwt, users: users, tokens: tokens, limiter: limiter}
 }
 
 type signInRequest struct {
@@ -175,17 +179,65 @@ func (h *Handler) SignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Throttle before the password is verified, so guessing is limited rather
+	// than merely slowed by bcrypt.
+	if retryAfter, ok := h.allowSignIn(r, email); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(retryAfter)))
+		httpx.WriteError(w, http.StatusTooManyRequests, "too many sign-in attempts")
+		return
+	}
+
 	user, err := h.users.VerifyPassword(r.Context(), email, req.Password)
 	if err != nil || user == nil {
 		httpx.WriteError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
+	// Clear the account's counter on success so a few typos do not lock a user
+	// out. The address counter is left alone, so spraying stays limited.
+	h.limiter.Reset("email:" + email)
+
 	// A sign-in starts a new token family; every rotation descends from this id,
 	// so the whole session can be revoked at once.
 	if err := h.writeTokens(w, r, user, uuid.NewString()); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not issue token")
 	}
+}
+
+// allowSignIn checks the client address and the account being tried. Keying on
+// both stops one address spraying many accounts and one account being sprayed
+// from many addresses.
+func (h *Handler) allowSignIn(r *http.Request, email string) (time.Duration, bool) {
+	if h.limiter == nil {
+		return 0, true
+	}
+	if allowed, retryAfter := h.limiter.Allow("ip:" + clientIP(r)); !allowed {
+		return retryAfter, false
+	}
+	if allowed, retryAfter := h.limiter.Allow("email:" + email); !allowed {
+		return retryAfter, false
+	}
+	return 0, true
+}
+
+// clientIP is the peer address. A deployment behind a proxy must be trusted to
+// rewrite it; X-Forwarded-For is deliberately not read here.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// retryAfterSeconds rounds up, so the header never tells a client to retry
+// before the window has actually reset.
+func retryAfterSeconds(d time.Duration) int {
+	seconds := int((d + time.Second - 1) / time.Second)
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
 }
 
 // Refresh rotates a refresh token: the presented token is revoked and a new one

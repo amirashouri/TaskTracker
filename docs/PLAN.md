@@ -31,7 +31,7 @@ are the way they are; this file is *what to do next*.
 | 0 — Compiling baseline | **Done** |
 | 1 — Data-layer integrity | **Done** |
 | 2 — Versioned migrations | **Done** |
-| 3 — Auth and security | T3.1, T3.3 done; T3.2, T3.4 not started |
+| 3 — Auth and security | T3.1, T3.2, T3.3 done; T3.4 not started |
 | 4 — Sync engine | Not started |
 | 5 — Observability and ops | T5.4 done; T5.1–T5.3, T5.5 not started |
 | 6 — Testing | T6.1–T6.4 done; T6.3 middleware tests still missing; T6.5 not started |
@@ -398,15 +398,28 @@ invalidates a live refresh token.
 
 **Depends on:** Milestone 1.
 
-### T3.2 — Rate-limit sign-in
+### T3.2 — Rate-limit sign-in (done)
 
-**Files:** `internal/auth/auth.go` or new `internal/middleware/ratelimit.go`.
+Done. `internal/ratelimit` is a small fixed-window counter keyed by an
+opaque string; `auth.Handler.SignIn` checks two keys before verifying the
+password — `ip:<peer address>` and `email:<account>` — so one address cannot
+spray many accounts and one account cannot be sprayed from many addresses.
+A denied attempt answers `429` with `Retry-After`. A successful sign-in
+clears the account's key so a few typos do not lock a user out; the address
+key is left alone so spraying stays limited.
 
-**Steps:** add a per-IP and per-email limiter in front of `SignIn`, returning
-`429` with `Retry-After`. Keep it in-process (the deployment is one binary) and
-document that it is per-instance.
+The limiter is in-process and per-instance: running several replicas
+multiplies the effective allowance. That is a deliberate tradeoff for a
+single-binary deployment — a shared store would be a second dependency.
+`SIGNIN_MAX_ATTEMPTS` (default 10) and `SIGNIN_WINDOW` (default 15m)
+configure it; `0` disables it.
 
-**Done when:** repeated failures from one IP are throttled.
+**Files:** new `internal/ratelimit/ratelimit.go`, `internal/auth/auth.go`,
+`internal/config/config.go`, `cmd/server/main.go`, `.env.example`.
+
+**Tests:** `internal/ratelimit/ratelimit_test.go` (limit, per-key isolation,
+window reset, reset, disabled/nil, eviction) and `internal/auth/auth_test.go`
+(`TestSignInThrottlesPerAddress`, `TestSignInThrottlesPerAccount`).
 
 ### T3.3 — User provisioning (done)
 

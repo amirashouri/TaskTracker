@@ -12,6 +12,7 @@ import (
 
 	"github.com/amirashouri/tasktracker-server/internal/dbtest"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
+	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
 )
 
 const testSecret = "00000000000000000000000000000000"
@@ -37,7 +38,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 
 	return &testEnv{
-		handler: NewHandler(jwt, users, NewTokenStore(database.DB)),
+		handler: NewHandler(jwt, users, NewTokenStore(database.DB), nil),
 		users:   users,
 		store:   NewTokenStore(database.DB),
 		jwt:     jwt,
@@ -88,6 +89,21 @@ func postJSON(t *testing.T, handler http.HandlerFunc, body any) *httptest.Respon
 	}
 	rec := httptest.NewRecorder()
 	handler(rec, httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(payload)))
+	return rec
+}
+
+// postSignIn sets the peer address, so a test can vary the client without
+// varying the account.
+func postSignIn(t *testing.T, handler http.HandlerFunc, remoteAddr, email, password string) *httptest.ResponseRecorder {
+	t.Helper()
+	payload, err := json.Marshal(map[string]string{"email": email, "password": password})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(payload))
+	req.RemoteAddr = remoteAddr
+	rec := httptest.NewRecorder()
+	handler(rec, req)
 	return rec
 }
 
@@ -312,5 +328,45 @@ func TestRotateReportsReuseAndRevokesTheFamily(t *testing.T) {
 	}
 	if live == nil || !live.Revoked() {
 		t.Error("reuse did not revoke the family's live token")
+	}
+}
+
+// Repeated guesses from one address must be throttled, not merely slowed by
+// bcrypt.
+func TestSignInThrottlesPerAddress(t *testing.T) {
+	env := newTestEnv(t)
+	env.handler.limiter = ratelimit.New(2, time.Minute)
+
+	// Different accounts, one address: only the address counter can stop the
+	// third attempt.
+	for i, email := range []string{"a@example.com", "b@example.com"} {
+		if rec := postSignIn(t, env.handler.SignIn, "10.0.0.9:1", email, "wrong"); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401", i+1, rec.Code)
+		}
+	}
+
+	rec := postSignIn(t, env.handler.SignIn, "10.0.0.9:1", "c@example.com", "wrong")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("third attempt from one address = %d, want 429", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("a 429 response has no Retry-After header")
+	}
+}
+
+// Spraying one account from many addresses must be throttled too.
+func TestSignInThrottlesPerAccount(t *testing.T) {
+	env := newTestEnv(t)
+	env.handler.limiter = ratelimit.New(2, time.Minute)
+
+	for i, addr := range []string{"10.0.0.1:1", "10.0.0.2:1"} {
+		if rec := postSignIn(t, env.handler.SignIn, addr, "ada@example.com", "wrong"); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401", i+1, rec.Code)
+		}
+	}
+
+	rec := postSignIn(t, env.handler.SignIn, "10.0.0.3:1", "ada@example.com", "wrong")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("third attempt against one account = %d, want 429", rec.Code)
 	}
 }
