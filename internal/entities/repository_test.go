@@ -16,8 +16,12 @@ func newTestDB(t *testing.T) *db.DB {
 	return dbtest.NewDatabase(t)
 }
 
-func intPtr(v int) *int       { return &v }
-func int64Ptr(v int64) *int64 { return &v }
+func intPtr(v int) *int { return &v }
+
+func timestampPtr(v int64) *Timestamp {
+	t := Timestamp(v)
+	return &t
+}
 
 func mustCreateUser(t *testing.T, repo *UserRepository, email string) *User {
 	t.Helper()
@@ -196,9 +200,9 @@ func TestWorkItemRoundTrip(t *testing.T) {
 		Title:        "Recurring task",
 		Status:       WorkItemStatusTodo,
 		Priority:     PriorityHigh,
-		DueDate:      int64Ptr(1700000000000),
+		DueDate:      timestampPtr(1700000000000),
 		StoryPoints:  intPtr(5),
-		Recurrence:   &Recurrence{Type: "weekly", Day: 2, Until: int64Ptr(1800000000000)},
+		Recurrence:   &Recurrence{Type: "weekly", Day: 2, Until: timestampPtr(1800000000000)},
 		BlockedByIDs: []WorkItemID{"22222222-2222-2222-2222-222222222222"},
 	}
 	if err := workItems.Create(ctx, item); err != nil {

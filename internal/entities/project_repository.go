@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 )
 
 type ProjectRepository struct {
@@ -71,7 +70,7 @@ func (r *ProjectRepository) GetByID(ctx context.Context, id ProjectID) (*Project
 // ErrVersionConflict when the row changed since the caller read it.
 func (r *ProjectRepository) Update(ctx context.Context, p *Project) error {
 	previous := p.Version
-	p.UpdatedAt = time.Now().UnixMilli()
+	p.UpdatedAt = Now()
 	p.Version = newVersion()
 
 	return inTx(ctx, r.db, func(q Querier) error {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"time"
 )
 
 type WorkItemRepository struct {
@@ -37,12 +36,8 @@ func scanWorkItem(row scanner, w *WorkItem) error {
 	if sprintID.Valid {
 		w.SprintID = (*SprintID)(&sprintID.String)
 	}
-	if dueDate.Valid {
-		w.DueDate = &dueDate.Int64
-	}
-	if resolvedAt.Valid {
-		w.ResolvedAt = &resolvedAt.Int64
-	}
+	w.DueDate = timestampOrNil(dueDate)
+	w.ResolvedAt = timestampOrNil(resolvedAt)
 	if storyPoints.Valid {
 		w.StoryPoints = new(int)
 		*w.StoryPoints = int(storyPoints.Int64)
@@ -79,7 +74,7 @@ func (r *WorkItemRepository) GetByID(ctx context.Context, id WorkItemID) (*WorkI
 
 func (r *WorkItemRepository) Update(ctx context.Context, w *WorkItem) error {
 	previous := w.Version
-	w.UpdatedAt = time.Now().UnixMilli()
+	w.UpdatedAt = Now()
 	w.Version = newVersion()
 
 	blockedJSON, _ := json.Marshal(w.BlockedByIDs)

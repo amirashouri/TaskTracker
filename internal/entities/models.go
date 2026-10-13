@@ -43,8 +43,11 @@ type User struct {
 	AvatarID     string `json:"avatarId,omitempty"`
 	Status       string `json:"status,omitempty"`
 	Role         string `json:"role,omitempty"`
-	LastSeen     *int64 `json:"lastSeen,omitempty"` // epoch millis
-	CreatedAt    int64  `json:"createdAt"`
+	// User timestamps stay plain epoch millis. A user is never synced, and its
+	// only wire shape is the admin API's snake_case userResponse, which is a
+	// separate contract from the sync envelope's ISO-8601.
+	LastSeen  *int64 `json:"lastSeen,omitempty"` // epoch millis
+	CreatedAt int64  `json:"createdAt"`
 }
 
 func (u *User) PreferredGreeting() string {
@@ -70,8 +73,8 @@ type Project struct {
 	MemberIDs      []UserID  `json:"memberIds"`
 	IsArchived     bool      `json:"isArchived"`
 	NextItemNumber int       `json:"nextItemNumber"`
-	CreatedAt      int64     `json:"createdAt"` // epoch millis
-	UpdatedAt      int64     `json:"updatedAt"`
+	CreatedAt      Timestamp `json:"createdAt"`
+	UpdatedAt      Timestamp `json:"updatedAt"`
 	Version        string    `json:"version"`
 }
 
@@ -107,9 +110,9 @@ const (
 )
 
 type Recurrence struct {
-	Type  string `json:"type"` // daily, weekly, monthly, yearly
-	Day   int    `json:"day,omitempty"`
-	Until *int64 `json:"until,omitempty"` // epoch millis
+	Type  string     `json:"type"` // daily, weekly, monthly, yearly
+	Day   int        `json:"day,omitempty"`
+	Until *Timestamp `json:"until,omitempty"`
 }
 
 type WorkItem struct {
@@ -121,15 +124,15 @@ type WorkItem struct {
 	Status       WorkItemStatus `json:"status"`
 	Priority     Priority       `json:"priority"`
 	AssigneeID   *UserID        `json:"assigneeId,omitempty"`
-	DueDate      *int64         `json:"dueDate,omitempty"` // epoch millis
+	DueDate      *Timestamp     `json:"dueDate,omitempty"`
 	Recurrence   *Recurrence    `json:"recurrence,omitempty"`
 	StoryPoints  *int           `json:"storyPoints,omitempty"`
 	BlockedByIDs []WorkItemID   `json:"blockedByIds"`
 	SprintID     *SprintID      `json:"sprintId,omitempty"`
 	Rank         int            `json:"rank"`
-	CreatedAt    int64          `json:"createdAt"`
-	UpdatedAt    int64          `json:"updatedAt"`
-	ResolvedAt   *int64         `json:"resolvedAt,omitempty"`
+	CreatedAt    Timestamp      `json:"createdAt"`
+	UpdatedAt    Timestamp      `json:"updatedAt"`
+	ResolvedAt   *Timestamp     `json:"resolvedAt,omitempty"`
 	Version      string         `json:"version"` // optimistic lock
 }
 
@@ -137,7 +140,7 @@ func (w *WorkItem) IsTerminal() bool {
 	return w.Status == WorkItemStatusDone || w.Status == WorkItemStatusClosed
 }
 
-func (w *WorkItem) IsOverdue(now int64) bool {
+func (w *WorkItem) IsOverdue(now Timestamp) bool {
 	if w.IsTerminal() || w.DueDate == nil {
 		return false
 	}
@@ -156,23 +159,23 @@ const (
 )
 
 type Sprint struct {
-	ID              SprintID  `json:"id"`
-	ProjectID       ProjectID `json:"projectId"`
-	Name            string    `json:"name"`
-	GoalStoryPoints int       `json:"goalStoryPoints"`
-	Goal            string    `json:"goal,omitempty"`
-	StartDate       int64     `json:"startDate"` // epoch millis
-	EndDate         int64     `json:"endDate"`   // epoch millis
-	OwnerID         *UserID   `json:"ownerId,omitempty"`
-	IsFinished      bool      `json:"isFinished"`
-	FinishedAt      *int64    `json:"finishedAt,omitempty"`
-	IsArchived      bool      `json:"isArchived"`
-	CreatedAt       int64     `json:"createdAt"`
-	UpdatedAt       int64     `json:"updatedAt"`
-	Version         string    `json:"version"`
+	ID              SprintID   `json:"id"`
+	ProjectID       ProjectID  `json:"projectId"`
+	Name            string     `json:"name"`
+	GoalStoryPoints int        `json:"goalStoryPoints"`
+	Goal            string     `json:"goal,omitempty"`
+	StartDate       Timestamp  `json:"startDate"`
+	EndDate         Timestamp  `json:"endDate"`
+	OwnerID         *UserID    `json:"ownerId,omitempty"`
+	IsFinished      bool       `json:"isFinished"`
+	FinishedAt      *Timestamp `json:"finishedAt,omitempty"`
+	IsArchived      bool       `json:"isArchived"`
+	CreatedAt       Timestamp  `json:"createdAt"`
+	UpdatedAt       Timestamp  `json:"updatedAt"`
+	Version         string     `json:"version"`
 }
 
-func (s *Sprint) StatusAt(now int64) SprintStatus {
+func (s *Sprint) StatusAt(now Timestamp) SprintStatus {
 	if s.IsArchived {
 		return SprintStatusArchived
 	}
@@ -196,7 +199,7 @@ type Comment struct {
 	WorkItemID WorkItemID `json:"workItemId"`
 	AuthorID   UserID     `json:"authorId"`
 	Body       string     `json:"body"`
-	CreatedAt  int64      `json:"createdAt"`
+	CreatedAt  Timestamp  `json:"createdAt"`
 	ParentID   *CommentID `json:"parentId,omitempty"`
 	Version    string     `json:"version"`
 }

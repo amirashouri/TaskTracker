@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -41,8 +40,8 @@ func newVersion() string {
 // createStamp returns the timestamps and version a new row starts with. A
 // caller that already set CreatedAt keeps it — the sync engine replays entities
 // that carry the time the client authored them.
-func createStamp(createdAt int64) (int64, int64, string) {
-	now := time.Now().UnixMilli()
+func createStamp(createdAt Timestamp) (Timestamp, Timestamp, string) {
+	now := Now()
 	if createdAt == 0 {
 		createdAt = now
 	}

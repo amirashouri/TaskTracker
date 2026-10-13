@@ -600,3 +600,142 @@ func TestPushAcceptsAClientEncodedWorkItemPayload(t *testing.T) {
 		t.Errorf("title = %q, want %q", stored.Title, "From the client")
 	}
 }
+
+// The client writes timestamps as ISO-8601 UTC strings, because its DateCoding
+// fixes the wire format at whole seconds. The server's entity fields were
+// epoch millis, so a real push failed to decode with "cannot unmarshal string
+// into Go struct field Project.createdAt of type int64" — and because that
+// happens while parsing the payload to find the project, every change the app
+// ever sent came back rejected.
+//
+// The payload here is hand-written rather than marshalled, so it is the
+// client's spelling and not this server's. That is the whole point: the two
+// have to agree, and a test that marshals with the server's own encoder cannot
+// tell whether they do.
+func TestPushAcceptsAClientPayloadWithISOTimestamps(t *testing.T) {
+	engine, _, projects, _, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "55555555-5555-5555-5555-555555555555")
+
+	raw := []byte(`{
+		"id": "` + string(project.ID) + `",
+		"keyPrefix": "TT",
+		"name": "From the app",
+		"details": "",
+		"memberIds": ["` + userID + `"],
+		"isArchived": false,
+		"nextItemNumber": 1,
+		"createdAt": "2026-09-26T20:13:32Z",
+		"updatedAt": "2026-09-26T20:13:32Z",
+		"version": "v-1"
+	}`)
+
+	change := entities.PushChange{
+		ID:        "iso-1",
+		Entity:    entities.OutboxEntityProject,
+		EntityID:  string(project.ID),
+		Operation: entities.OutboxOperationUpsert,
+		Payload:   clientPayload(t, raw),
+	}
+
+	results, err := engine.Push(ctx, userID, []entities.PushChange{change})
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != StatusAccepted {
+		t.Fatalf("results = %+v, want one accepted change", results)
+	}
+
+	stored, err := projects.GetByID(ctx, project.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("the project was not stored: %v", err)
+	}
+	if stored.Name != "From the app" {
+		t.Errorf("name = %q, want %q", stored.Name, "From the app")
+	}
+
+	want := entities.Timestamp(time.Date(2026, time.September, 26, 20, 13, 32, 0, time.UTC).UnixMilli())
+	if stored.CreatedAt != want {
+		t.Errorf("createdAt = %s, want %s", stored.CreatedAt, want)
+	}
+}
+
+// A work item carries the optional timestamps too, and a client that sets a due
+// date sends it in the same format as the rest.
+func TestPushAcceptsAClientPayloadWithISOTimestampsOnAWorkItem(t *testing.T) {
+	engine, _, _, workItems, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "66666666-6666-6666-6666-666666666666")
+	pushOne(t, engine, userID, projectChange(t, "p-1", project, entities.OutboxOperationUpsert, ""))
+
+	const itemID = "77777777-7777-7777-7777-777777777777"
+	raw := []byte(`{
+		"id": "` + itemID + `",
+		"projectId": "` + string(project.ID) + `",
+		"key": "TT-1",
+		"title": "With a due date",
+		"details": "",
+		"status": "todo",
+		"priority": "medium",
+		"dueDate": "2026-10-01T09:30:00Z",
+		"blockedByIds": [],
+		"rank": 0,
+		"createdAt": "2026-09-26T20:13:32Z",
+		"updatedAt": "2026-09-26T20:13:32Z",
+		"version": "v-1"
+	}`)
+
+	change := entities.PushChange{
+		ID:        "iso-2",
+		Entity:    entities.OutboxEntityWorkItem,
+		EntityID:  itemID,
+		Operation: entities.OutboxOperationUpsert,
+		Payload:   clientPayload(t, raw),
+	}
+
+	results, err := engine.Push(ctx, userID, []entities.PushChange{change})
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != StatusAccepted {
+		t.Fatalf("results = %+v, want one accepted change", results)
+	}
+
+	stored, err := workItems.GetByID(ctx, entities.WorkItemID(itemID))
+	if err != nil || stored == nil {
+		t.Fatalf("the work item was not stored: %v", err)
+	}
+	if stored.DueDate == nil {
+		t.Fatal("dueDate was dropped")
+	}
+	want := entities.Timestamp(time.Date(2026, time.October, 1, 9, 30, 0, 0, time.UTC).UnixMilli())
+	if *stored.DueDate != want {
+		t.Errorf("dueDate = %s, want %s", *stored.DueDate, want)
+	}
+}
+
+// The server's own stamping has to produce a value the wire can carry, or it
+// would write an instant it cannot hand back and the client would see a
+// different number than the one that was stored.
+func TestStoredTimestampsAreWholeSeconds(t *testing.T) {
+	engine, _, projects, _, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "88888888-8888-8888-8888-888888888888")
+	pushOne(t, engine, userID, projectChange(t, "p-1", project, entities.OutboxOperationUpsert, ""))
+
+	stored, err := projects.GetByID(ctx, project.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("the project was not stored: %v", err)
+	}
+	for name, value := range map[string]entities.Timestamp{
+		"createdAt": stored.CreatedAt,
+		"updatedAt": stored.UpdatedAt,
+	} {
+		if value%1000 != 0 {
+			t.Errorf("%s = %d, which is not a whole second", name, int64(value))
+		}
+	}
+}

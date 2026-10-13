@@ -3,7 +3,6 @@ package entities
 import (
 	"context"
 	"database/sql"
-	"time"
 )
 
 type SprintRepository struct {
@@ -29,9 +28,7 @@ func scanSprint(row scanner, s *Sprint) error {
 	if ownerID.Valid {
 		s.OwnerID = (*UserID)(&ownerID.String)
 	}
-	if finishedAt.Valid {
-		s.FinishedAt = &finishedAt.Int64
-	}
+	s.FinishedAt = timestampOrNil(finishedAt)
 	return nil
 }
 
@@ -54,7 +51,7 @@ func (r *SprintRepository) GetByID(ctx context.Context, id SprintID) (*Sprint, e
 
 func (r *SprintRepository) Update(ctx context.Context, s *Sprint) error {
 	previous := s.Version
-	s.UpdatedAt = time.Now().UnixMilli()
+	s.UpdatedAt = Now()
 	s.Version = newVersion()
 
 	query := `UPDATE sprints SET project_id=$1, name=$2, goal_story_points=$3, goal=$4, start_date=$5, end_date=$6, owner_id=$7, is_finished=$8, finished_at=$9, is_archived=$10, updated_at=$11, version=$12
