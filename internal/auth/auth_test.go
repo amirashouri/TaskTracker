@@ -92,6 +92,15 @@ func postJSON(t *testing.T, handler http.HandlerFunc, body any) *httptest.Respon
 	return rec
 }
 
+// postRaw sends a body the caller encoded by hand, so a test can hand a handler
+// something json.Marshal would never produce.
+func postRaw(t *testing.T, handler http.HandlerFunc, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	handler(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
+	return rec
+}
+
 // postSignIn sets the peer address, so a test can vary the client without
 // varying the account.
 func postSignIn(t *testing.T, handler http.HandlerFunc, remoteAddr, email, password string) *httptest.ResponseRecorder {
@@ -234,6 +243,38 @@ func TestSignOutAcceptsAnUnknownToken(t *testing.T) {
 
 	if rec := env.signOut(t, "not-a-token"); rec.Code != http.StatusNoContent {
 		t.Errorf("sign-out with an unknown token = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+}
+
+// Refresh and SignOut read the same request body, so both must reject one that
+// carries no usable token rather than falling through to the token lookup.
+func TestRefreshAndSignOutRequireARefreshToken(t *testing.T) {
+	env := newTestEnv(t)
+
+	handlers := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{"Refresh", env.handler.Refresh},
+		{"SignOut", env.handler.SignOut},
+	}
+	bodies := []struct {
+		name string
+		body string
+	}{
+		{"an empty object", `{}`},
+		{"a blank token", `{"refresh_token":""}`},
+		{"a body that is not JSON", `{"refresh_token":`},
+	}
+
+	for _, h := range handlers {
+		for _, b := range bodies {
+			rec := postRaw(t, h.handler, b.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s with %s = %d, want %d (body %s)",
+					h.name, b.name, rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+		}
 	}
 }
 

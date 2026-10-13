@@ -244,13 +244,12 @@ func retryAfterSeconds(d time.Duration) int {
 // is issued in the same family. A token that was already revoked is treated as
 // theft, and its whole family is revoked.
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
-	var req refreshRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil || req.RefreshToken == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "refreshToken is required")
+	token, ok := refreshTokenFrom(w, r)
+	if !ok {
 		return
 	}
 
-	presented, claims, ok := h.storedRefreshToken(r, req.RefreshToken)
+	presented, claims, ok := h.storedRefreshToken(r, token)
 	if !ok {
 		httpx.WriteError(w, http.StatusUnauthorized, "invalid refresh token")
 		return
@@ -299,19 +298,31 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 // idempotent and never reveals whether the token was valid; an access token
 // stays signed until it expires, which is what its short lifetime is for.
 func (h *Handler) SignOut(w http.ResponseWriter, r *http.Request) {
-	var req refreshRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil || req.RefreshToken == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "refreshToken is required")
+	token, ok := refreshTokenFrom(w, r)
+	if !ok {
 		return
 	}
 
-	if presented, _, ok := h.storedRefreshToken(r, req.RefreshToken); ok {
+	if presented, _, found := h.storedRefreshToken(r, token); found {
 		if err := h.tokens.RevokeFamily(r.Context(), presented.FamilyID, h.jwt.now()); err != nil {
 			httpx.WriteError(w, http.StatusInternalServerError, "could not revoke refresh token")
 			return
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// refreshTokenFrom reads the refresh token a request carries. Refresh and
+// SignOut take the same body, so the decode and its rejection live here rather
+// than being written out twice. It writes the response and reports false when
+// the body is unusable, so callers only have to return.
+func refreshTokenFrom(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var req refreshRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil || req.RefreshToken == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "refreshToken is required")
+		return "", false
+	}
+	return req.RefreshToken, true
 }
 
 // storedRefreshToken verifies a presented token and loads the record it refers
