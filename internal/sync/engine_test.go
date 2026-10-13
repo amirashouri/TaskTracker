@@ -370,4 +370,68 @@ func TestPullDeliversProjectDeletesToEveryone(t *testing.T) {
 	}
 }
 
+// The conflict verdict must name the version the server now holds, so the
+// client can re-pull instead of guessing.
+func TestConflictVerdictCarriesTheServerVersion(t *testing.T) {
+	engine, _, projects, _, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "dddddddd-dddd-dddd-dddd-dddddddddddd")
+	if res := pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create = %s (%s)", res.Status, res.Message)
+	}
+	first, err := projects.GetByID(ctx, project.ID)
+	if err != nil || first == nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	renamed := *first
+	renamed.Name = "Renamed"
+	if res := pushOne(t, engine, userID, projectChange(t, "e2", &renamed, entities.OutboxOperationUpsert, first.Version)); res.Status != StatusAccepted {
+		t.Fatalf("update = %s (%s)", res.Status, res.Message)
+	}
+	second, err := projects.GetByID(ctx, project.ID)
+	if err != nil || second == nil {
+		t.Fatalf("get after update: %v", err)
+	}
+
+	stale := *first
+	stale.Name = "Stale"
+	result := pushOne(t, engine, userID, projectChange(t, "e3", &stale, entities.OutboxOperationUpsert, first.Version))
+	if result.Status != StatusConflict {
+		t.Fatalf("stale push = %s (%s), want conflict", result.Status, result.Message)
+	}
+	if result.Version != second.Version {
+		t.Errorf("conflict verdict version = %q, want the server's %q", result.Version, second.Version)
+	}
+}
+
+// An update with no envelope version is last-write-wins: the engine has already
+// read the row, so the compare-and-swap runs against the stored version rather
+// than failing on the payload's empty one.
+func TestPushWithoutAVersionOverwrites(t *testing.T) {
+	engine, _, projects, _, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+	if res := pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create = %s (%s)", res.Status, res.Message)
+	}
+
+	update := *project
+	update.Name = "Renamed"
+	result := pushOne(t, engine, userID, projectChange(t, "e2", &update, entities.OutboxOperationUpsert, ""))
+	if result.Status != StatusAccepted {
+		t.Fatalf("versionless update = %s (%s), want accepted", result.Status, result.Message)
+	}
+
+	stored, err := projects.GetByID(ctx, project.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("get: %v", err)
+	}
+	if stored.Name != "Renamed" {
+		t.Errorf("name = %q, want Renamed", stored.Name)
+	}
+}
+
 func intPtr(v int) *int { return &v }

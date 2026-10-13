@@ -227,6 +227,9 @@ type PushChange struct {
 	Version   string          `json:"version,omitempty"` // for conflict detection
 }
 
+// PushResult is one change's verdict. The status is accepted, conflict,
+// rejected or retry_later. On a conflict, Version carries the version the
+// server now holds, so the client can re-pull the entity and replay its intent.
 type PushResult struct {
 	EntryID string `json:"id"`
 	Status  string `json:"status"` // accepted, conflict, rejected, retry_later

@@ -132,8 +132,13 @@ func (e *Engine) apply(ctx context.Context, userID string, change entities.PushC
 			result.Version = conflict.current
 			result.Message = "version mismatch"
 		case errors.Is(err, entities.ErrVersionConflict):
+			// The row moved between the read and the write. Re-read it so the
+			// verdict still tells the client what the server now holds.
 			result.Status = StatusConflict
-			result.Message = err.Error()
+			result.Message = "version mismatch"
+			if current, err := currentVersion(ctx, tx, change); err == nil {
+				result.Version = current
+			}
 		default:
 			result.Status = StatusRetryLater
 			result.Message = err.Error()
@@ -276,6 +281,38 @@ func containsUser(ids []entities.UserID, userID string) bool {
 	return false
 }
 
+// currentVersion re-reads an entity's version, so a conflict verdict can tell
+// the client what the server holds and it can re-pull.
+func currentVersion(ctx context.Context, q entities.Querier, change entities.PushChange) (string, error) {
+	switch change.Entity {
+	case entities.OutboxEntityProject:
+		row, err := entities.NewProjectRepository(q).GetByID(ctx, entities.ProjectID(change.EntityID))
+		if err != nil || row == nil {
+			return "", err
+		}
+		return row.Version, nil
+	case entities.OutboxEntityWorkItem:
+		row, err := entities.NewWorkItemRepository(q).GetByID(ctx, entities.WorkItemID(change.EntityID))
+		if err != nil || row == nil {
+			return "", err
+		}
+		return row.Version, nil
+	case entities.OutboxEntitySprint:
+		row, err := entities.NewSprintRepository(q).GetByID(ctx, entities.SprintID(change.EntityID))
+		if err != nil || row == nil {
+			return "", err
+		}
+		return row.Version, nil
+	case entities.OutboxEntityComment:
+		row, err := entities.NewCommentRepository(q).GetByID(ctx, entities.CommentID(change.EntityID))
+		if err != nil || row == nil {
+			return "", err
+		}
+		return row.Version, nil
+	}
+	return "", nil
+}
+
 func applyProject(ctx context.Context, projects *entities.ProjectRepository, change entities.PushChange) (string, error) {
 	if change.Operation == entities.OutboxOperationDelete {
 		return "", projects.Delete(ctx, entities.ProjectID(change.EntityID))
@@ -301,6 +338,9 @@ func applyProject(ctx context.Context, projects *entities.ProjectRepository, cha
 	}
 	project.ID = existing.ID
 	project.CreatedAt = existing.CreatedAt
+	// Update's compare-and-swap must run against the row just read, not the
+	// payload's version — which the client may have omitted.
+	project.Version = existing.Version
 	if err := projects.Update(ctx, project); err != nil {
 		return "", err
 	}
@@ -332,6 +372,7 @@ func applyWorkItem(ctx context.Context, workItems *entities.WorkItemRepository, 
 	}
 	workItem.ID = existing.ID
 	workItem.CreatedAt = existing.CreatedAt
+	workItem.Version = existing.Version
 	if err := workItems.Update(ctx, workItem); err != nil {
 		return "", err
 	}
@@ -363,6 +404,7 @@ func applySprint(ctx context.Context, sprints *entities.SprintRepository, change
 	}
 	sprint.ID = existing.ID
 	sprint.CreatedAt = existing.CreatedAt
+	sprint.Version = existing.Version
 	if err := sprints.Update(ctx, sprint); err != nil {
 		return "", err
 	}
@@ -394,6 +436,7 @@ func applyComment(ctx context.Context, comments *entities.CommentRepository, cha
 	}
 	comment.ID = existing.ID
 	comment.CreatedAt = existing.CreatedAt
+	comment.Version = existing.Version
 	if err := comments.Update(ctx, comment); err != nil {
 		return "", err
 	}

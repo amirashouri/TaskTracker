@@ -57,6 +57,30 @@ what the client already implements: an append-only `sync_log` keyed by
 `(entity, created_at, id)`, opaque JSON payloads, and a `version` string per
 entity for optimistic concurrency.
 
+## Conflict policy
+
+The client is offline-first, so two devices can edit one entity before either
+syncs. The server's rule is **server-wins, client re-pulls**:
+
+- Every entity carries a `version` string. A push may name the version the
+  client last saw, and the server compares it with the stored row inside the
+  same transaction.
+- A push naming a stale version is answered `conflict`, and the verdict's
+  `version` field carries the version the server now holds. The client drops
+  its local change for that entity, re-pulls it and replays its intent on top.
+- A push naming no version is last-write-wins. The engine has already read the
+  row, so the compare-and-swap runs against the stored version rather than
+  failing on the payload's empty one — the client is saying it does not track
+  versions for this entity.
+- Timestamps are never consulted.
+
+Last-write-wins by timestamp and field-level merge were both rejected: the
+first trusts client clocks, so a device with a skewed clock would win every
+race; the second needs the server to understand a payload it deliberately
+treats as opaque. The verdict vocabulary is `accepted`, `conflict`,
+`rejected` and `retry_later`; `conflict` and `retry_later` are the two the
+client is expected to act on.
+
 ## Verification status
 
 | Check | Result |

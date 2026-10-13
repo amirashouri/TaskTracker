@@ -32,7 +32,7 @@ are the way they are; this file is *what to do next*.
 | 1 — Data-layer integrity | **Done** |
 | 2 — Versioned migrations | **Done** |
 | 3 — Auth and security | **Done** |
-| 4 — Sync engine | T4.1–T4.3 done; T4.4–T4.5 not started |
+| 4 — Sync engine | T4.1–T4.4 done; T4.5 not started |
 | 5 — Observability and ops | T5.4 done; T5.1–T5.3, T5.5 not started |
 | 6 — Testing | T6.1–T6.4 done; T6.3 middleware tests still missing; T6.5 not started |
 | 7 — Client contract | Not started |
@@ -561,16 +561,34 @@ cannot be handed the same number. Both drivers support `RETURNING`.
 9, 20 concurrent allocations with no duplicate, and a missing project
 reported rather than silently returning a key.
 
-### T4.4 — Conflict policy
+### T4.4 — Conflict policy (done)
 
-**Files:** `internal/sync/engine.go`, `docs/ARCHITECTURE.md`.
+Done. The policy is **server-wins, client re-pulls**, recorded in
+`docs/ARCHITECTURE.md` under "Conflict policy":
 
-**Steps:** define and document what the client does with `conflict` (last-write-
-wins, server-wins, or field merge) and make the verdict payload carry the server
-version so the client can re-pull. Today the statuses exist but nothing consumes
-them.
+- A push naming a stale version is answered `conflict` and the verdict
+  carries the version the server now holds.
+- A push naming no version is last-write-wins.
+- Timestamps are never consulted, because a skewed client clock would win
+  every race; field merge is out of reach for a payload the server treats
+  as opaque.
 
-**Depends on:** T1.3, T4.1.
+Two fixes were needed to make the verdict trustworthy:
+
+1. The update path assigned the *payload's* version before calling
+   `Update`, so the repository's compare-and-swap ran against the payload's
+   version — an empty one when the client omitted it, which failed every
+   versionless update. The engine now sets `X.Version = existing.Version`
+   before the write, so the swap runs against the row it just read.
+2. The `ErrVersionConflict` branch carried no version. It now re-reads the
+   row (`currentVersion`) so both conflict paths return the same shape.
+
+**Files:** `internal/sync/engine.go`, `internal/entities/models.go`,
+`docs/ARCHITECTURE.md`.
+
+**Tests:** `internal/sync/engine_test.go` —
+`TestConflictVerdictCarriesTheServerVersion` and
+`TestPushWithoutAVersionOverwrites`.
 
 ### T4.5 — Cursor durability and retention
 
