@@ -9,13 +9,14 @@ that shape was chosen and what still needs building.
 
 ## Status
 
-The server compiles, boots, and serves requests: configuration, JWT auth,
-middleware and the sync engine are all wired in.
+The server compiles, boots, and serves requests: configuration, JWT auth with
+refresh-token rotation, admin-managed user provisioning, middleware, and the
+sync engine are all wired in.
 
-Milestones 1 and 2 of `docs/PLAN.md` are done: the data layer is consistent,
-sign-in works, push/pull round-trips a project and a work item, and the schema is
-applied by a versioned, per-driver migration runner. The next work is Milestone 3
-(auth and security) onward.
+Milestones 0–2 of `docs/PLAN.md` are done. Milestone 3 is partially done:
+T3.1 (refresh-token rotation) and T3.3 (user provisioning) are complete;
+T3.2 (rate-limiting) and T3.4 (security headers) are next. Milestone 5's
+Docker image (T5.4) is also done. See `docs/PLAN.md` for the full roadmap.
 
 Verified: `gofmt`, `go build ./...`, `go vet ./...` and `go test ./...` all pass,
 and an end-to-end run signs in, pushes a project and a work item, pulls them back
@@ -186,10 +187,12 @@ TASKTRACKER_TEST_POSTGRES_URL="postgres://postgres:postgres@localhost:55432/task
 Each test creates and drops its own schema, so the database must be disposable.
 CI runs this as the `test-postgres` job.
 
-Covered today: `internal/config` (secrets), `internal/db` (migrations and driver
-branching), `internal/entities` (repositories), `internal/sync` (push/pull).
-Auth and middleware are exercised by hand only — see `docs/PLAN.md` →
-Milestone 6.
+Covered today: `internal/config` (secrets), `internal/db` (migrations, driver
+branching, statement splitting), `internal/entities` (repository round-trips,
+version conflicts, cascade deletes), `internal/sync` (push/pull, conflict and
+rejected verdicts), `internal/auth` (sign-in, refresh rotation, reuse detection,
+family revocation, sign-out). Middleware (`Auth`, `AdminOnly`, `CORS`) is still
+exercised by hand only — see `docs/PLAN.md` → T6.3.
 
 ## Database and migrations
 

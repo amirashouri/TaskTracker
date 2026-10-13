@@ -33,8 +33,8 @@ are the way they are; this file is *what to do next*.
 | 2 — Versioned migrations | **Done** |
 | 3 — Auth and security | T3.1, T3.3 done; T3.2, T3.4 not started |
 | 4 — Sync engine | Not started |
-| 5 — Observability and ops | Not started |
-| 6 — Testing | Partially (config only) |
+| 5 — Observability and ops | T5.4 done; T5.1–T5.3, T5.5 not started |
+| 6 — Testing | T6.1–T6.4 done; T6.3 middleware tests still missing; T6.5 not started |
 | 7 — Client contract | Not started |
 
 ---
@@ -97,8 +97,7 @@ which would otherwise write a `sync_log` row pointing at nothing.
 **Postgres is no longer unverified.** `internal/dbtest` runs the same suite
 against Postgres when `TASKTRACKER_TEST_POSTGRES_URL` is set, giving each test
 its own schema so packages can still run in parallel, and CI runs it as the
-`test-postgres` job. T2.2 is still open: Postgres currently uses the base DDL
-unmodified and SQLite its rewritten copy, in one string rather than two files.
+`test-postgres` job. Per-driver DDL (T2.2) is done — see Milestone 2.
 
 ### T1.1 — Settle the time representation
 
@@ -443,13 +442,18 @@ hand-editing the database.
 
 **Depends on:** Milestone 1.
 
-### T3.4 — Security headers and CORS review
+### T3.4 — Security headers
 
 **Files:** `internal/middleware/middleware.go`.
 
-**Steps:** decide whether the desktop/web client needs CORS at all; if not, keep
-the default empty and document it. Add `X-Content-Type-Options: nosniff` and
-`Cache-Control: no-store` on auth responses.
+**Context:** CORS is already functional — the `CORS` middleware reflects a
+configurable allow-list and mobile clients do not send `Origin`, so an empty
+list disables the headers cleanly (documented in `.env.example`). What
+remains is hardening the response headers themselves.
+
+**Steps:** add `X-Content-Type-Options: nosniff` on all responses and
+`Cache-Control: no-store` on auth responses (login, refresh, sign-out) so
+tokens are never cached by an intermediary.
 
 ---
 
@@ -548,53 +552,83 @@ calls. Keep request logs at info and panics/5xx at error.
 **Steps:** generate or accept `X-Request-ID`, put it on the context, echo it in
 the response and include it in the request log.
 
-### T5.4 — Container image
+### T5.4 — Container image (done)
 
-**Files:** new `Dockerfile`, `docker-compose.yml`, `.dockerignore`.
+Done. A multi-stage Docker build (`golang:1.27-alpine` builder with
+`gcc`/`musl-dev` for CGO → `alpine:3.21` runtime) produces a ~44 MB image
+with a non-root `app` user and a `/data` volume for SQLite.
+`docker-compose.yml` provides `postgres` and `sqlite` profiles; the Postgres
+profile starts `postgres:16-alpine` with a healthcheck and the server waits
+for it before booting. `.dockerignore` keeps the build context small.
 
-**Steps:** multi-stage build (CGO on, static-ish binary), non-root user,
-`/data` volume for SQLite, healthcheck against `/readyz`.
+The compose healthcheck currently targets the Postgres container, not the
+server itself — once T5.1 adds `/readyz`, update the server service to
+healthcheck against it.
 
-### T5.5 — Self-hosting guide
+**Files:** `Dockerfile`, `docker-compose.yml`, `.dockerignore`.
+
+See [Docker](../README.md#docker) in the README.
+
+### T5.5 — Self-hosting guide (bare-metal)
 
 **Files:** new `docs/SELF-HOSTING.md`, `deploy/tasktracker.service`.
 
-**Steps:** document the systemd unit, the `EnvironmentFile` permissions, Postgres
-setup, TLS termination, and backup/restore for SQLite and Postgres.
+**Context:** Docker self-hosting is already documented in the
+[README](../README.md#docker). What remains is the bare-metal/systemd path
+for operators who do not use Docker.
+
+**Steps:** document the systemd unit, the `EnvironmentFile` permissions,
+Postgres setup, TLS termination, and backup/restore for SQLite and Postgres.
 
 ---
 
 ## Milestone 6 — Testing
 
-### T6.1 — Test harness
+T6.1–T6.4 are done as part of milestones 1–3. T6.3 is partially done (auth
+tests exist; middleware tests are still missing). T6.5 (CI hardening) is the
+remaining open task.
 
-**Files:** new `internal/db/testdb.go` (`//go:build test` or a helper exported
-for tests).
+### T6.1 — Test harness (done)
 
-**Steps:** a helper that opens an in-memory SQLite database, runs migrations, and
-returns it with `t.Cleanup` closing it. Requires T1.7.
+Done. `internal/dbtest/dbtest.go` exposes `NewDatabase(t)`, which opens a
+migrated SQLite or Postgres database, creates a per-test schema for Postgres
+isolation, and registers cleanup with `t.Cleanup`. Every test package uses it.
 
-### T6.2 — Repository tests
+**Files:** `internal/dbtest/dbtest.go`.
 
-**Files:** `internal/entities/*_test.go`.
+### T6.2 — Repository tests (done)
 
-**Steps:** create/read/update/delete round-trips, the version-conflict path from
-T1.3, and the millisecond round-trip from T1.1.
+Done. `internal/entities/repository_test.go` covers user/project/work-item/
+sprint/comment create-read-update-delete round-trips, the millisecond
+round-trip from T1.1, the version-conflict path from T1.3, the
+client-supplied ID from T1.4, and the cascade-delete from T1.6. Runs on
+both drivers via `internal/dbtest`.
 
-### T6.3 — Auth and middleware tests
+**Files:** `internal/entities/repository_test.go`.
 
-**Files:** `internal/auth/auth_test.go`, `internal/middleware/middleware_test.go`.
+### T6.3 — Auth and middleware tests (partially done)
 
-**Steps:** token issue/parse, expiry, wrong token type rejected, tampered
-signature rejected, `Auth` returns `401` without a header, CORS preflight.
+**Auth — done.** `internal/auth/auth_test.go` covers sign-in, refresh-token
+rotation, reuse detection and family revocation, concurrent rotation,
+sign-out (both valid and unknown tokens), access-token rejection on the
+refresh endpoint, expiry, and foreign-token rejection. Runs on both drivers
+via `internal/dbtest`.
 
-### T6.4 — Sync engine tests
+**Middleware — still missing.** There is no `internal/middleware/middleware_test.go`.
+What remains to test: `Auth` returns `401` without a header or with a bad
+token, `AdminOnly` returns `403` for a member, and CORS preflight returns
+`204` with the right headers.
+
+**Files:** `internal/auth/auth_test.go` (done); `internal/middleware/middleware_test.go` (to create).
+
+### T6.4 — Sync engine tests (done)
+
+Done. `internal/sync/engine_test.go` covers push-creates-and-pulls-back,
+push-update-respects-version (stale version → `conflict`), push-delete,
+unknown entity → `rejected`, and work-item push. Runs on both drivers via
+`internal/dbtest`.
 
 **Files:** `internal/sync/engine_test.go`.
-
-**Steps:** push creates, updates and deletes; the log row matches; pull pages and
-the cursor advances; a stale version yields `conflict`; unknown entity yields
-`rejected`.
 
 ### T6.5 — CI hardening
 
@@ -611,8 +645,18 @@ report. Do not add `-race` before T6.1 exists or the pipeline stays red.
 
 **Files:** new `docs/API.md`.
 
-**Steps:** document every endpoint, request/response body, status code and the
-push verdict vocabulary, and cross-check it against the client's actual JSON.
+**Context:** the auth and admin endpoint contracts are already documented in
+[`docs/USER-MANAGEMENT.md`](USER-MANAGEMENT.md) — request/response shapes,
+status codes, and the snake_case JSON convention. The route table in
+`docs/ARCHITECTURE.md` lists every mounted endpoint. What remains is a
+single consolidated `docs/API.md` that also covers the sync endpoints
+(push/pull request and response shapes, the verdict vocabulary, cursor
+paging) and cross-checks every entry against the client's actual JSON.
+
+**Steps:** document the sync endpoints' request/response bodies, status codes,
+and push verdict vocabulary. Merge with the auth/admin reference already in
+USER-MANAGEMENT.md into one `docs/API.md`. Cross-check against the KMP
+client's actual JSON shapes.
 
 ### T7.2 — Compatibility policy
 
