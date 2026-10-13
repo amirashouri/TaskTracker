@@ -65,9 +65,11 @@ func main() {
 	})
 
 	// Auth routes
-	authHandler := auth.NewHandler(jwtManager, userRepo)
+	tokenStore := auth.NewTokenStore(database.DB)
+	authHandler := auth.NewHandler(jwtManager, userRepo, tokenStore)
 	mux.HandleFunc("POST /v1/auth/signin", authHandler.SignIn)
 	mux.HandleFunc("POST /v1/auth/refresh", authHandler.Refresh)
+	mux.HandleFunc("POST /v1/auth/signout", authHandler.SignOut)
 
 	// Sync routes (protected)
 	syncHandler := sync.NewHandler(syncEngine, jwtManager)

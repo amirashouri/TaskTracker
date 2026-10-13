@@ -31,7 +31,7 @@ are the way they are; this file is *what to do next*.
 | 0 — Compiling baseline | **Done** |
 | 1 — Data-layer integrity | **Done** |
 | 2 — Versioned migrations | **Done** |
-| 3 — Auth and security | Not started |
+| 3 — Auth and security | T3.1 done; T3.2–T3.4 not started |
 | 4 — Sync engine | Not started |
 | 5 — Observability and ops | Not started |
 | 6 — Testing | Partially (config only) |
@@ -356,10 +356,38 @@ migrations against Postgres when `TASKTRACKER_TEST_POSTGRES_URL` is set.
 
 ## Milestone 3 — Auth and security
 
-### T3.1 — Refresh-token rotation and revocation
+### T3.1 — Refresh-token rotation and revocation (done)
+
+Done. `refresh_tokens` (migration `0002`, both drivers) records one row per
+issued refresh token, and `internal/auth/token_store.go` owns it.
+
+- **Rotated on every use.** `Rotate` revokes the presented token and inserts its
+  replacement in one transaction. The revoke is a compare-and-swap
+  (`WHERE token_hash = $ AND revoked_at IS NULL`), so two concurrent uses of one
+  token cannot both succeed; the loser gets `ErrTokenReused`, which is handled the
+  same way as theft.
+- **A family ends together.** Each sign-in starts a `family_id`; reuse of a
+  rotated token revokes every live token in that family, and `POST
+  /v1/auth/signout` revokes it deliberately. The tradeoff is deliberate: a client
+  that fires two refreshes concurrently ends its own session, which is the
+  standard answer to a token appearing twice.
+- **Only a hash is stored.** The token's JWT id is hashed with SHA-256, so the
+  database never holds anything replayable while the signature still guards it.
+- **The record, not just the signature, decides.** A refresh token must exist in
+  the table, belong to the same user as its claims, and be unexpired; sign-out is
+  idempotent and returns `204` whatever it is given.
+
+Access tokens are deliberately still stateless and are not revoked by sign-out:
+`docs/ARCHITECTURE.md` (E3) records why their short TTL is the bound.
 
 **Files:** `internal/auth/auth.go`, new `internal/auth/token_store.go`,
-`internal/db/db.go`.
+`internal/db/migrations/0002_refresh_tokens.<driver>.sql`,
+`cmd/server/main.go`.
+
+**Tests:** `internal/auth/auth_test.go` — rotation, reuse and family revocation,
+concurrent rotation, sign-out, stored-hash shape, expiry, access tokens, foreign
+signatures and a record owned by another user. Run on both drivers via
+`internal/dbtest`.
 
 **Steps:** add a `refresh_tokens` table (hashed token id, user id, expiry,
 revoked_at). Rotate on every refresh, revoke the presented token, and revoke the

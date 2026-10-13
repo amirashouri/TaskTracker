@@ -48,16 +48,28 @@ func NewJWTManager(secret string, accessTTL, refreshTTL time.Duration) *JWTManag
 
 func (m *JWTManager) AccessTTL() time.Duration { return m.accessTTL }
 
+func (m *JWTManager) RefreshTTL() time.Duration { return m.refreshTTL }
+
 func (m *JWTManager) IssueAccess(userID, email string) (string, error) {
-	return m.issue(userID, email, TokenTypeAccess, m.accessTTL)
+	token, _, err := m.issue(userID, email, TokenTypeAccess, m.accessTTL)
+	return token, err
 }
 
 func (m *JWTManager) IssueRefresh(userID, email string) (string, error) {
+	token, _, err := m.issue(userID, email, TokenTypeRefresh, m.refreshTTL)
+	return token, err
+}
+
+// IssueRefreshWithID also returns the token's JWT id, which is what a refresh
+// token is recorded and looked up by. Returning it avoids parsing the token back
+// out just to learn its id.
+func (m *JWTManager) IssueRefreshWithID(userID, email string) (token, id string, err error) {
 	return m.issue(userID, email, TokenTypeRefresh, m.refreshTTL)
 }
 
-func (m *JWTManager) issue(userID, email, tokenType string, ttl time.Duration) (string, error) {
+func (m *JWTManager) issue(userID, email, tokenType string, ttl time.Duration) (string, string, error) {
 	now := m.now()
+	id := uuid.NewString()
 	claims := Claims{
 		UserID:    userID,
 		Email:     email,
@@ -66,10 +78,14 @@ func (m *JWTManager) issue(userID, email, tokenType string, ttl time.Duration) (
 			Subject:   userID,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
-			ID:        uuid.NewString(),
+			ID:        id,
 		},
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.secret)
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.secret)
+	if err != nil {
+		return "", "", err
+	}
+	return token, id, nil
 }
 
 // Parse verifies the signature and expiry and returns the claims.
@@ -106,12 +122,13 @@ func UserFrom(ctx context.Context) (string, bool) {
 }
 
 type Handler struct {
-	jwt   *JWTManager
-	users *entities.UserRepository
+	jwt    *JWTManager
+	users  *entities.UserRepository
+	tokens *TokenStore
 }
 
-func NewHandler(jwt *JWTManager, users *entities.UserRepository) *Handler {
-	return &Handler{jwt: jwt, users: users}
+func NewHandler(jwt *JWTManager, users *entities.UserRepository, tokens *TokenStore) *Handler {
+	return &Handler{jwt: jwt, users: users, tokens: tokens}
 }
 
 type signInRequest struct {
@@ -148,9 +165,17 @@ func (h *Handler) SignIn(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	h.writeTokens(w, user)
+
+	// A sign-in starts a new token family; every rotation descends from this id,
+	// so the whole session can be revoked at once.
+	if err := h.writeTokens(w, r, user, uuid.NewString()); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not issue token")
+	}
 }
 
+// Refresh rotates a refresh token: the presented token is revoked and a new one
+// is issued in the same family. A token that was already revoked is treated as
+// theft, and its whole family is revoked.
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	var req refreshRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil || req.RefreshToken == "" {
@@ -158,8 +183,19 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := h.jwt.Parse(req.RefreshToken)
-	if err != nil || claims.TokenType != TokenTypeRefresh {
+	presented, claims, ok := h.storedRefreshToken(r, req.RefreshToken)
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "invalid refresh token")
+		return
+	}
+
+	if presented.Revoked() {
+		// The token was rotated away, signed out, or reused: the family is
+		// compromised, so end all of it.
+		if err := h.tokens.RevokeFamily(r.Context(), presented.FamilyID, h.jwt.now()); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "could not revoke refresh token")
+			return
+		}
 		httpx.WriteError(w, http.StatusUnauthorized, "invalid refresh token")
 		return
 	}
@@ -169,16 +205,100 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusUnauthorized, "invalid refresh token")
 		return
 	}
-	h.writeTokens(w, user)
-}
 
-func (h *Handler) writeTokens(w http.ResponseWriter, user *entities.User) {
-	access, err := h.jwt.IssueAccess(string(user.ID), user.Email)
+	record, refresh, err := h.newRefreshToken(user, presented.FamilyID)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not issue token")
 		return
 	}
-	refresh, err := h.jwt.IssueRefresh(string(user.ID), user.Email)
+
+	err = h.tokens.Rotate(r.Context(), presented.TokenHash, record)
+	if errors.Is(err, ErrTokenReused) {
+		// Another request rotated this token first. The race is the same signal
+		// as a reuse, and Rotate has already revoked the family.
+		httpx.WriteError(w, http.StatusUnauthorized, "invalid refresh token")
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not rotate refresh token")
+		return
+	}
+
+	h.writePair(w, user, refresh)
+}
+
+// SignOut revokes a refresh token's whole family, so signing out ends the
+// session rather than only the token that happened to be presented. It is
+// idempotent and never reveals whether the token was valid; an access token
+// stays signed until it expires, which is what its short lifetime is for.
+func (h *Handler) SignOut(w http.ResponseWriter, r *http.Request) {
+	var req refreshRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil || req.RefreshToken == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "refreshToken is required")
+		return
+	}
+
+	if presented, _, ok := h.storedRefreshToken(r, req.RefreshToken); ok {
+		if err := h.tokens.RevokeFamily(r.Context(), presented.FamilyID, h.jwt.now()); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "could not revoke refresh token")
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// storedRefreshToken verifies a presented token and loads the record it refers
+// to. It reports false for anything that cannot be used: a bad signature, an
+// access token, an unknown or expired token, or a record owned by someone else.
+func (h *Handler) storedRefreshToken(r *http.Request, token string) (*RefreshToken, *Claims, bool) {
+	claims, err := h.jwt.Parse(token)
+	if err != nil || claims.TokenType != TokenTypeRefresh || claims.ID == "" {
+		return nil, nil, false
+	}
+
+	stored, err := h.tokens.Get(r.Context(), HashTokenID(claims.ID))
+	if err != nil || stored == nil || stored.UserID != claims.UserID {
+		return nil, nil, false
+	}
+	if stored.Expired(h.jwt.now()) {
+		return nil, nil, false
+	}
+	return stored, claims, true
+}
+
+// newRefreshToken issues a refresh token and the record that stores it. Only the
+// hash of the token's id is kept, so the token itself never reaches the database.
+func (h *Handler) newRefreshToken(user *entities.User, familyID string) (RefreshToken, string, error) {
+	refresh, id, err := h.jwt.IssueRefreshWithID(string(user.ID), user.Email)
+	if err != nil {
+		return RefreshToken{}, "", err
+	}
+	now := h.jwt.now()
+	return RefreshToken{
+		TokenHash: HashTokenID(id),
+		FamilyID:  familyID,
+		UserID:    string(user.ID),
+		IssuedAt:  now.UnixMilli(),
+		ExpiresAt: now.Add(h.jwt.RefreshTTL()).UnixMilli(),
+	}, refresh, nil
+}
+
+// writeTokens issues the first token pair of a session and stores its refresh
+// token.
+func (h *Handler) writeTokens(w http.ResponseWriter, r *http.Request, user *entities.User, familyID string) error {
+	record, refresh, err := h.newRefreshToken(user, familyID)
+	if err != nil {
+		return err
+	}
+	if err := h.tokens.Save(r.Context(), record); err != nil {
+		return err
+	}
+	h.writePair(w, user, refresh)
+	return nil
+}
+
+func (h *Handler) writePair(w http.ResponseWriter, user *entities.User, refresh string) {
+	access, err := h.jwt.IssueAccess(string(user.ID), user.Email)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not issue token")
 		return

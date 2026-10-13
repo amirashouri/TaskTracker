@@ -30,7 +30,7 @@ cmd/server/main.go        composition root: config → db → migrate → repos 
 internal/config           environment configuration
 internal/db               driver selection (pgx / sqlite3) + migrations
 internal/entities         models and repositories
-internal/auth             JWT manager, sign-in and refresh handlers
+internal/auth             JWT manager, sign-in/refresh/sign-out handlers, refresh-token store
 internal/middleware       Chain, Auth, Logging, CORS, Recover
 internal/sync             sync engine and push/pull handlers
 internal/dbtest           SQLite- or Postgres-backed database for tests
@@ -42,8 +42,9 @@ internal/db/migrations    versioned SQL, one file per driver
 | Endpoint | Method | Middleware | Notes |
 | --- | --- | --- | --- |
 | `/healthz` | GET | logging, CORS, recover | returns `ok`; does not check the database |
-| `/v1/auth/signin` | POST | logging, CORS, recover | email + password → token pair |
-| `/v1/auth/refresh` | POST | logging, CORS, recover | refresh token → new access token |
+| `/v1/auth/signin` | POST | logging, CORS, recover | email + password → token pair; starts a token family |
+| `/v1/auth/refresh` | POST | logging, CORS, recover | rotates the refresh token and returns a new pair |
+| `/v1/auth/signout` | POST | logging, CORS, recover | revokes the refresh token's whole family; `204` |
 | `/v1/sync/push` | POST | + Auth | apply client changes, return per-entry verdicts |
 | `/v1/sync/changes/project` | GET | + Auth | cursor-paged pull |
 | `/v1/sync/changes/workItem` | GET | + Auth | cursor-paged pull |
@@ -158,8 +159,14 @@ Severity is about what blocks a working server.
   ≥32-byte secret.
 - **E2 — `/healthz` does not check the database**, so it cannot be used for a
   readiness probe.
-- **E3 — no refresh-token revocation or rotation.** `JWT_REFRESH_TTL` defaults
-  to 30 days and a leaked refresh token stays valid for its full lifetime.
+- **E3 — fixed.** A refresh token used to stay valid for its full
+  `JWT_REFRESH_TTL` (30 days by default) with no way to revoke it. `internal/auth`
+  now records refresh tokens in `refresh_tokens` and rotates on every use: the
+  presented token is revoked and replaced in one transaction, and presenting an
+  already-rotated token revokes its whole family (`POST /v1/auth/signout` does the
+  same deliberately). Only a SHA-256 hash of each token's JWT id is stored, so a
+  database read does not yield a replayable token. Access tokens stay stateless
+  and are not revoked; their short TTL is what bounds them.
 - **E4 — nothing to deploy with.** No `Dockerfile`, systemd unit, or
   self-hosting guide, which is the whole point of the project.
 
