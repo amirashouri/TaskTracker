@@ -1,0 +1,117 @@
+package config
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+)
+
+type Config struct {
+	DatabaseURL   string
+	JWTSecret     string
+	JWTAccessTTL  time.Duration
+	JWTRefreshTTL time.Duration
+	ServerPort    string
+	CORSOrigins   []string
+	LogLevel      string
+}
+
+// Load reads configuration from the environment, seeded from the file named by
+// ENV_FILE (default ".env"). The file is optional, and never overrides values
+// the host already exports, so real environment variables win in production.
+func Load() (*Config, error) {
+	envFile := getEnv("ENV_FILE", ".env")
+	if err := loadEnvFile(envFile); err != nil {
+		return nil, fmt.Errorf("load %s: %w", envFile, err)
+	}
+
+	cfg := &Config{
+		DatabaseURL:   getEnv("DATABASE_URL", "sqlite:///data/tasktracker.db"),
+		JWTSecret:     os.Getenv("JWT_SECRET"),
+		JWTAccessTTL:  getDurationEnv("JWT_ACCESS_TTL", 1*time.Hour),
+		JWTRefreshTTL: getDurationEnv("JWT_REFRESH_TTL", 720*time.Hour),
+		ServerPort:    getEnv("SERVER_PORT", "8080"),
+		CORSOrigins:   getCSVEnv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080"),
+		LogLevel:      getEnv("LOG_LEVEL", "info"),
+	}
+
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func (c *Config) validate() error {
+	if c.DatabaseURL == "" {
+		return errors.New("DATABASE_URL is required")
+	}
+	// HS256 signing requires at least 256 bits of key material.
+	if len(c.JWTSecret) < 32 {
+		return errors.New("JWT_SECRET must be set and at least 32 bytes; see .env.example")
+	}
+	return nil
+}
+
+// loadEnvFile parses simple KEY=VALUE lines. Missing file is not an error.
+func loadEnvFile(path string) error {
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		if _, exists := os.LookupEnv(key); !exists {
+			os.Setenv(key, value)
+		}
+	}
+	return scanner.Err()
+}
+
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+func getDurationEnv(key string, defaultValue time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if d, err := time.ParseDuration(value); err == nil {
+			return d
+		}
+	}
+	return defaultValue
+}
+
+func getCSVEnv(key, defaultValue string) []string {
+	value := getEnv(key, defaultValue)
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}

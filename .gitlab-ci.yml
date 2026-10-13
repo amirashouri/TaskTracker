@@ -1,0 +1,42 @@
+# Simple CI pipeline: lint (format + vet), build, test.
+#
+# `build` and `test` are currently red by design: internal/auth,
+# internal/middleware and internal/sync are still empty, and internal/entities
+# and internal/db do not compile. See docs/ARCHITECTURE.md before treating a
+# red pipeline as a regression.
+
+stages:
+  - lint
+  - build
+  - test
+
+default:
+  image: golang:1.27
+  cache:
+    key: go-$CI_COMMIT_REF_SLUG
+    paths:
+      - .gocache/
+
+variables:
+  # mattn/go-sqlite3 is cgo, and go.mod/go.sum must already be tidy.
+  CGO_ENABLED: "1"
+  GOFLAGS: "-mod=readonly"
+
+before_script:
+  - export GOMODCACHE="$CI_PROJECT_DIR/.gocache/mod" GOCACHE="$CI_PROJECT_DIR/.gocache/build"
+
+lint:
+  stage: lint
+  script:
+    - test -z "$(gofmt -l .)" || { echo "unformatted files:"; gofmt -l .; exit 1; }
+    - go vet ./...
+
+build:
+  stage: build
+  script:
+    - go build ./...
+
+test:
+  stage: test
+  script:
+    - go test ./...

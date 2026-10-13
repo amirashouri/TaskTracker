@@ -1,0 +1,26 @@
+# Secrets — keep .env.example, ignore everything else.
+.env
+.env.*
+!.env.example
+
+# Build output
+/bin/
+/server
+*.exe
+*.test
+*.out
+
+# Local SQLite data and WAL sidecars
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
