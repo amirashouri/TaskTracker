@@ -35,7 +35,7 @@ are the way they are; this file is *what to do next*.
 | 4 — Sync engine | **Done** |
 | 5 — Observability and ops | T5.1–T5.5 done; T5.6 not started |
 | 6 — Testing | **Done** |
-| 7 — Client contract | Not started |
+| 7 — Client contract | **Done** |
 
 ---
 
@@ -845,26 +845,46 @@ pipeline is not left red.
 
 ---
 
-## Milestone 7 — Client contract
+## Milestone 7 — Client contract (done)
 
-### T7.1 — Freeze the wire format
+### T7.1 — Freeze the wire format (done)
 
-**Files:** new `docs/API.md`.
-
-**Context:** the auth and admin endpoint contracts are already documented in
-[`docs/USER-MANAGEMENT.md`](USER-MANAGEMENT.md) — request/response shapes,
-status codes, and the snake_case JSON convention. The route table in
-`docs/ARCHITECTURE.md` lists every mounted endpoint. What remains is a
-single consolidated `docs/API.md` that also covers the sync endpoints
-(push/pull request and response shapes, the verdict vocabulary, cursor
-paging) and cross-checks every entry against the client's actual JSON.
+**Files:** `docs/API.md`.
 
 **Steps:** document the sync endpoints' request/response bodies, status codes,
 and push verdict vocabulary. Merge with the auth/admin reference already in
 USER-MANAGEMENT.md into one `docs/API.md`. Cross-check against the KMP
 client's actual JSON shapes.
 
-### T7.2 — Compatibility policy
+**Done.** `docs/API.md` is the consolidated contract: conventions, the two JSON
+conventions and why, the two timestamp formats, auth, users, sync, and the
+compatibility rules. `docs/USER-MANAGEMENT.md` keeps the operational content
+(roles, CLI bootstrap, token lifecycle, flow) and points here for shapes, so the
+endpoint reference exists in one place rather than two that drift.
+
+Cross-checking against the client is what found the four mismatches this
+milestone was written for — `entityId`/`entityID`, the undeclared
+`resyncRequired`, the string-encoded payload, and ISO-8601 timestamps — plus the
+plural pull paths. All five are fixed.
+
+Two decisions the doc had to make explicitly:
+
+- **Timestamps are ISO-8601 UTC at whole seconds** on synced entity payloads.
+  The client's `DateCoding` already fixed this format and says why; the server's
+  `int64` millis were simply out of step. The server now truncates to whole
+  seconds on the way in, so a stored value is exactly a value it hands back.
+  The auth/admin user object keeps epoch millis, because that half of the API is
+  a separate contract.
+- **The pull scopes are `projects` and `workItems`**, matching the client's
+  `SyncScope`. A scope is not an entity type — `workItems` carries project
+  changes too, because renaming a project has to reach a client that never asked
+  for projects. The singular paths are kept as aliases.
+
+A gap is recorded rather than fixed: `push` accepts `sprint` and `comment`
+changes and the engine applies them, but no pull scope returns them, so those
+changes are push-only today.
+
+### T7.2 — Compatibility policy (done)
 
 **Files:** `AGENTS.md`, `docs/ARCHITECTURE.md`.
 
@@ -872,7 +892,44 @@ client's actual JSON shapes.
 updated on the server's schedule. Write down the rule: additive changes only
 within a `/v1` route; a breaking change is a new version and a migration path.
 
-### T7.3 — Contract tests
+**Done, with the rule corrected.** "Additive changes only" is wrong here. The
+client leaves `ignoreUnknownKeys` off on purpose — its `JSONCoding` says a
+renamed field has to fail loudly at the boundary rather than decode as null on
+every device — and the same setting makes an *added* key a decoding failure
+rather than a value it skips. So a response may not gain a field either.
+
+The policy is therefore:
+
+- A response may not gain a field.
+- A response may not lose or rename a field the client declares without a
+  default. Kotlin treats a property with a default as optional, one without as
+  required — which is why `hasMore` is always sent and `resyncRequired` may be
+  omitted.
+- A new response field ships **client first**: a client that declares it with a
+  default works against both servers, and only then may the server send it.
+- Anything that cannot follow that order is a new `/v1` version and a migration
+  path.
+
+### T7.3 — Contract tests (done)
 
 **Steps:** capture real client request/response pairs and assert the server
 round-trips them, so a model rename cannot silently break the app.
+
+**Files:** `cmd/server/contract_test.go`.
+
+**Done.** The client's DTOs are transcribed into the test with the client's own
+JSON names, and responses are decoded into them. The tests run against the real
+route table (`mount`), so a missing or misspelled path fails too.
+
+One thing they had to do differently from the obvious approach: **compare key
+names, not decoded values.** Go matches JSON keys case-insensitively, so a
+server that renamed `entityId` to `entityID` still populates a `json:"entityId"`
+field and every decode-based assertion passes — which is precisely how that
+mismatch shipped. `assertWireKeys` reads the key set off the bytes, and also
+rejects a key the client's DTO does not declare, which is the T7.2 rule made
+executable.
+
+Reintroducing the `entityID` rename turns
+`TestThePullResponseIsWhatTheClientDecodes` red; so does pointing the plural pull
+routes elsewhere.
+
