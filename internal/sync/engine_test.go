@@ -513,3 +513,90 @@ func TestPruneKeepsRecentRows(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+// clientPayload re-encodes a payload the way the mobile client does: as a JSON
+// string holding the document, not as the document itself.
+func clientPayload(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(string(raw))
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	return encoded
+}
+
+// A push from the real client has to be accepted. Its payload arrives as a JSON
+// string while the engine parses the payload to decide which project a write
+// belongs to, so getting this wrong rejects every change the app ever sends —
+// and does it as a "rejected" verdict, which the client dead-letters.
+func TestPushAcceptsAClientEncodedPayload(t *testing.T) {
+	engine, _, projects, _, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "22222222-2222-2222-2222-222222222222")
+	change := projectChange(t, "entry-1", project, entities.OutboxOperationUpsert, "")
+	change.Payload = clientPayload(t, change.Payload)
+
+	results, err := engine.Push(ctx, userID, []entities.PushChange{change})
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != StatusAccepted {
+		t.Fatalf("results = %+v, want one accepted change", results)
+	}
+
+	stored, err := projects.GetByID(ctx, project.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("the project was not stored: %v", err)
+	}
+	if stored.Name != project.Name {
+		t.Errorf("name = %q, want %q", stored.Name, project.Name)
+	}
+}
+
+// The same for a work item, whose project id is read out of the payload before
+// the write is authorized.
+func TestPushAcceptsAClientEncodedWorkItemPayload(t *testing.T) {
+	engine, _, _, workItems, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "33333333-3333-3333-3333-333333333333")
+	pushOne(t, engine, userID, projectChange(t, "p-1", project, entities.OutboxOperationUpsert, ""))
+
+	item := &entities.WorkItem{
+		ID:        "44444444-4444-4444-4444-444444444444",
+		ProjectID: project.ID,
+		Key:       "TT-1",
+		Title:     "From the client",
+		Status:    entities.WorkItemStatusTodo,
+		Priority:  entities.PriorityMedium,
+	}
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal work item: %v", err)
+	}
+
+	change := entities.PushChange{
+		ID:        "w-1",
+		Entity:    entities.OutboxEntityWorkItem,
+		EntityID:  string(item.ID),
+		Operation: entities.OutboxOperationUpsert,
+		Payload:   clientPayload(t, raw),
+	}
+
+	results, err := engine.Push(ctx, userID, []entities.PushChange{change})
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != StatusAccepted {
+		t.Fatalf("results = %+v, want one accepted change", results)
+	}
+
+	stored, err := workItems.GetByID(ctx, item.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("the work item was not stored: %v", err)
+	}
+	if stored.Title != "From the client" {
+		t.Errorf("title = %q, want %q", stored.Title, "From the client")
+	}
+}

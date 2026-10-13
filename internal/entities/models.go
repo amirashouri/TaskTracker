@@ -1,6 +1,7 @@
 package entities
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -280,26 +281,59 @@ func (p *Project) ToJSON() ([]byte, error) {
 	return json.Marshal(p)
 }
 
+// payloadJSON normalises a change payload to the JSON document it carries.
+//
+// A payload reaches this server in one of two shapes, and they mean the same
+// thing:
+//
+//   - an embedded JSON object, which is what json.RawMessage holds when the
+//     document is sent as itself. This is what the pull path re-serves and what
+//     the engine's own tests build.
+//   - a JSON string containing that document, which is what the mobile client
+//     sends: its payload is an opaque byte array, and it encodes it with
+//     decodeToString rather than base64 so the payload stays readable in a
+//     server log. RawMessage then holds a quoted, escaped string.
+//
+// Unwrapping the second form is what stops a client push being rejected as
+// unparsable. Anything that is not a JSON string is returned unchanged, so the
+// object form keeps working, and a string that does not contain JSON is returned
+// as its own bytes so the caller's decoder reports the real error rather than
+// one invented here.
+//
+// Only non-delete changes reach this: a delete is applied by id and its payload,
+// which is a bare id rather than a document, is never parsed.
+func payloadJSON(data []byte) []byte {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) < 2 || trimmed[0] != '"' {
+		return data
+	}
+	var inner string
+	if err := json.Unmarshal(trimmed, &inner); err != nil {
+		return data
+	}
+	return []byte(inner)
+}
+
 func WorkItemFromJSON(data []byte) (*WorkItem, error) {
 	var w WorkItem
-	err := json.Unmarshal(data, &w)
+	err := json.Unmarshal(payloadJSON(data), &w)
 	return &w, err
 }
 
 func SprintFromJSON(data []byte) (*Sprint, error) {
 	var s Sprint
-	err := json.Unmarshal(data, &s)
+	err := json.Unmarshal(payloadJSON(data), &s)
 	return &s, err
 }
 
 func CommentFromJSON(data []byte) (*Comment, error) {
 	var c Comment
-	err := json.Unmarshal(data, &c)
+	err := json.Unmarshal(payloadJSON(data), &c)
 	return &c, err
 }
 
 func ProjectFromJSON(data []byte) (*Project, error) {
 	var p Project
-	err := json.Unmarshal(data, &p)
+	err := json.Unmarshal(payloadJSON(data), &p)
 	return &p, err
 }
