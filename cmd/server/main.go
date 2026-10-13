@@ -93,9 +93,10 @@ func runServer() {
 	})
 
 	// Auth routes
-	mux.HandleFunc("POST /v1/auth/login", authHandler.SignIn)
-	mux.HandleFunc("POST /v1/auth/refresh", authHandler.Refresh)
-	mux.HandleFunc("POST /v1/auth/signout", authHandler.SignOut)
+	noStore := middleware.NoStore()
+	mux.Handle("POST /v1/auth/login", noStore(http.HandlerFunc(authHandler.SignIn)))
+	mux.Handle("POST /v1/auth/refresh", noStore(http.HandlerFunc(authHandler.Refresh)))
+	mux.Handle("POST /v1/auth/signout", noStore(http.HandlerFunc(authHandler.SignOut)))
 
 	// Sync routes (protected)
 	syncHandler := sync.NewHandler(syncEngine, jwtManager)
@@ -118,6 +119,7 @@ func runServer() {
 	// Apply middleware chain
 	handler := middleware.Chain(
 		mux,
+		middleware.SecurityHeaders(),
 		middleware.Logging,
 		middleware.CORS(cfg.CORSOrigins),
 		middleware.Recover,

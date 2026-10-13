@@ -31,7 +31,7 @@ are the way they are; this file is *what to do next*.
 | 0 — Compiling baseline | **Done** |
 | 1 — Data-layer integrity | **Done** |
 | 2 — Versioned migrations | **Done** |
-| 3 — Auth and security | T3.1, T3.2, T3.3 done; T3.4 not started |
+| 3 — Auth and security | **Done** |
 | 4 — Sync engine | Not started |
 | 5 — Observability and ops | T5.4 done; T5.1–T5.3, T5.5 not started |
 | 6 — Testing | T6.1–T6.4 done; T6.3 middleware tests still missing; T6.5 not started |
@@ -455,18 +455,25 @@ hand-editing the database.
 
 **Depends on:** Milestone 1.
 
-### T3.4 — Security headers
+### T3.4 — Security headers (done)
 
-**Files:** `internal/middleware/middleware.go`.
+Done. Two middlewares in `internal/middleware`:
 
-**Context:** CORS is already functional — the `CORS` middleware reflects a
-configurable allow-list and mobile clients do not send `Origin`, so an empty
-list disables the headers cleanly (documented in `.env.example`). What
-remains is hardening the response headers themselves.
+- `SecurityHeaders` sets `X-Content-Type-Options: nosniff` on every
+  response, so a browser cannot guess a content type and run a JSON body
+  as script. It is the outermost middleware, so the header survives an
+  error response too.
+- `NoStore` sets `Cache-Control: no-store`, and wraps the three auth
+  routes (`/v1/auth/login`, `/v1/auth/refresh`, `/v1/auth/signout`) so a
+  proxy or the client's HTTP cache cannot retain a token.
 
-**Steps:** add `X-Content-Type-Options: nosniff` on all responses and
-`Cache-Control: no-store` on auth responses (login, refresh, sign-out) so
-tokens are never cached by an intermediary.
+CORS was already functional and is unchanged: the allow-list is
+configurable and mobile clients send no `Origin`, so an empty list simply
+disables the headers.
+
+**Files:** `internal/middleware/middleware.go`, `cmd/server/main.go`.
+
+**Tests:** `internal/middleware/middleware_test.go`.
 
 ---
 

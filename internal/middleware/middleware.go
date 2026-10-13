@@ -92,6 +92,29 @@ func CORS(origins []string) Middleware {
 	}
 }
 
+// SecurityHeaders sets the response headers that are safe for every endpoint.
+// nosniff stops a browser from guessing a content type and executing a JSON
+// body as script.
+func SecurityHeaders() Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// NoStore keeps a response out of every cache. Auth responses carry tokens, so
+// neither a shared proxy nor the client's HTTP cache may retain them.
+func NoStore() Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // Auth requires a valid access token and puts the user id and role on the context.
 func Auth(jwt *auth.JWTManager) Middleware {
 	return func(next http.Handler) http.Handler {
