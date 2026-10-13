@@ -3,7 +3,6 @@ package db
 import (
 	"database/sql"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -32,37 +31,6 @@ func TestParseURL(t *testing.T) {
 	}
 }
 
-func TestMigrationsForDriver(t *testing.T) {
-	sqlite := strings.Join(migrationsFor(DriverSQLite), "\n")
-	if !strings.Contains(sqlite, "INTEGER PRIMARY KEY AUTOINCREMENT") {
-		t.Error("SQLite DDL should turn BIGSERIAL into an autoincrementing key")
-	}
-	if strings.Contains(sqlite, "JSONB") {
-		t.Error("SQLite DDL must not contain JSONB")
-	}
-	if strings.Contains(sqlite, "gen_random_uuid") {
-		t.Error("SQLite DDL must not call gen_random_uuid")
-	}
-	if !strings.Contains(sqlite, "ON DELETE CASCADE") {
-		t.Error("SQLite supports ON DELETE CASCADE and it must be preserved")
-	}
-
-	postgres := strings.Join(migrationsFor(DriverPostgres), "\n")
-	if strings.Contains(postgres, "AUTOINCREMENT") {
-		t.Error("Postgres must not receive SQLite-only DDL")
-	}
-	if !strings.Contains(postgres, "BIGSERIAL PRIMARY KEY") {
-		t.Error("Postgres DDL should keep BIGSERIAL")
-	}
-
-	// work_items references sprints, so sprints must be created first on Postgres.
-	sprints := strings.Index(postgres, "CREATE TABLE IF NOT EXISTS sprints")
-	workItems := strings.Index(postgres, "CREATE TABLE IF NOT EXISTS work_items")
-	if sprints == -1 || workItems == -1 || sprints > workItems {
-		t.Errorf("sprints must be created before work_items (sprints=%d work_items=%d)", sprints, workItems)
-	}
-}
-
 func TestMigrateIsIdempotentAndCreatesSchema(t *testing.T) {
 	database, err := New("sqlite://" + filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -77,7 +45,7 @@ func TestMigrateIsIdempotentAndCreatesSchema(t *testing.T) {
 		t.Fatalf("second Migrate should be a no-op: %v", err)
 	}
 
-	for _, table := range []string{"users", "projects", "sprints", "project_members", "work_items", "comments", "sync_log"} {
+	for _, table := range []string{"users", "projects", "sprints", "project_members", "work_items", "comments", "sync_log", "schema_migrations"} {
 		if !hasTable(t, database.DB, table) {
 			t.Errorf("table %q was not created", table)
 		}

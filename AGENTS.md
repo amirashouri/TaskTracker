@@ -71,9 +71,15 @@ Place new code in the closest existing package. Prefer a new file over growing a
 
 ## Database changes
 
-The DDL lives inline in `internal/db/db.go` and is not versioned yet
-(`docs/ARCHITECTURE.md`, D3). Schema changes therefore need extra care. Both
-drivers are supported and both are tested: the suite runs on SQLite by default
+The schema is versioned SQL in `internal/db/migrations/`, one file per driver
+sharing a version number (`0001_initial.postgres.sql` and
+`0001_initial.sqlite.sql`), embedded in the binary and applied on startup by
+`internal/db/migrate.go`. Add a new version for **both** drivers: `go test
+./internal/db` fails if a version has only one dialect file. Statements stay
+`IF NOT EXISTS` so a database created before the runner existed is adopted the
+next time the binary starts.
+
+Both drivers are supported and both are tested: the suite runs on SQLite by default
 and on Postgres when `TASKTRACKER_TEST_POSTGRES_URL` points at a throwaway
 server (`internal/dbtest`, and the CI `test-postgres` job). A schema change is
 verified only once it has passed on both — SQLite succeeding proves the SQLite

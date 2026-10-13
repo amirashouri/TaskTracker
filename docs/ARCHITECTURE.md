@@ -30,10 +30,11 @@ cmd/server/main.go        composition root: config → db → migrate → repos 
 internal/config           environment configuration
 internal/db               driver selection (pgx / sqlite3) + migrations
 internal/entities         models and repositories
-internal/auth             JWT manager, sign-in and refresh handlers     (empty)
-internal/middleware       Chain, Auth, Logging, CORS, Recover           (empty)
-internal/sync             sync engine and push/pull handlers            (empty)
-migrations/               intended home for schema DDL                  (empty)
+internal/auth             JWT manager, sign-in and refresh handlers
+internal/middleware       Chain, Auth, Logging, CORS, Recover
+internal/sync             sync engine and push/pull handlers
+internal/dbtest           SQLite- or Postgres-backed database for tests
+internal/db/migrations    versioned SQL, one file per driver
 ```
 
 ## Intended request flow
@@ -130,11 +131,14 @@ Severity is about what blocks a working server.
   comments instead of cascading.
 - **D2 — table creation order.** `work_items` references `sprints(id)` but is
   created before `sprints`. Deferred in SQLite, an error in Postgres.
-- **D3 — migrations cannot evolve a schema.** DDL is an inline slice of
-  `CREATE ... IF NOT EXISTS` statements, run one at a time outside a
-  transaction, on every start. There is no version table, no `ALTER`, no
-  rollback, and a failure midway leaves a partially built schema. The empty
-  `migrations/` directory is the right home for a small versioned runner.
+- **D3 — fixed.** DDL was an inline slice of `CREATE ... IF NOT EXISTS`
+  statements, run one at a time outside a transaction, on every start, with no
+  version table, no `ALTER`, and a failure midway left a partially built schema.
+  The schema now lives in `internal/db/migrations/`, one file per driver sharing
+  a version, embedded in the binary and applied by `internal/db/migrate.go`:
+  versions are recorded in `schema_migrations`, each runs in its own transaction,
+  and statements are split on top-level semicolons rather than guessed. `ALTER`
+  migrations can now be added as new numbered versions.
 - **D4 — repositories and schema disagree.** Columns read or written but never
   created: `projects.member_ids`, `projects.version`, `comments.version`, and
   `work_items.recurrence` (the DDL has `recurrence_type`/`recurrence_day`/
@@ -168,7 +172,8 @@ Severity is about what blocks a working server.
    `main.go` correctly.
 4. **C4 + D1 + D2** — make the Postgres path real. Done: the driver comes from
    the URL, and the suite runs against Postgres in CI.
-5. **D3** — replace inline DDL with a versioned migration runner.
+5. **D3** — replace inline DDL with a versioned migration runner. Done in
+   Milestone 2 (T2.1–T2.3).
 6. **B2** — implement `auth`, `middleware` and `sync`.
 7. **E2/E3/E4** — readiness probe, refresh-token rotation, deploy artifacts.
 

@@ -20,8 +20,9 @@ are the way they are; this file is *what to do next*.
   say so in the MR — do not leave it unverified silently.
 - Do not bundle tasks. Do not fix a neighbour's bug inside a task ("no drive-by
   cleanup"); record it here or in the MR description instead.
-- When a task changes the database, change the DDL **and** every repository that
-  maps the affected columns in the same commit.
+- When a task changes the database, add the new version under
+  `internal/db/migrations/` for **both** drivers **and** update every repository
+  that maps the affected columns in the same commit.
 
 ## Status
 
@@ -29,7 +30,7 @@ are the way they are; this file is *what to do next*.
 | --- | --- |
 | 0 — Compiling baseline | **Done** |
 | 1 — Data-layer integrity | **Done** |
-| 2 — Versioned migrations | Not started |
+| 2 — Versioned migrations | **Done** |
 | 3 — Auth and security | Not started |
 | 4 — Sync engine | Not started |
 | 5 — Observability and ops | Not started |
@@ -284,18 +285,36 @@ for Postgres keep the current values. Add a comment with the reason once.
 
 ---
 
-## Milestone 2 — Versioned migrations
+## Milestone 2 — Versioned migrations (done)
+
+Completed. `internal/db/migrate.go` owns the runner and
+`internal/db/migrations/*.sql` the schema, embedded with `go:embed` so the binary
+still ships as one file.
+
+- **File per dialect, not string surgery.** `0001_initial.postgres.sql` and
+  `0001_initial.sqlite.sql` carry the same version; `adjustForSQLite` and the
+  inline `statements` slice are gone. A version missing a dialect file is a test
+  failure (`TestMigrationsCoverBothDialects`), not a surprise at deploy time.
+- **Recorded and transactional.** `schema_migrations (version, applied_at)` is
+  the ledger; each version runs in one transaction and is recorded inside it, so
+  a failed migration leaves nothing half-applied.
+- **Statements are split, not guessed.** Postgres rejects several statements in
+  one `Exec`, so `splitStatements` cuts on top-level semicolons while ignoring
+  semicolons inside string literals and line comments.
+- **Existing installs upgrade.** Every statement keeps `IF NOT EXISTS`, so a
+  database built by the pre-runner inline DDL is recorded as `0001` on the next
+  start. Verified on Postgres against the real binary, not just in a unit test.
 
 ### T2.1 — Migration runner
 
 **Goal:** ordered, recorded, single-transaction migrations.
 
-**Files:** new `internal/db/migrate.go`; `migrations/*.sql`.
+**Files:** new `internal/db/migrate.go`; `internal/db/migrations/*.sql`.
 
 **Steps:**
 
 1. Add a `schema_migrations (version TEXT PRIMARY KEY, applied_at BIGINT)` table.
-2. Load `migrations/NNNN_name.sql` in lexical order, skip versions already
+2. Load `internal/db/migrations/NNNN_name.<driver>.sql` in lexical order, skip versions already
    recorded, apply each in its own transaction, and record it.
 3. Keep an in-process `dev` path that runs the same files.
 4. Migrate the M0 DDL into `0001_initial.sql`. Do **not** keep a second copy of
@@ -310,7 +329,7 @@ applies nothing.
 
 **Goal:** Postgres and SQLite each get valid DDL without string surgery.
 
-**Files:** `migrations/` (e.g. `0001_initial.sql` plus `0001_initial.sqlite.sql`).
+**Files:** `internal/db/migrations/` (`0001_initial.postgres.sql` plus `0001_initial.sqlite.sql`).
 
 **Steps:** split the DDL per driver rather than rewriting one file with
 `ReplaceAll`. Either a dialect suffix or a `-- +dialect` marker read by the
@@ -326,8 +345,10 @@ runner. Delete `adjustForSQLite` once nothing uses it.
 
 **Files:** `internal/db/migrate_test.go`.
 
-**Steps:** run migrations on an in-memory SQLite database, assert the expected
-tables and columns exist, and assert a second run is a no-op.
+**Steps:** run migrations on a temporary SQLite database, assert the expected
+tables and columns exist, and assert a second run is a no-op. Cover the other
+driver too — `internal/dbtest` and `migrate_driver_test.go` run the same
+migrations against Postgres when `TASKTRACKER_TEST_POSTGRES_URL` is set.
 
 **Depends on:** T2.1.
 

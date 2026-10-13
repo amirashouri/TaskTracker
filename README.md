@@ -12,9 +12,10 @@ that shape was chosen and what still needs building.
 The server compiles, boots, and serves requests: configuration, JWT auth,
 middleware and the sync engine are all wired in.
 
-Milestone 1 of `docs/PLAN.md` is done: the data layer is consistent, sign-in
-works, and push/pull round-trips a project and a work item. The next work is
-Milestone 2 (versioned migrations) onward.
+Milestones 1 and 2 of `docs/PLAN.md` are done: the data layer is consistent,
+sign-in works, push/pull round-trips a project and a work item, and the schema is
+applied by a versioned, per-driver migration runner. The next work is Milestone 3
+(auth and security) onward.
 
 Verified: `gofmt`, `go build ./...`, `go vet ./...` and `go test ./...` all pass,
 and an end-to-end run signs in, pushes a project and a work item, pulls them back
@@ -102,16 +103,27 @@ Milestone 6.
 
 ## Database and migrations
 
-Schema DDL currently lives inline in `internal/db/db.go`; the `migrations/`
-directory is empty. The migrations are re-run as `CREATE ... IF NOT EXISTS` on
-every start and are not versioned, so they cannot evolve an existing database.
-`docs/ARCHITECTURE.md` covers what that costs and what to do instead.
+Migrations live in `internal/db/migrations/`, one file per driver sharing a
+version number:
+
+```
+0001_initial.postgres.sql
+0001_initial.sqlite.sql
+```
+
+They are embedded in the binary (`go:embed`) and applied on startup in version
+order; each version runs in its own transaction and is recorded in
+`schema_migrations`, so re-running applies nothing. To add one, create the next
+number for **both** drivers — a version missing a dialect file fails
+`go test ./internal/db`. Statements keep `IF NOT EXISTS` so a database created
+before the runner existed is adopted on the next start.
 
 ## CI/CD
 
 `.gitlab-ci.yml` runs three stages on every push: `lint` (gofmt + `go vet`),
-`build`, and `test`. It is intentionally minimal — a gate, not a release
-pipeline. Build and test are red until the scaffold compiles.
+`build`, and `test` — the last with a `test-postgres` job alongside the SQLite
+run. It is intentionally minimal — a gate, not a release pipeline. Build and test
+are green, so a red run is a real regression.
 
 ## Documentation
 
