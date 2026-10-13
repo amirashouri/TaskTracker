@@ -60,6 +60,12 @@ func (h *Handler) PullWorkItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) pull(w http.ResponseWriter, r *http.Request, entity entities.OutboxEntity) {
+	userID, ok := auth.UserFrom(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
 	query := r.URL.Query()
 
 	limit := 0
@@ -72,7 +78,7 @@ func (h *Handler) pull(w http.ResponseWriter, r *http.Request, entity entities.O
 		limit = parsed
 	}
 
-	page, err := h.engine.Pull(r.Context(), entity, query.Get("cursor"), limit)
+	page, err := h.engine.Pull(r.Context(), userID, entity, query.Get("cursor"), limit)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "sync failed")
 		return

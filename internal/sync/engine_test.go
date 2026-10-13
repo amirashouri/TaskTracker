@@ -42,11 +42,23 @@ func projectChange(t *testing.T, entryID string, project *entities.Project, oper
 	}
 }
 
+// newProject builds a project the pushing user is a member of, which is what
+// authorizes its creation.
+func newProject(userID, id string) *entities.Project {
+	return &entities.Project{
+		ID:             entities.ProjectID(id),
+		KeyPrefix:      "TT",
+		Name:           "Demo",
+		MemberIDs:      []entities.UserID{entities.UserID(userID)},
+		NextItemNumber: 1,
+	}
+}
+
 func TestPushCreatesAndPullsBack(t *testing.T) {
 	engine, _, projects, _, userID := newTestEngine(t)
 	ctx := context.Background()
 
-	project := &entities.Project{ID: "11111111-1111-1111-1111-111111111111", KeyPrefix: "TT", Name: "Demo", NextItemNumber: 1}
+	project := newProject(userID, "11111111-1111-1111-1111-111111111111")
 	results, err := engine.Push(ctx, userID, []entities.PushChange{projectChange(t, "entry-1", project, entities.OutboxOperationUpsert, "")})
 	if err != nil {
 		t.Fatalf("push: %v", err)
@@ -63,7 +75,7 @@ func TestPushCreatesAndPullsBack(t *testing.T) {
 		t.Errorf("stored id = %s, want the pushed id %s", stored.ID, project.ID)
 	}
 
-	page, err := engine.Pull(ctx, entities.OutboxEntityProject, "", 0)
+	page, err := engine.Pull(ctx, userID, entities.OutboxEntityProject, "", 0)
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -77,7 +89,7 @@ func TestPushCreatesAndPullsBack(t *testing.T) {
 		t.Error("pull should return a cursor")
 	}
 
-	empty, err := engine.Pull(ctx, entities.OutboxEntityProject, page.NextCursor, 0)
+	empty, err := engine.Pull(ctx, userID, entities.OutboxEntityProject, page.NextCursor, 0)
 	if err != nil {
 		t.Fatalf("pull after cursor: %v", err)
 	}
@@ -90,7 +102,7 @@ func TestPushUpdateRespectsVersion(t *testing.T) {
 	engine, _, projects, _, userID := newTestEngine(t)
 	ctx := context.Background()
 
-	project := &entities.Project{ID: "22222222-2222-2222-2222-222222222222", KeyPrefix: "TT", Name: "Demo"}
+	project := newProject(userID, "22222222-2222-2222-2222-222222222222")
 	if res := pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
 		t.Fatalf("create status = %s (%s)", res.Status, res.Message)
 	}
@@ -118,7 +130,7 @@ func TestPushDeleteAndUnknownEntity(t *testing.T) {
 	engine, _, projects, _, userID := newTestEngine(t)
 	ctx := context.Background()
 
-	project := &entities.Project{ID: "33333333-3333-3333-3333-333333333333", KeyPrefix: "TT", Name: "Demo"}
+	project := newProject(userID, "33333333-3333-3333-3333-333333333333")
 	pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, ""))
 
 	deleted := pushOne(t, engine, userID, projectChange(t, "e2", project, entities.OutboxOperationDelete, ""))
@@ -139,7 +151,7 @@ func TestPushWorkItem(t *testing.T) {
 	engine, _, _, workItems, userID := newTestEngine(t)
 	ctx := context.Background()
 
-	project := &entities.Project{ID: "44444444-4444-4444-4444-444444444444", KeyPrefix: "TT", Name: "Demo"}
+	project := newProject(userID, "44444444-4444-4444-4444-444444444444")
 	pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, ""))
 
 	item := &entities.WorkItem{
@@ -185,7 +197,7 @@ func TestPushRollsBackWhenTheLogRowFails(t *testing.T) {
 	engine, _, projects, _, userID := newTestEngine(t)
 	ctx := context.Background()
 
-	project := &entities.Project{ID: "66666666-6666-6666-6666-666666666666", KeyPrefix: "TT", Name: "Doomed"}
+	project := newProject(userID, "66666666-6666-6666-6666-666666666666")
 	change := projectChange(t, "e1", project, entities.OutboxOperation("frobnicate"), "")
 
 	result := pushOne(t, engine, userID, change)
@@ -208,6 +220,154 @@ func pushOne(t *testing.T, engine *Engine, userID string, change entities.PushCh
 		t.Fatalf("got %d results, want 1", len(results))
 	}
 	return results[0]
+}
+
+func createUser(t *testing.T, users *entities.UserRepository, email string) *entities.User {
+	t.Helper()
+	user := &entities.User{Email: email, PasswordHash: "secret"}
+	if err := users.Create(context.Background(), user); err != nil {
+		t.Fatalf("create user %s: %v", email, err)
+	}
+	return user
+}
+
+// Creating a project the caller is not listed in is refused, so nobody can
+// plant a project in another team's feed.
+func TestPushRejectsCreatingAProjectTheCallerIsNotIn(t *testing.T) {
+	engine, _, _, _, userID := newTestEngine(t)
+
+	project := &entities.Project{ID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", KeyPrefix: "TT", Name: "NotMine"}
+	result := pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, ""))
+	if result.Status != StatusRejected {
+		t.Fatalf("status = %s (%s), want rejected", result.Status, result.Message)
+	}
+}
+
+// A non-member cannot rewrite a project, even by naming themselves in the
+// payload: membership is checked against the stored row, not the change.
+func TestPushRejectsAProjectTheCallerCannotSee(t *testing.T) {
+	engine, users, projects, _, ownerID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(ownerID, "77777777-7777-7777-7777-777777777777")
+	if res := pushOne(t, engine, ownerID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("owner create = %s (%s)", res.Status, res.Message)
+	}
+
+	intruder := createUser(t, users, "intruder@example.com")
+
+	hijack := *project
+	hijack.Name = "Hijacked"
+	hijack.MemberIDs = []entities.UserID{intruder.ID}
+	result := pushOne(t, engine, string(intruder.ID), projectChange(t, "e2", &hijack, entities.OutboxOperationUpsert, ""))
+	if result.Status != StatusRejected {
+		t.Fatalf("intruder push = %s (%s), want rejected", result.Status, result.Message)
+	}
+
+	stored, err := projects.GetByID(ctx, project.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("get project: %v", err)
+	}
+	if stored.Name != "Demo" {
+		t.Errorf("project name = %q, want it unchanged", stored.Name)
+	}
+}
+
+// A non-member cannot push a work item into a project they cannot see.
+func TestPushRejectsAWorkItemInAProjectTheCallerCannotSee(t *testing.T) {
+	engine, users, _, workItems, ownerID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(ownerID, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+	pushOne(t, engine, ownerID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, ""))
+
+	intruder := createUser(t, users, "intruder@example.com")
+
+	item := &entities.WorkItem{
+		ID:        entities.WorkItemID("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+		ProjectID: project.ID,
+		Key:       "TT-1",
+		Title:     "Sneaky",
+		Status:    entities.WorkItemStatusTodo,
+		Priority:  entities.PriorityLow,
+	}
+	payload, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal work item: %v", err)
+	}
+
+	result := pushOne(t, engine, string(intruder.ID), entities.PushChange{
+		ID:        "e2",
+		Entity:    entities.OutboxEntityWorkItem,
+		EntityID:  string(item.ID),
+		Operation: entities.OutboxOperationUpsert,
+		Payload:   payload,
+	})
+	if result.Status != StatusRejected {
+		t.Fatalf("intruder work item = %s (%s), want rejected", result.Status, result.Message)
+	}
+	if stored, err := workItems.GetByID(ctx, item.ID); err != nil || stored != nil {
+		t.Errorf("the work item was stored despite the rejection (stored=%v, err=%v)", stored, err)
+	}
+}
+
+// The feed is scoped to the caller's memberships.
+func TestPullIsScopedToMembership(t *testing.T) {
+	engine, users, _, _, ownerID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(ownerID, "88888888-8888-8888-8888-888888888888")
+	if res := pushOne(t, engine, ownerID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create = %s (%s)", res.Status, res.Message)
+	}
+	outsider := createUser(t, users, "outsider@example.com")
+
+	ownerPage, err := engine.Pull(ctx, ownerID, entities.OutboxEntityProject, "", 0)
+	if err != nil {
+		t.Fatalf("owner pull: %v", err)
+	}
+	if len(ownerPage.Changes) != 1 {
+		t.Fatalf("owner sees %d changes, want 1", len(ownerPage.Changes))
+	}
+
+	outsiderPage, err := engine.Pull(ctx, string(outsider.ID), entities.OutboxEntityProject, "", 0)
+	if err != nil {
+		t.Fatalf("outsider pull: %v", err)
+	}
+	if len(outsiderPage.Changes) != 0 {
+		t.Errorf("outsider sees %d changes, want 0", len(outsiderPage.Changes))
+	}
+}
+
+// A client that has lost access must still learn a project is gone, so a
+// project's own delete row is delivered beyond its membership.
+func TestPullDeliversProjectDeletesToEveryone(t *testing.T) {
+	engine, users, _, _, ownerID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(ownerID, "99999999-9999-9999-9999-999999999999")
+	pushOne(t, engine, ownerID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, ""))
+	outsider := createUser(t, users, "outsider@example.com")
+
+	before, err := engine.Pull(ctx, string(outsider.ID), entities.OutboxEntityProject, "", 0)
+	if err != nil {
+		t.Fatalf("pull before delete: %v", err)
+	}
+	if len(before.Changes) != 0 {
+		t.Fatalf("outsider saw %d changes before the delete, want 0", len(before.Changes))
+	}
+
+	if res := pushOne(t, engine, ownerID, projectChange(t, "e2", project, entities.OutboxOperationDelete, "")); res.Status != StatusAccepted {
+		t.Fatalf("delete = %s (%s)", res.Status, res.Message)
+	}
+
+	after, err := engine.Pull(ctx, string(outsider.ID), entities.OutboxEntityProject, "", 0)
+	if err != nil {
+		t.Fatalf("pull after delete: %v", err)
+	}
+	if len(after.Changes) != 1 || after.Changes[0].Operation != entities.OutboxOperationDelete {
+		t.Fatalf("outsider changes after delete = %+v, want the one delete", after.Changes)
+	}
 }
 
 func intPtr(v int) *int { return &v }

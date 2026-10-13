@@ -32,7 +32,7 @@ are the way they are; this file is *what to do next*.
 | 1 — Data-layer integrity | **Done** |
 | 2 — Versioned migrations | **Done** |
 | 3 — Auth and security | **Done** |
-| 4 — Sync engine | T4.1 done; T4.2–T4.5 not started |
+| 4 — Sync engine | T4.1, T4.2 done; T4.3–T4.5 not started |
 | 5 — Observability and ops | T5.4 done; T5.1–T5.3, T5.5 not started |
 | 6 — Testing | T6.1–T6.4 done; T6.3 middleware tests still missing; T6.5 not started |
 | 7 — Client contract | Not started |
@@ -502,19 +502,47 @@ just the `*sql.DB`.
 write (an invalid `sync_log.operation` violates its CHECK constraint) and
 asserts the entity is not stored.
 
-### T4.2 — Project-scoped authorization
+### T4.2 — Project-scoped authorization (done)
 
-**Files:** `internal/sync/engine.go`, `internal/sync/handler.go`.
+Done. `sync_log` gains a `project_id` column (migration `0004`, both
+drivers) so a change can be attributed to a project and the feed scoped to
+it. The column is deliberately **not** a foreign key: a row must outlive
+the project it names, or a client would never learn the project was
+deleted.
 
-**Why:** `Push` and `Pull` are authenticated but not authorized — any signed-in
-user can currently read or rewrite every project's changes.
+- **Push is authorized before it writes.** `resolveProject` works out which
+  project a change belongs to — the entity id for a project, the payload's
+  `projectId` for a work item or sprint, and the owning work item's project
+  for a comment. For a delete it reads the row first, because the payload
+  may be absent. `canWrite` then requires the caller to be a member.
+- **A new project authorizes on its payload.** A project that does not
+  exist yet has no membership rows, so creation is allowed when the payload
+  lists the caller. An existing project is checked against the stored
+  membership, not the payload — otherwise anyone could add themselves to a
+  project they cannot see.
+- **Pull is scoped to membership** by joining `project_members`, and a
+  change with no resolvable project is not delivered.
+- **Deleted projects:** a project's own `delete` row is delivered to every
+  authenticated user, so a client that has been removed from a project — or
+  whose project was deleted — still retires it locally instead of keeping
+  it forever. That leaks the existence of a deleted project id to signed-in
+  users, which is accepted for a single-organisation deployment.
+  Membership *changes* are still not themselves sync events; a client that
+  loses access without the project being deleted learns of it on the next
+  full resync.
 
-**Steps:** filter `Pull` by the projects the user is a member of (join
-`project_members`), and reject a `Push` whose `projectId` the user cannot access
-with a `rejected` verdict. Decide what a deleted project's changes do to the
-feed.
+Rows written before this version are attributed for the `project` entity
+only; older work-item, sprint and comment rows keep a NULL `project_id` and
+are not delivered until a full resync.
 
-**Depends on:** T1.2.
+**Files:** new
+`internal/db/migrations/0004_sync_log_project.{postgres,sqlite}.sql`,
+`internal/sync/engine.go`, `internal/sync/handler.go`.
+
+**Tests:** `internal/sync/engine_test.go` — creation refused when the
+caller is not listed, a non-member refused on an existing project (even
+naming themselves in the payload), a non-member refused a work item, Pull
+scoped to membership, and a project delete delivered beyond membership.
 
 ### T4.3 — Atomic work-item key generation
 
