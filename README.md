@@ -204,8 +204,9 @@ Covered today: `internal/config` (secrets), `internal/db` (migrations, driver
 branching, statement splitting), `internal/entities` (repository round-trips,
 version conflicts, cascade deletes), `internal/sync` (push/pull, conflict and
 rejected verdicts), `internal/auth` (sign-in, refresh rotation, reuse detection,
-family revocation, sign-out). Middleware (`Auth`, `AdminOnly`, `CORS`) is still
-exercised by hand only — see `docs/PLAN.md` → T6.3.
+family revocation, sign-out), `internal/ratelimit` (window, per-key isolation,
+eviction), and `internal/middleware` (`Auth`, `AdminOnly`, `CORS`, security
+headers, request IDs, logging levels, panic recovery).
 
 ## Database and migrations
 

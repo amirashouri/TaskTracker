@@ -34,7 +34,7 @@ are the way they are; this file is *what to do next*.
 | 3 — Auth and security | **Done** |
 | 4 — Sync engine | **Done** |
 | 5 — Observability and ops | T5.1–T5.5 done; T5.6 not started |
-| 6 — Testing | T6.1–T6.4 done; T6.3 middleware tests still missing; T6.5 not started |
+| 6 — Testing | T6.1–T6.4 done; T6.5 not started |
 | 7 — Client contract | Not started |
 
 ---
@@ -757,8 +757,7 @@ The fix is to trust the header only when the peer is a configured proxy.
 
 ## Milestone 6 — Testing
 
-T6.1–T6.4 are done as part of milestones 1–3. T6.3 is partially done (auth
-tests exist; middleware tests are still missing). T6.5 (CI hardening) is the
+T6.1–T6.4 are done as part of milestones 1–3. T6.5 (CI hardening) is the
 remaining open task.
 
 ### T6.1 — Test harness (done)
@@ -779,7 +778,7 @@ both drivers via `internal/dbtest`.
 
 **Files:** `internal/entities/repository_test.go`.
 
-### T6.3 — Auth and middleware tests (partially done)
+### T6.3 — Auth and middleware tests (done)
 
 **Auth — done.** `internal/auth/auth_test.go` covers sign-in, refresh-token
 rotation, reuse detection and family revocation, concurrent rotation,
@@ -787,12 +786,29 @@ sign-out (both valid and unknown tokens), access-token rejection on the
 refresh endpoint, expiry, and foreign-token rejection. Runs on both drivers
 via `internal/dbtest`.
 
-**Middleware — still missing.** There is no `internal/middleware/middleware_test.go`.
-What remains to test: `Auth` returns `401` without a header or with a bad
-token, `AdminOnly` returns `403` for a member, and CORS preflight returns
-`204` with the right headers.
+**Middleware — done.** `internal/middleware/middleware_test.go` covers:
 
-**Files:** `internal/auth/auth_test.go` (done); `internal/middleware/middleware_test.go` (to create).
+- `Auth` — `401` for a missing header, for a malformed one (a bare scheme,
+  an empty token, the wrong scheme, a token with no scheme, trailing
+  garbage), for an unparsable token, for a token signed with another secret,
+  for an expired token, and for a refresh token replayed as an access token.
+  The refresh case is the one that matters: the signature is valid, so only
+  the `typ` claim stops it. The pass-through case asserts the user id and
+  role land on the context, and a lowercase `bearer` scheme is accepted per
+  RFC 7235.
+- `AdminOnly` — allows an admin, refuses a member with `403`, and refuses
+  when no user is on the context at all, so an empty role is not read as a
+  pass. One test chains `Auth` then `AdminOnly` to match how `main.go`
+  wires the admin routes.
+- `CORS` — a preflight is answered `204` without reaching the handler and
+  carries the allow-origin, methods, headers and max-age; a normal request
+  reflects an allowed origin; a disallowed origin gets no header (on a
+  preflight or otherwise); `*` allows anything; an empty allow-list sets no
+  headers; and a request with no `Origin`, as a mobile client sends, is
+  untouched.
+- `Chain` — the first middleware listed is the outermost.
+
+**Files:** `internal/auth/auth_test.go`, `internal/middleware/middleware_test.go`.
 
 ### T6.4 — Sync engine tests (done)
 
