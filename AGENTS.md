@@ -95,11 +95,33 @@ One task, one branch, one merge request to `main`. Never commit directly to
 ```bash
 git switch -c feat/<kebab-case-slug>
 # ... work ...
-git push -u origin feat/<kebab-case-slug>
 ```
 
-CI (`.gitlab-ci.yml`) runs `lint`, `build` and `test`; review the MR diff before
-merging.
+**The review is the merge gate — do not wait for a human to approve it.** When
+the task is done, read your own diff as a stranger would and answer three
+questions:
+
+1. Is the validation command green?
+   `gofmt -l . && go build ./... && go vet ./... && go test ./...`
+2. Does the diff change only what the task called for — no drive-by cleanup,
+   no bundled task?
+3. Does every behaviour change ship with a test that fails without it?
+
+All three yes → the review approves, so merge:
+
+```bash
+git switch main
+git merge --ff-only feat/<kebab-case-slug>
+git branch -d feat/<kebab-case-slug>
+```
+
+Any no → fix it on the same branch and review again. A red or unreviewed branch
+is never merged; a branch the review has approved is merged without asking
+again.
+
+Where a remote is configured, push the branch and merge the MR instead. Push
+still needs its own authorisation — publishing to a remote is a separate action
+from merging.
 
 ## Skills
 
