@@ -26,6 +26,7 @@ const (
 type Claims struct {
 	UserID    string `json:"uid"`
 	Email     string `json:"email,omitempty"`
+	Role      string `json:"role,omitempty"`
 	TokenType string `json:"typ"`
 	jwt.RegisteredClaims
 }
@@ -50,29 +51,30 @@ func (m *JWTManager) AccessTTL() time.Duration { return m.accessTTL }
 
 func (m *JWTManager) RefreshTTL() time.Duration { return m.refreshTTL }
 
-func (m *JWTManager) IssueAccess(userID, email string) (string, error) {
-	token, _, err := m.issue(userID, email, TokenTypeAccess, m.accessTTL)
+func (m *JWTManager) IssueAccess(userID, email, role string) (string, error) {
+	token, _, err := m.issue(userID, email, role, TokenTypeAccess, m.accessTTL)
 	return token, err
 }
 
-func (m *JWTManager) IssueRefresh(userID, email string) (string, error) {
-	token, _, err := m.issue(userID, email, TokenTypeRefresh, m.refreshTTL)
+func (m *JWTManager) IssueRefresh(userID, email, role string) (string, error) {
+	token, _, err := m.issue(userID, email, role, TokenTypeRefresh, m.refreshTTL)
 	return token, err
 }
 
 // IssueRefreshWithID also returns the token's JWT id, which is what a refresh
 // token is recorded and looked up by. Returning it avoids parsing the token back
 // out just to learn its id.
-func (m *JWTManager) IssueRefreshWithID(userID, email string) (token, id string, err error) {
-	return m.issue(userID, email, TokenTypeRefresh, m.refreshTTL)
+func (m *JWTManager) IssueRefreshWithID(userID, email, role string) (token, id string, err error) {
+	return m.issue(userID, email, role, TokenTypeRefresh, m.refreshTTL)
 }
 
-func (m *JWTManager) issue(userID, email, tokenType string, ttl time.Duration) (string, string, error) {
+func (m *JWTManager) issue(userID, email, role, tokenType string, ttl time.Duration) (string, string, error) {
 	now := m.now()
 	id := uuid.NewString()
 	claims := Claims{
 		UserID:    userID,
 		Email:     email,
+		Role:      role,
 		TokenType: tokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID,
@@ -108,17 +110,27 @@ func (m *JWTManager) Parse(tokenString string) (*Claims, error) {
 
 type contextKey struct{ name string }
 
-var userContextKey = &contextKey{"auth.user"}
+var (
+	userContextKey = &contextKey{"auth.user"}
+	roleContextKey = &contextKey{"auth.role"}
+)
 
-// WithUser stores the authenticated user id on the request context.
-func WithUser(ctx context.Context, userID string) context.Context {
-	return context.WithValue(ctx, userContextKey, userID)
+// WithUser stores the authenticated user id and role on the request context.
+func WithUser(ctx context.Context, userID, role string) context.Context {
+	ctx = context.WithValue(ctx, userContextKey, userID)
+	return context.WithValue(ctx, roleContextKey, role)
 }
 
 // UserFrom returns the authenticated user id, if the request was authenticated.
 func UserFrom(ctx context.Context) (string, bool) {
 	userID, ok := ctx.Value(userContextKey).(string)
 	return userID, ok && userID != ""
+}
+
+// RoleFrom returns the authenticated user's role, if the request was authenticated.
+func RoleFrom(ctx context.Context) (string, bool) {
+	role, ok := ctx.Value(roleContextKey).(string)
+	return role, ok
 }
 
 type Handler struct {
@@ -137,14 +149,17 @@ type signInRequest struct {
 }
 
 type refreshRequest struct {
-	RefreshToken string `json:"refreshToken"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 type tokenResponse struct {
-	AccessToken  string `json:"accessToken"`
-	RefreshToken string `json:"refreshToken"`
-	TokenType    string `json:"tokenType"`
-	ExpiresIn    int64  `json:"expiresIn"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	UserID       string `json:"user_id,omitempty"`
+	Email        string `json:"email,omitempty"`
+	DisplayName  string `json:"display_name,omitempty"`
+	TokenType    string `json:"token_type,omitempty"`
+	ExpiresIn    int64  `json:"expires_in,omitempty"`
 }
 
 func (h *Handler) SignIn(w http.ResponseWriter, r *http.Request) {
@@ -269,7 +284,7 @@ func (h *Handler) storedRefreshToken(r *http.Request, token string) (*RefreshTok
 // newRefreshToken issues a refresh token and the record that stores it. Only the
 // hash of the token's id is kept, so the token itself never reaches the database.
 func (h *Handler) newRefreshToken(user *entities.User, familyID string) (RefreshToken, string, error) {
-	refresh, id, err := h.jwt.IssueRefreshWithID(string(user.ID), user.Email)
+	refresh, id, err := h.jwt.IssueRefreshWithID(string(user.ID), user.Email, user.Role)
 	if err != nil {
 		return RefreshToken{}, "", err
 	}
@@ -298,7 +313,7 @@ func (h *Handler) writeTokens(w http.ResponseWriter, r *http.Request, user *enti
 }
 
 func (h *Handler) writePair(w http.ResponseWriter, user *entities.User, refresh string) {
-	access, err := h.jwt.IssueAccess(string(user.ID), user.Email)
+	access, err := h.jwt.IssueAccess(string(user.ID), user.Email, user.Role)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not issue token")
 		return
@@ -306,6 +321,9 @@ func (h *Handler) writePair(w http.ResponseWriter, user *entities.User, refresh 
 	httpx.WriteJSON(w, http.StatusOK, tokenResponse{
 		AccessToken:  access,
 		RefreshToken: refresh,
+		UserID:       string(user.ID),
+		Email:        user.Email,
+		DisplayName:  user.DisplayName,
 		TokenType:    "Bearer",
 		ExpiresIn:    int64(h.jwt.AccessTTL().Seconds()),
 	})

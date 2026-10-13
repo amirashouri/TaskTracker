@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/amirashouri/tasktracker-server/internal/auth"
+	"github.com/amirashouri/tasktracker-server/internal/entities"
 	"github.com/amirashouri/tasktracker-server/internal/httpx"
 )
 
@@ -91,7 +92,7 @@ func CORS(origins []string) Middleware {
 	}
 }
 
-// Auth requires a valid access token and puts the user id on the context.
+// Auth requires a valid access token and puts the user id and role on the context.
 func Auth(jwt *auth.JWTManager) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +110,22 @@ func Auth(jwt *auth.JWTManager) Middleware {
 				httpx.WriteError(w, http.StatusUnauthorized, "access token required")
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), claims.UserID)))
+			next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), claims.UserID, claims.Role)))
+		})
+	}
+}
+
+// AdminOnly rejects requests from non-admin users. Must be chained after Auth,
+// which sets the role on the context.
+func AdminOnly() Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			role, ok := auth.RoleFrom(r.Context())
+			if !ok || role != entities.RoleAdmin {
+				httpx.WriteError(w, http.StatusForbidden, "admin access required")
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }

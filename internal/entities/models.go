@@ -27,6 +27,11 @@ func NewCommentID() CommentID   { return CommentID(uuid.New().String()) }
 
 // ============ User ============
 
+const (
+	RoleAdmin  = "admin"
+	RoleMember = "member"
+)
+
 type User struct {
 	ID           UserID `json:"id"`
 	Email        string `json:"email"`
@@ -35,6 +40,7 @@ type User struct {
 	Position     string `json:"position,omitempty"`
 	AvatarID     string `json:"avatarId,omitempty"`
 	Status       string `json:"status,omitempty"`
+	Role         string `json:"role,omitempty"`
 	LastSeen     *int64 `json:"lastSeen,omitempty"` // epoch millis
 	CreatedAt    int64  `json:"createdAt"`
 }

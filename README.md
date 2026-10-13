@@ -219,6 +219,7 @@ are green, so a red run is a real regression.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture and code review.
 - [`docs/PLAN.md`](docs/PLAN.md) — the ordered, task-by-task implementation plan.
+- [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) — admin-managed user flow: CLI bootstrap, admin API, directory search.
 - [`AGENTS.md`](AGENTS.md) — working agreement for this repository.
 - [`.env.example`](.env.example) — every configuration variable.
 

@@ -92,6 +92,14 @@ func applyMigration(database *DB, m migration) error {
 
 	for i, statement := range statements {
 		if _, err := tx.Exec(statement); err != nil {
+			// SQLite does not support ADD COLUMN IF NOT EXISTS. When
+			// re-running migrations over a schema that already has the column
+			// (e.g. schema_migrations was dropped), the ALTER TABLE fails with
+			// "duplicate column name". This is safe to skip: the column exists,
+			// which is the desired end state.
+			if database.Driver == DriverSQLite && isDuplicateColumn(err) {
+				continue
+			}
 			return fmt.Errorf("statement %d: %w", i+1, err)
 		}
 	}
@@ -159,6 +167,13 @@ func versionFromName(name string) (string, error) {
 		return "", fmt.Errorf("migration %s: version %q is not a number", name, version)
 	}
 	return version, nil
+}
+
+// isDuplicateColumn reports whether err is SQLite's "duplicate column name"
+// error, which happens when ALTER TABLE ADD COLUMN is re-run on a schema that
+// already has the column.
+func isDuplicateColumn(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "duplicate column name")
 }
 
 // splitStatements cuts a migration file into statements on top-level semicolons.

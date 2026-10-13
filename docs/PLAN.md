@@ -31,7 +31,7 @@ are the way they are; this file is *what to do next*.
 | 0 — Compiling baseline | **Done** |
 | 1 — Data-layer integrity | **Done** |
 | 2 — Versioned migrations | **Done** |
-| 3 — Auth and security | T3.1 done; T3.2–T3.4 not started |
+| 3 — Auth and security | T3.1, T3.3 done; T3.2, T3.4 not started |
 | 4 — Sync engine | Not started |
 | 5 — Observability and ops | Not started |
 | 6 — Testing | Partially (config only) |
@@ -409,18 +409,37 @@ document that it is per-instance.
 
 **Done when:** repeated failures from one IP are throttled.
 
-### T3.3 — User provisioning
+### T3.3 — User provisioning (done)
 
-**Files:** `internal/auth/`, `cmd/server/main.go`.
+Done. The server has no self-signup: the admin creates users, and the first
+admin is bootstrapped from the CLI. Two entry points were implemented:
 
-**Steps:** there is no way to create the first user, so `SignIn` can never
-succeed on a fresh install. Add either an explicit admin-only
-`POST /v1/users` route or a documented one-shot bootstrap command
-(`cmd/server --create-user`). Whichever you pick, record the decision in
-`docs/ARCHITECTURE.md`.
+- **CLI bootstrap** (`cmd/server user-create`) — a one-shot subcommand that
+  connects directly to `DATABASE_URL`, runs migrations, and creates a user
+  with `--email`, `--password`, `--display-name`, `--position`, and `--admin`
+  flags. This is how a fresh install gets its first working sign-in.
+- **Admin API** (`/v1/admin/users`) — `POST` to create, `GET` to list,
+  `PATCH /{id}` to update (display name, position, role, status), and
+  `DELETE /{id}` to deactivate. All require an admin token (the `AdminOnly`
+  middleware checks the `role` claim). A user cannot deactivate themselves.
+- **Directory search** (`GET /v1/users/search?q=...`) — open to any
+  authenticated user, used by the KMP client's `TeamPort` to find teammates.
+  Case-insensitive LIKE on email and display name, limited to 50 results.
 
-**Done when:** a fresh install can produce a working sign-in without hand-editing
-the database.
+Migration `0003` adds `role TEXT NOT NULL DEFAULT 'member'` to the `users`
+table for both drivers. The role is carried in the JWT `role` claim so the
+middleware can gate admin routes without a database lookup on every request.
+
+See [`docs/USER-MANAGEMENT.md`](USER-MANAGEMENT.md) for the full flow,
+endpoint reference, and user object shape.
+
+**Files:** `internal/admin/handler.go` (new), `internal/entities/models.go`,
+`internal/entities/user_repository.go`, `internal/auth/auth.go`,
+`internal/middleware/middleware.go`, `cmd/server/main.go`,
+`internal/db/migrations/0003_user_roles.{postgres,sqlite}.sql`.
+
+**Done when:** a fresh install can produce a working sign-in without
+hand-editing the database.
 
 **Depends on:** Milestone 1.
 

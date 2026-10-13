@@ -42,12 +42,15 @@ internal/db/migrations    versioned SQL, one file per driver
 | Endpoint | Method | Middleware | Notes |
 | --- | --- | --- | --- |
 | `/healthz` | GET | logging, CORS, recover | returns `ok`; does not check the database |
-| `/v1/auth/signin` | POST | logging, CORS, recover | email + password → token pair; starts a token family |
+| `/v1/auth/login` | POST | logging, CORS, recover | email + password → token pair; starts a token family |
 | `/v1/auth/refresh` | POST | logging, CORS, recover | rotates the refresh token and returns a new pair |
 | `/v1/auth/signout` | POST | logging, CORS, recover | revokes the refresh token's whole family; `204` |
 | `/v1/sync/push` | POST | + Auth | apply client changes, return per-entry verdicts |
 | `/v1/sync/changes/project` | GET | + Auth | cursor-paged pull |
 | `/v1/sync/changes/workItem` | GET | + Auth | cursor-paged pull |
+| `/v1/admin/users` | POST, GET | + Auth + AdminOnly | admin creates and lists users; no self-signup |
+| `/v1/admin/users/{id}` | PATCH, DELETE | + Auth + AdminOnly | admin updates or deactivates a user |
+| `/v1/users/search` | GET | + Auth | directory search; any authenticated user |
 
 The offline-first sync design is the strongest part of the scaffold and matches
 what the client already implements: an append-only `sync_log` keyed by
@@ -167,8 +170,21 @@ Severity is about what blocks a working server.
   same deliberately). Only a SHA-256 hash of each token's JWT id is stored, so a
   database read does not yield a replayable token. Access tokens stay stateless
   and are not revoked; their short TTL is what bounds them.
-- **E4 — nothing to deploy with.** No `Dockerfile`, systemd unit, or
-  self-hosting guide, which is the whole point of the project.
+- **E4 — fixed.** There was no `Dockerfile`, systemd unit, or self-hosting
+  guide. A multi-stage Docker build (`golang:1.27-alpine` → `alpine:3.21`) now
+  produces a 44 MB image with CGO enabled, a non-root `app` user, and a `/data`
+  volume for SQLite. `docker-compose.yml` provides `postgres` and `sqlite`
+  profiles. See [Docker](../README.md#docker) in the README.
+- **E5 — fixed.** There was no way to create the first user, so sign-in could
+  never succeed on a fresh install. The decision: **no self-signup** — the
+  admin creates users, and the first admin is bootstrapped via the CLI
+  (`cmd/server user-create --admin`). After that, admin-only `POST
+  /v1/admin/users` provisions the rest. A `role` column (`admin`/`member`)
+  on `users` gates the admin routes via the `AdminOnly` middleware, which
+  reads the `role` claim from the JWT. Directory search
+  (`GET /v1/users/search`) is open to any authenticated user so the KMP
+  client's `TeamPort` can find teammates without admin privileges. See
+  [`docs/USER-MANAGEMENT.md`](USER-MANAGEMENT.md).
 
 ## Recommended order of work
 

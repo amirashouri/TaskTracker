@@ -56,12 +56,12 @@ func (e *testEnv) signIn(t *testing.T) tokenResponse {
 
 func (e *testEnv) refresh(t *testing.T, refreshToken string) *httptest.ResponseRecorder {
 	t.Helper()
-	return postJSON(t, e.handler.Refresh, map[string]string{"refreshToken": refreshToken})
+	return postJSON(t, e.handler.Refresh, map[string]string{"refresh_token": refreshToken})
 }
 
 func (e *testEnv) signOut(t *testing.T, refreshToken string) *httptest.ResponseRecorder {
 	t.Helper()
-	return postJSON(t, e.handler.SignOut, map[string]string{"refreshToken": refreshToken})
+	return postJSON(t, e.handler.SignOut, map[string]string{"refresh_token": refreshToken})
 }
 
 func (e *testEnv) stored(t *testing.T, token string) *RefreshToken {
@@ -256,7 +256,7 @@ func TestRefreshRejectsUnknownAndForeignTokens(t *testing.T) {
 
 	// Signed correctly, but not issued by this server.
 	other := NewJWTManager(strings.Repeat("x", 32), time.Hour, 720*time.Hour)
-	foreign, _, err := other.IssueRefreshWithID(string(env.user.ID), env.user.Email)
+	foreign, _, err := other.IssueRefreshWithID(string(env.user.ID), env.user.Email, env.user.Role)
 	if err != nil {
 		t.Fatalf("issue foreign token: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestRefreshRejectsUnknownAndForeignTokens(t *testing.T) {
 	if err := env.users.Create(context.Background(), other2); err != nil {
 		t.Fatalf("create second user: %v", err)
 	}
-	signed, id, err := env.jwt.IssueRefreshWithID(string(env.user.ID), env.user.Email)
+	signed, id, err := env.jwt.IssueRefreshWithID(string(env.user.ID), env.user.Email, env.user.Role)
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}
