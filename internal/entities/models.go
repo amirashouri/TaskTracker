@@ -3,6 +3,7 @@ package entities
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 
 	"github.com/google/uuid"
 )
@@ -73,10 +74,12 @@ type Project struct {
 	Version        string    `json:"version"`
 }
 
-func (p *Project) NextKey() string {
-	key := p.KeyPrefix + "-" + string(rune(p.NextItemNumber+'0')) // simplified
-	p.NextItemNumber++
-	return key
+// Key formats a work-item key. Numbers are decimal, so item 10 is "TT-10"
+// rather than the "TT-:" that `string(rune(n+'0'))` produced. Allocation is
+// the repository's job (AllocateKey), not the model's: a counter read and
+// incremented in memory cannot be atomic.
+func (p *Project) Key(number int) string {
+	return p.KeyPrefix + "-" + strconv.Itoa(number)
 }
 
 // ============ WorkItem ============

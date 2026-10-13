@@ -3,6 +3,7 @@ package entities
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -87,6 +88,25 @@ func (r *ProjectRepository) Update(ctx context.Context, p *Project) error {
 func (r *ProjectRepository) Delete(ctx context.Context, id ProjectID) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM projects WHERE id = $1`, id)
 	return err
+}
+
+// AllocateKey reserves the next work-item number for a project and returns the
+// formatted key. One statement both reads and increments the counter, so two
+// concurrent callers cannot be handed the same number.
+func (r *ProjectRepository) AllocateKey(ctx context.Context, projectID ProjectID) (string, error) {
+	var prefix string
+	var number int
+	err := r.db.QueryRowContext(ctx, `
+		UPDATE projects SET next_item_number = next_item_number + 1
+		 WHERE id = $1
+		 RETURNING key_prefix, next_item_number - 1`, projectID).Scan(&prefix, &number)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("project %s not found", projectID)
+	}
+	if err != nil {
+		return "", err
+	}
+	return (&Project{KeyPrefix: prefix}).Key(number), nil
 }
 
 func (r *ProjectRepository) List(ctx context.Context, includeArchived bool) ([]*Project, error) {

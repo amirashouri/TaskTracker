@@ -117,9 +117,12 @@ Severity is about what blocks a working server.
   `due_date`, and reads scan a `TIMESTAMP` into `sql.NullInt64`. SQLite tolerates
   this because its types are loose; Postgres rejects both directions. Pick one
   representation and make the DDL agree.
-- **C3 — `Project.NextKey` is wrong past 9.** It builds with
-  `string(rune(n+'0'))`, so item 10 produces `KEY-:` and 11 produces `KEY-;`
-  instead of `KEY-10`. Use `strconv.Itoa`.
+- **C3 — fixed.** `Project.NextKey` built the key with
+  `string(rune(n+'0'))`, so item 10 produced `KEY-:` and 11 produced `KEY-;`
+  instead of `KEY-10`, and it read and incremented the counter in memory.
+  `Project.Key` is now a pure `strconv.Itoa` formatter and
+  `ProjectRepository.AllocateKey` reserves a number with a single
+  `UPDATE ... RETURNING`, so concurrent callers cannot collide.
 - **C4 — `isSQLite` returns true for every driver.**
   `db.QueryRow("SELECT 'sqlite'")` succeeds on Postgres, and the function treats
   any success as "this is SQLite". Postgres therefore receives DDL rewritten for

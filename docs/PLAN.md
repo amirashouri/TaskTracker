@@ -32,7 +32,7 @@ are the way they are; this file is *what to do next*.
 | 1 — Data-layer integrity | **Done** |
 | 2 — Versioned migrations | **Done** |
 | 3 — Auth and security | **Done** |
-| 4 — Sync engine | T4.1, T4.2 done; T4.3–T4.5 not started |
+| 4 — Sync engine | T4.1–T4.3 done; T4.4–T4.5 not started |
 | 5 — Observability and ops | T5.4 done; T5.1–T5.3, T5.5 not started |
 | 6 — Testing | T6.1–T6.4 done; T6.3 middleware tests still missing; T6.5 not started |
 | 7 — Client contract | Not started |
@@ -544,17 +544,22 @@ caller is not listed, a non-member refused on an existing project (even
 naming themselves in the payload), a non-member refused a work item, Pull
 scoped to membership, and a project delete delivered beyond membership.
 
-### T4.3 — Atomic work-item key generation
+### T4.3 — Atomic work-item key generation (done)
 
-**Files:** `internal/entities/models.go`, `internal/db/db.go`.
+Done. `Project.NextKey` is gone — it was dead code that built the key with
+`string(rune(n+'0'))`, so item 10 became `TT-:` — and the counter no longer
+lives in memory. `Project.Key(number)` is a pure formatter using
+`strconv.Itoa`, and `ProjectRepository.AllocateKey` reserves a number with
+one `UPDATE projects SET next_item_number = next_item_number + 1 ...
+RETURNING key_prefix, next_item_number - 1`, so two concurrent callers
+cannot be handed the same number. Both drivers support `RETURNING`.
 
-**Why:** `Project.NextKey` builds the key with `string(rune(n+'0'))`, so item 10
-becomes `KEY-:` . It also reads and increments a counter without a lock.
+**Files:** `internal/entities/models.go`,
+`internal/entities/project_repository.go`.
 
-**Steps:** use `strconv.Itoa`, and allocate the number with a single
-`UPDATE projects SET next_item_number = next_item_number + 1 ... RETURNING`.
-
-**Depends on:** T1.2.
+**Tests:** `internal/entities/repository_test.go` — decimal counting past
+9, 20 concurrent allocations with no duplicate, and a missing project
+reported rather than silently returning a key.
 
 ### T4.4 — Conflict policy
 

@@ -3,6 +3,8 @@ package entities
 import (
 	"context"
 	"errors"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/amirashouri/tasktracker-server/internal/db"
@@ -273,5 +275,73 @@ func TestSprintAndCommentStaleUpdatesConflict(t *testing.T) {
 	}
 	if err := comments.Update(ctx, &staleComment); !errors.Is(err, ErrVersionConflict) {
 		t.Errorf("stale comment update error = %v, want ErrVersionConflict", err)
+	}
+}
+
+// Numbers are decimal, so the tenth key is TT-10 rather than the TT-: that
+// `string(rune(n+'0'))` produced.
+func TestAllocateKeyCountsInDecimal(t *testing.T) {
+	database := newTestDB(t)
+	projects := NewProjectRepository(database.DB)
+	ctx := context.Background()
+
+	project := &Project{KeyPrefix: "TT", Name: "Demo", NextItemNumber: 1}
+	if err := projects.Create(ctx, project); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	for want := 1; want <= 11; want++ {
+		got, err := projects.AllocateKey(ctx, project.ID)
+		if err != nil {
+			t.Fatalf("allocate %d: %v", want, err)
+		}
+		if wantKey := "TT-" + strconv.Itoa(want); got != wantKey {
+			t.Fatalf("key %d = %q, want %q", want, got, wantKey)
+		}
+	}
+}
+
+// Two concurrent allocations must not be handed the same number.
+func TestAllocateKeyIsAtomic(t *testing.T) {
+	database := newTestDB(t)
+	projects := NewProjectRepository(database.DB)
+	ctx := context.Background()
+
+	project := &Project{KeyPrefix: "TT", Name: "Demo", NextItemNumber: 1}
+	if err := projects.Create(ctx, project); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	const callers = 20
+	keys := make([]string, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			keys[i], errs[i] = projects.AllocateKey(ctx, project.ID)
+		}(i)
+	}
+	wg.Wait()
+
+	seen := make(map[string]bool, callers)
+	for i, key := range keys {
+		if errs[i] != nil {
+			t.Fatalf("allocate %d: %v", i, errs[i])
+		}
+		if seen[key] {
+			t.Errorf("key %q was handed out twice", key)
+		}
+		seen[key] = true
+	}
+}
+
+func TestAllocateKeyRejectsAnUnknownProject(t *testing.T) {
+	database := newTestDB(t)
+	projects := NewProjectRepository(database.DB)
+
+	if _, err := projects.AllocateKey(context.Background(), "00000000-0000-0000-0000-000000000000"); err == nil {
+		t.Error("allocating for a missing project should fail")
 	}
 }
