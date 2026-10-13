@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -33,27 +33,49 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
-// Logging records method, path, status and duration for every request.
-func Logging(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(recorder, r)
-		log.Printf("%s %s %d %s", r.Method, r.URL.Path, recorder.status, time.Since(start).Round(time.Millisecond))
-	})
+// Logging records method, path, status and duration for every request. A
+// request that ended in a server error is logged at error level, so a filter
+// on level finds real failures without hiding the rest.
+func Logging(logger *slog.Logger) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(recorder, r)
+
+			attrs := []any{
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", recorder.status,
+				"duration_ms", time.Since(start).Milliseconds(),
+			}
+			if recorder.status >= http.StatusInternalServerError {
+				logger.Error("request failed", attrs...)
+				return
+			}
+			logger.Info("request", attrs...)
+		})
+	}
 }
 
-// Recover turns a panic into a 500 instead of dropping the connection.
-func Recover(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				log.Printf("panic serving %s %s: %v\n%s", r.Method, r.URL.Path, recovered, debug.Stack())
-				httpx.WriteError(w, http.StatusInternalServerError, "internal server error")
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
+// Recover turns a panic into a 500 instead of dropping the connection, and
+// records the stack at error level.
+func Recover(logger *slog.Logger) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					logger.Error("panic serving request",
+						"method", r.Method,
+						"path", r.URL.Path,
+						"panic", recovered,
+						"stack", string(debug.Stack()))
+					httpx.WriteError(w, http.StatusInternalServerError, "internal server error")
+				}
+			}()
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // CORS answers preflight requests and reflects an allowed Origin. Mobile

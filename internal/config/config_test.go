@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,5 +121,35 @@ func TestLoadRejectsNegativeSignInAttempts(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("expected an error when SIGNIN_MAX_ATTEMPTS is negative")
+	}
+}
+
+// A typo in LOG_LEVEL must stop startup rather than silently logging at info.
+func TestLoadRejectsAnUnknownLogLevel(t *testing.T) {
+	isolate(t, testKeyJWT)
+	isolate(t, "LOG_LEVEL")
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+	t.Setenv(testKeyJWT, strings.Repeat("a", 32))
+	t.Setenv("LOG_LEVEL", "verbose")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected an error when LOG_LEVEL is not a known level")
+	}
+}
+
+func TestSlogLevelMapsTheConfiguredName(t *testing.T) {
+	cases := map[string]slog.Level{
+		"debug":   slog.LevelDebug,
+		"info":    slog.LevelInfo,
+		"warn":    slog.LevelWarn,
+		"warning": slog.LevelWarn,
+		"error":   slog.LevelError,
+		"INFO":    slog.LevelInfo,
+	}
+	for name, want := range cases {
+		cfg := &Config{LogLevel: name}
+		if got := cfg.SlogLevel(); got != want {
+			t.Errorf("SlogLevel(%q) = %v, want %v", name, got, want)
+		}
 	}
 }

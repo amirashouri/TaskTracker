@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -59,6 +60,11 @@ func (c *Config) validate() error {
 	if len(c.JWTSecret) < 32 {
 		return errors.New("JWT_SECRET must be set and at least 32 bytes; see .env.example")
 	}
+	switch strings.ToLower(strings.TrimSpace(c.LogLevel)) {
+	case "debug", "info", "warn", "warning", "error":
+	default:
+		return fmt.Errorf("LOG_LEVEL %q is not one of debug, info, warn, error", c.LogLevel)
+	}
 	if c.SignInMaxAttempts < 0 {
 		return errors.New("SIGNIN_MAX_ATTEMPTS must not be negative; use 0 to disable")
 	}
@@ -69,6 +75,21 @@ func (c *Config) validate() error {
 		return errors.New("SYNC_LOG_RETENTION must not be negative; use 0 to keep the feed forever")
 	}
 	return nil
+}
+
+// SlogLevel maps LOG_LEVEL onto a slog level. Validation has already rejected
+// an unknown name, so the default here is only a safety net.
+func (c *Config) SlogLevel() slog.Level {
+	switch strings.ToLower(strings.TrimSpace(c.LogLevel)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 // loadEnvFile parses simple KEY=VALUE lines. Missing file is not an error.

@@ -33,7 +33,7 @@ are the way they are; this file is *what to do next*.
 | 2 — Versioned migrations | **Done** |
 | 3 — Auth and security | **Done** |
 | 4 — Sync engine | **Done** |
-| 5 — Observability and ops | T5.1, T5.4 done; T5.2, T5.3, T5.5 not started |
+| 5 — Observability and ops | T5.1, T5.2, T5.4 done; T5.3, T5.5 not started |
 | 6 — Testing | T6.1–T6.4 done; T6.3 middleware tests still missing; T6.5 not started |
 | 7 — Client contract | Not started |
 
@@ -635,15 +635,29 @@ alive.
 **Tests:** `cmd/server/main_test.go` — liveness survives a dead database,
 readiness flips from `200` to `503` when it is closed.
 
-### T5.2 — Structured logging and `LOG_LEVEL`
+### T5.2 — Structured logging and `LOG_LEVEL` (done)
 
-**Files:** `internal/middleware/middleware.go`, `internal/config/config.go`,
-`cmd/server/main.go`.
+Done. Everything now goes through `log/slog` with a text handler on stdout,
+and `LOG_LEVEL` actually selects the level: `Config.SlogLevel` maps the
+name and `Config.validate` refuses to start on an unknown one, so a typo
+fails loudly instead of silently logging at info.
 
-**Why:** `LOG_LEVEL` is read but never used; logging is `log.Printf` text.
+- `middleware.Logging` and `middleware.Recover` take the logger as a
+  parameter, so a test can capture their output. Request logs are `info`,
+  except a response that ended in 5xx, which is `error` — a filter on level
+  finds real failures without hiding the rest. Panics are `error` with the
+  stack.
+- `main.go` builds the logger from config and sets it as the default.
+  Startup failures go through a small `fatal` helper, because `slog` has no
+  `Fatal`. The `user-create` subcommand keeps plain stderr messages: it is
+  a command-line tool, not a service.
 
-**Steps:** use `log/slog`, wire the level from config, and replace `log.Printf`
-calls. Keep request logs at info and panics/5xx at error.
+**Files:** `internal/middleware/middleware.go`,
+`internal/config/config.go`, `cmd/server/main.go`, `.env.example`.
+
+**Tests:** `internal/middleware/middleware_test.go` (a 200 logs at info, a
+500 and a panic log at error) and `internal/config/config_test.go` (level
+mapping, unknown level rejected).
 
 ### T5.3 — Request IDs
 

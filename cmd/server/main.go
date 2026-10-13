@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -46,19 +46,22 @@ func main() {
 func runServer() {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Invalid configuration: %v", err)
+		fatal("invalid configuration", err)
 	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.SlogLevel()}))
+	slog.SetDefault(logger)
 
 	// Initialize database
 	database, err := db.New(cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		fatal("failed to connect to database", err)
 	}
 	defer database.Close()
 
 	// Run migrations
 	if err := db.Migrate(database); err != nil {
-		log.Fatalf("Failed to run migrations: %v", err)
+		fatal("failed to run migrations", err)
 	}
 
 	// Initialize JWT manager
@@ -113,9 +116,9 @@ func runServer() {
 	handler := middleware.Chain(
 		mux,
 		middleware.SecurityHeaders(),
-		middleware.Logging,
+		middleware.Logging(logger),
 		middleware.CORS(cfg.CORSOrigins),
-		middleware.Recover,
+		middleware.Recover(logger),
 	)
 
 	// Retain the change feed for the configured window. Pruning is what makes a
@@ -136,9 +139,9 @@ func runServer() {
 
 	// Graceful shutdown
 	go func() {
-		log.Printf("Server starting on port %s", cfg.ServerPort)
+		logger.Info("server listening", "port", cfg.ServerPort)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+			fatal("server failed", err)
 		}
 	}()
 
@@ -147,15 +150,22 @@ func runServer() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down server...")
+	logger.Info("shutting down server")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		fatal("server forced to shutdown", err)
 	}
 
-	log.Println("Server exited")
+	logger.Info("server exited")
+}
+
+// fatal reports a startup failure and exits. slog has no Fatal, and a failure
+// to start must not be swallowed.
+func fatal(message string, err error) {
+	slog.Error(message, "error", err)
+	os.Exit(1)
 }
 
 // healthz is the liveness probe: the process is up. It deliberately does not
@@ -199,11 +209,11 @@ func pruneChangeFeed(ctx context.Context, engine *sync.Engine, retention time.Du
 			cutoff := time.Now().Add(-retention)
 			pruned, err := engine.Prune(ctx, cutoff)
 			if err != nil {
-				log.Printf("prune change feed: %v", err)
+				slog.Error("prune change feed", "error", err)
 				continue
 			}
 			if pruned > 0 {
-				log.Printf("pruned %d change feed rows older than %s", pruned, cutoff.Format(time.RFC3339))
+				slog.Info("pruned change feed", "rows", pruned, "older_than", cutoff.Format(time.RFC3339))
 			}
 		}
 	}
@@ -230,23 +240,23 @@ func createUserCmd(args []string) {
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Invalid configuration: %v", err)
+		cliFatal("invalid configuration: %v", err)
 	}
 
 	database, err := db.New(cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		cliFatal("failed to connect to database: %v", err)
 	}
 	defer database.Close()
 
 	if err := db.Migrate(database); err != nil {
-		log.Fatalf("Failed to run migrations: %v", err)
+		cliFatal("failed to run migrations: %v", err)
 	}
 
 	userRepo := entities.NewUserRepository(database.DB)
 
 	if existing, _ := userRepo.GetByEmail(context.Background(), *email); existing != nil {
-		log.Fatalf("email %s is already registered", *email)
+		cliFatal("email %s is already registered", *email)
 	}
 
 	role := entities.RoleMember
@@ -263,8 +273,16 @@ func createUserCmd(args []string) {
 	}
 
 	if err := userRepo.Create(context.Background(), user); err != nil {
-		log.Fatalf("Failed to create user: %v", err)
+		cliFatal("failed to create user: %v", err)
 	}
 
 	fmt.Printf("Created user %s (id=%s, role=%s)\n", user.Email, user.ID, user.Role)
+}
+
+// cliFatal reports a subcommand failure and exits. A subcommand is a
+// command-line tool, so its errors are plain text on stderr rather than
+// structured log lines.
+func cliFatal(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	os.Exit(1)
 }
