@@ -20,6 +20,7 @@ type Config struct {
 	LogLevel          string
 	SignInMaxAttempts int
 	SignInWindow      time.Duration
+	SyncLogRetention  time.Duration
 }
 
 // Load reads configuration from the environment, seeded from the file named by
@@ -41,6 +42,7 @@ func Load() (*Config, error) {
 		LogLevel:          getEnv("LOG_LEVEL", "info"),
 		SignInMaxAttempts: getIntEnv("SIGNIN_MAX_ATTEMPTS", 10),
 		SignInWindow:      getDurationEnv("SIGNIN_WINDOW", 15*time.Minute),
+		SyncLogRetention:  getDurationEnv("SYNC_LOG_RETENTION", 720*time.Hour),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -62,6 +64,9 @@ func (c *Config) validate() error {
 	}
 	if c.SignInMaxAttempts > 0 && c.SignInWindow <= 0 {
 		return errors.New("SIGNIN_WINDOW must be positive when SIGNIN_MAX_ATTEMPTS is set")
+	}
+	if c.SyncLogRetention < 0 {
+		return errors.New("SYNC_LOG_RETENTION must not be negative; use 0 to keep the feed forever")
 	}
 	return nil
 }

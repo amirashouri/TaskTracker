@@ -81,6 +81,20 @@ treats as opaque. The verdict vocabulary is `accepted`, `conflict`,
 `rejected` and `retry_later`; `conflict` and `retry_later` are the two the
 client is expected to act on.
 
+## Change feed retention
+
+The cursor is the numeric `sync_log.id`, which is monotonic. Rows are pruned
+after `SYNC_LOG_RETENTION` (default 30 days; `0` keeps them forever), swept
+hourly, so the feed does not grow without bound on a long-lived install.
+
+Pruning is what makes a cursor able to go stale, so `Pull` compares the
+caller's cursor with the oldest row still retained and sets
+`PullPage.ResyncRequired` when the cursor points before it. A client that sees
+the flag drops its cursor and pulls from the start — there is no separate
+"resync" endpoint, because pulling with no cursor is already that operation. A
+client that has never synced is not flagged: it is already pulling everything
+that survived.
+
 ## Verification status
 
 | Check | Result |

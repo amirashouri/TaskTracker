@@ -507,7 +507,40 @@ func (e *Engine) Pull(ctx context.Context, userID string, entity entities.Outbox
 	if lastID > 0 {
 		page.NextCursor = strconv.FormatInt(lastID, 10)
 	}
+
+	// A cursor that points before the oldest retained row means rows were
+	// pruned under it: the client has missed changes and must start over.
+	oldest, err := e.oldestCursor(ctx, entity)
+	if err != nil {
+		return nil, err
+	}
+	page.ResyncRequired = after > 0 && (oldest == 0 || after < oldest-1)
+
 	return page, nil
+}
+
+// oldestCursor is the smallest id still retained for an entity, or 0 when the
+// feed is empty. The (entity, created_at, id) index serves this ordering.
+func (e *Engine) oldestCursor(ctx context.Context, entity entities.OutboxEntity) (int64, error) {
+	var oldest int64
+	err := e.db.QueryRowContext(ctx,
+		`SELECT id FROM sync_log WHERE entity = $1 ORDER BY created_at, id LIMIT 1`,
+		string(entity)).Scan(&oldest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return oldest, err
+}
+
+// Prune deletes change-feed rows older than before and returns how many went.
+// A pruned row is gone for good, which is why Pull reports ResyncRequired to a
+// client whose cursor is older than what survived.
+func (e *Engine) Prune(ctx context.Context, before time.Time) (int64, error) {
+	result, err := e.db.ExecContext(ctx, `DELETE FROM sync_log WHERE created_at < $1`, before.UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // appendLog writes the change feed row. It takes the caller's transaction so

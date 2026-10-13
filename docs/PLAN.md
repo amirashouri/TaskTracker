@@ -32,7 +32,7 @@ are the way they are; this file is *what to do next*.
 | 1 — Data-layer integrity | **Done** |
 | 2 — Versioned migrations | **Done** |
 | 3 — Auth and security | **Done** |
-| 4 — Sync engine | T4.1–T4.4 done; T4.5 not started |
+| 4 — Sync engine | **Done** |
 | 5 — Observability and ops | T5.4 done; T5.1–T5.3, T5.5 not started |
 | 6 — Testing | T6.1–T6.4 done; T6.3 middleware tests still missing; T6.5 not started |
 | 7 — Client contract | Not started |
@@ -590,14 +590,31 @@ Two fixes were needed to make the verdict trustworthy:
 `TestConflictVerdictCarriesTheServerVersion` and
 `TestPushWithoutAVersionOverwrites`.
 
-### T4.5 — Cursor durability and retention
+### T4.5 — Cursor durability and retention (done)
 
-**Files:** `internal/sync/engine.go`, `internal/db/`.
+Done. The cursor stays the numeric `sync_log.id`, which is monotonic, and
+the server now has both halves of the durability story:
 
-**Steps:** the cursor is the numeric `sync_log.id`, which is monotonic and fine;
-decide what happens when rows are pruned or a client has been away longer than
-the retention window. Add a way for a client to detect a too-old cursor and
-request a full resync.
+- **Retention.** `Engine.Prune(before)` deletes change-feed rows older than
+  a cutoff. `main.go` runs it hourly for `SYNC_LOG_RETENTION` (default
+  `720h`; `0` keeps the feed forever). The interval is fixed on purpose —
+  the window is what an operator tunes.
+- **Detection.** `Pull` compares the caller's cursor with the oldest row
+  still retained for that entity (served by the existing
+  `(entity, created_at, id)` index) and sets `PullPage.ResyncRequired` when
+  the cursor points before it. A client that sees the flag drops its cursor
+  and pulls from the start; that is the whole "request a full resync"
+  mechanism, and it needs no new endpoint.
+
+A client that has never synced (`cursor` empty) is not flagged: it is
+already pulling everything that survived.
+
+**Files:** `internal/sync/engine.go`, `internal/entities/models.go`,
+`internal/config/config.go`, `cmd/server/main.go`, `.env.example`.
+
+**Tests:** `internal/sync/engine_test.go` —
+`TestPullAsksForAResyncWhenTheCursorIsTooOld` and
+`TestPruneKeepsRecentRows`.
 
 ---
 

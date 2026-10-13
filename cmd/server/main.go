@@ -114,6 +114,14 @@ func runServer() {
 		middleware.Recover,
 	)
 
+	// Retain the change feed for the configured window. Pruning is what makes a
+	// client's cursor able to go stale, which Pull reports as ResyncRequired.
+	pruneCtx, stopPruning := context.WithCancel(context.Background())
+	defer stopPruning()
+	if cfg.SyncLogRetention > 0 {
+		go pruneChangeFeed(pruneCtx, syncEngine, cfg.SyncLogRetention)
+	}
+
 	server := &http.Server{
 		Addr:         ":" + cfg.ServerPort,
 		Handler:      handler,
@@ -144,6 +152,32 @@ func runServer() {
 	}
 
 	log.Println("Server exited")
+}
+
+// pruneChangeFeed deletes change-feed rows older than retention once an hour
+// until ctx is cancelled. The interval is deliberately not configurable: the
+// window is what an operator cares about, and an hourly sweep bounds the
+// growth between restarts.
+func pruneChangeFeed(ctx context.Context, engine *sync.Engine, retention time.Duration) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cutoff := time.Now().Add(-retention)
+			pruned, err := engine.Prune(ctx, cutoff)
+			if err != nil {
+				log.Printf("prune change feed: %v", err)
+				continue
+			}
+			if pruned > 0 {
+				log.Printf("pruned %d change feed rows older than %s", pruned, cutoff.Format(time.RFC3339))
+			}
+		}
+	}
 }
 
 // createUserCmd is the one-shot bootstrap command for creating the first user

@@ -245,10 +245,14 @@ type RemoteChange struct {
 	Version   string          `json:"version,omitempty"`
 }
 
+// PullPage is one page of the change feed. ResyncRequired is set when the
+// caller's cursor points before the oldest row still retained, so it has
+// missed changes and must re-pull from the start instead of trusting the page.
 type PullPage struct {
-	Changes    []RemoteChange `json:"changes"`
-	NextCursor string         `json:"nextCursor,omitempty"`
-	HasMore    bool           `json:"hasMore"`
+	Changes        []RemoteChange `json:"changes"`
+	NextCursor     string         `json:"nextCursor,omitempty"`
+	HasMore        bool           `json:"hasMore"`
+	ResyncRequired bool           `json:"resyncRequired,omitempty"`
 }
 
 type SyncScope string

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/amirashouri/tasktracker-server/internal/dbtest"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
@@ -431,6 +432,83 @@ func TestPushWithoutAVersionOverwrites(t *testing.T) {
 	}
 	if stored.Name != "Renamed" {
 		t.Errorf("name = %q, want Renamed", stored.Name)
+	}
+}
+
+// A cursor that points before the oldest retained row must be told to start
+// over, because pruning removed changes it never saw.
+func TestPullAsksForAResyncWhenTheCursorIsTooOld(t *testing.T) {
+	database := dbtest.NewDatabase(t)
+	ctx := context.Background()
+	engine := NewEngine(database.DB)
+	users := entities.NewUserRepository(database.DB)
+
+	user := &entities.User{Email: "retention@example.com", PasswordHash: "secret"}
+	if err := users.Create(ctx, user); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	userID := string(user.ID)
+
+	project := newProject(userID, "ffffffff-ffff-ffff-ffff-ffffffffffff")
+	if res := pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create = %s (%s)", res.Status, res.Message)
+	}
+
+	fresh, err := engine.Pull(ctx, userID, entities.OutboxEntityProject, "", 0)
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if fresh.ResyncRequired {
+		t.Error("a client that has seen nothing was told to resync")
+	}
+	if fresh.NextCursor == "" {
+		t.Fatal("pull returned no cursor")
+	}
+
+	// Age the only row past the window, then prune it.
+	aged := time.Now().Add(-48 * time.Hour).UnixMilli()
+	if _, err := database.ExecContext(ctx, `UPDATE sync_log SET created_at = $1`, aged); err != nil {
+		t.Fatalf("age row: %v", err)
+	}
+	pruned, err := engine.Prune(ctx, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned %d rows, want 1", pruned)
+	}
+
+	stale, err := engine.Pull(ctx, userID, entities.OutboxEntityProject, fresh.NextCursor, 0)
+	if err != nil {
+		t.Fatalf("pull after prune: %v", err)
+	}
+	if !stale.ResyncRequired {
+		t.Error("a cursor older than the retained window was not told to resync")
+	}
+}
+
+// Pruning must not touch rows inside the window.
+func TestPruneKeepsRecentRows(t *testing.T) {
+	engine, _, _, _, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "12121212-1212-1212-1212-121212121212")
+	pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, ""))
+
+	pruned, err := engine.Prune(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if pruned != 0 {
+		t.Errorf("pruned %d recent rows, want 0", pruned)
+	}
+
+	page, err := engine.Pull(ctx, userID, entities.OutboxEntityProject, "", 0)
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if len(page.Changes) != 1 {
+		t.Errorf("pull returned %d changes, want 1", len(page.Changes))
 	}
 }
 
