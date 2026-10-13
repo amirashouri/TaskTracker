@@ -1,0 +1,76 @@
+# TaskTrackerServer — Docker Compose
+#
+# Two deployment profiles:
+#
+#   Postgres (shared, multi-user):
+#     docker compose --profile postgres up -d
+#
+#   SQLite (single-node, zero external dependencies):
+#     docker compose --profile sqlite up -d
+#
+# JWT_SECRET is required for both. Generate one:
+#   openssl rand -hex 32
+#
+# Pass it via environment variable or a .env file next to this compose file:
+#   JWT_SECRET=<your-secret>
+#   POSTGRES_PASSWORD=<change-me>   # only for the postgres profile
+
+services:
+  # ── Postgres profile ──────────────────────────────────────────────
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tasktracker
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tasktracker}
+      POSTGRES_DB: tasktracker
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tasktracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  server-pg:
+    profiles: ["postgres"]
+    build: .
+    environment:
+      SERVER_PORT: "8080"
+      DATABASE_URL: "postgres://tasktracker:${POSTGRES_PASSWORD:-tasktracker}@postgres:5432/tasktracker"
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required}"
+      JWT_ACCESS_TTL: "${JWT_ACCESS_TTL:-1h}"
+      JWT_REFRESH_TTL: "${JWT_REFRESH_TTL:-720h}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── SQLite profile ────────────────────────────────────────────────
+  server-sqlite:
+    profiles: ["sqlite"]
+    build: .
+    environment:
+      SERVER_PORT: "8080"
+      DATABASE_URL: "sqlite:///data/tasktracker.db"
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required}"
+      JWT_ACCESS_TTL: "${JWT_ACCESS_TTL:-1h}"
+      JWT_REFRESH_TTL: "${JWT_REFRESH_TTL:-720h}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    volumes:
+      - sqlite-data:/data
+    restart: unless-stopped
+
+volumes:
+  pg-data:
+  sqlite-data:

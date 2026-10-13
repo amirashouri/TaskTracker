@@ -62,7 +62,8 @@ without any file on disk:
 
 - **systemd** — `EnvironmentFile=/etc/tasktracker/secrets.env` (mode `0600`,
   owned by the service user).
-- **Docker / Compose** — `env_file:` or Docker secrets.
+- **Docker / Compose** — see [Docker](#docker) above. Pass `JWT_SECRET`
+  as an environment variable or via `.env`; Docker secrets also work.
 - **GitLab CI/CD** — project *Settings → CI/CD → Variables*, marked *Masked* and
   *Protected*.
 
@@ -76,6 +77,95 @@ go run ./cmd/server
 ```
 
 Then `GET /healthz` should return `ok`.
+
+## Docker
+
+The fastest way to run the server locally. Two profiles cover both
+deployment shapes:
+
+| Profile | What starts | When to use |
+| --- | --- | --- |
+| `postgres` | server + Postgres 16 | shared, multi-user, or you already run Postgres |
+| `sqlite` | server only | single-node, zero external dependencies |
+
+### Quick start
+
+1. **Create a `.env` file** (Docker Compose reads it automatically):
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Edit `.env` and set the required values:
+
+   ```dotenv
+   # Required — at least 32 bytes. The server refuses to start without it.
+   JWT_SECRET=<paste output of: openssl rand -hex 32>
+
+   # Only needed for the postgres profile. Change the default.
+   POSTGRES_PASSWORD=change-me
+   ```
+
+   All other variables (`SERVER_PORT`, `CORS_ORIGINS`, `LOG_LEVEL`, etc.)
+   have sensible defaults in `.env.example` — override them only if your
+   setup requires it.
+
+2. **Pick a profile and start:**
+
+   ```bash
+   # Postgres — server + database, ready in seconds
+   docker compose --profile postgres up -d
+
+   # SQLite — single container, data in a Docker volume
+   docker compose --profile sqlite up -d
+   ```
+
+3. **Verify:**
+
+   ```bash
+   curl http://localhost:8080/healthz    # → ok
+   ```
+
+4. **Stop:**
+
+   ```bash
+   docker compose --profile postgres down       # or: sqlite
+   ```
+
+   Add `-v` to also delete the database volume — **this destroys all
+   data**, so use it only for a fresh start.
+
+### Environment variables
+
+Docker Compose reads `.env` in the project root automatically. Every
+variable you set there is passed through to the container, and the same
+defaults from `.env.example` apply. You can also set variables inline:
+
+```bash
+JWT_SECRET=$(openssl rand -hex 32) docker compose --profile sqlite up -d
+```
+
+Real environment variables always win over `.env`, so a host can inject
+secrets without any file on disk — see [Production](#production) below.
+
+### What Docker handles for you
+
+- **CGO and the C compiler** — `mattn/go-sqlite3` needs one; the Docker
+  image includes it, so users don't install `gcc` on their machines.
+- **Postgres** — the `postgres` profile starts a Postgres 16 container
+  with a healthcheck; the server waits for it before booting.
+- **SQLite data** — the `sqlite` profile mounts a Docker volume at
+  `/data`, so the database survives container restarts.
+- **Non-root user** — the server runs as `app`, not `root`.
+
+### Building without Compose
+
+```bash
+docker build -t tasktracker-server .
+docker run -p 8080:8080 -e JWT_SECRET=$(openssl rand -hex 32) \
+  -e DATABASE_URL=sqlite:///data/tasktracker.db \
+  -v tt-data:/data tasktracker-server
+```
 
 ## Verifying
 

@@ -1,0 +1,38 @@
+# Version control
+.git
+.gitignore
+.gitlab-ci.yml
+
+# Secrets — never enter the build context
+.env
+.env.*
+!.env.example
+
+# Local SQLite data
+/data
+*.db
+*.db-wal
+*.db-shm
+
+# Build artifacts
+/bin
+/server
+*.exe
+*.test
+*.out
+
+# Editor / OS files
+.idea
+.vscode
+.DS_Store
+
+# Not needed in the Docker image
+docs
+.opencode
+opencode.json
+*.md
+migrations/.gitkeep
+
+# Go workspace
+go.work
+go.work.sum
