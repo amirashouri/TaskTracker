@@ -47,8 +47,10 @@ internal/db/migrations    versioned SQL, one file per driver
 | `/v1/auth/refresh` | POST | + no-store | rotates the refresh token and returns a new pair |
 | `/v1/auth/signout` | POST | + no-store | revokes the refresh token's whole family; `204` |
 | `/v1/sync/push` | POST | + Auth | apply client changes, return per-entry verdicts |
-| `/v1/sync/changes/project` | GET | + Auth | cursor-paged pull |
-| `/v1/sync/changes/workItem` | GET | + Auth | cursor-paged pull |
+| `/v1/sync/changes/projects` | GET | + Auth | cursor-paged pull; the scope the client asks for |
+| `/v1/sync/changes/workItems` | GET | + Auth | cursor-paged pull; carries project changes too |
+| `/v1/sync/changes/project` | GET | + Auth | alias for `/projects`, kept for a build that shipped against it |
+| `/v1/sync/changes/workItem` | GET | + Auth | alias for `/workItems` |
 | `/v1/admin/users` | POST, GET | + Auth + AdminOnly | admin creates and lists users; no self-signup |
 | `/v1/admin/users/{id}` | PATCH, DELETE | + Auth + AdminOnly | admin updates or deactivates a user |
 | `/v1/users/search` | GET | + Auth | directory search; any authenticated user |

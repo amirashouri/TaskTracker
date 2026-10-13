@@ -81,36 +81,11 @@ func runServer() {
 	// Initialize admin handler
 	adminHandler := admin.NewHandler(userRepo)
 
-	// Setup HTTP handlers
-	mux := http.NewServeMux()
-
-	// Health checks
-	mux.HandleFunc("/healthz", healthz())
-	mux.HandleFunc("/readyz", readyz(database.DB))
-
-	// Auth routes
-	noStore := middleware.NoStore()
-	mux.Handle("POST /v1/auth/login", noStore(http.HandlerFunc(authHandler.SignIn)))
-	mux.Handle("POST /v1/auth/refresh", noStore(http.HandlerFunc(authHandler.Refresh)))
-	mux.Handle("POST /v1/auth/signout", noStore(http.HandlerFunc(authHandler.SignOut)))
-
-	// Sync routes (protected)
+	// Initialize sync handler
 	syncHandler := sync.NewHandler(syncEngine, jwtManager)
-	mux.Handle("POST /v1/sync/push", middleware.Auth(jwtManager)(http.HandlerFunc(syncHandler.Push)))
-	mux.Handle("GET /v1/sync/changes/project", middleware.Auth(jwtManager)(http.HandlerFunc(syncHandler.PullProject)))
-	mux.Handle("GET /v1/sync/changes/workItem", middleware.Auth(jwtManager)(http.HandlerFunc(syncHandler.PullWorkItem)))
 
-	// Admin routes (admin only)
-	adminMW := func(handler http.HandlerFunc) http.Handler {
-		return middleware.Chain(handler, middleware.Auth(jwtManager), middleware.AdminOnly())
-	}
-	mux.Handle("POST /v1/admin/users", adminMW(http.HandlerFunc(adminHandler.Create)))
-	mux.Handle("GET /v1/admin/users", adminMW(http.HandlerFunc(adminHandler.List)))
-	mux.Handle("PATCH /v1/admin/users/{id}", adminMW(http.HandlerFunc(adminHandler.Update)))
-	mux.Handle("DELETE /v1/admin/users/{id}", adminMW(http.HandlerFunc(adminHandler.Deactivate)))
-
-	// Directory search (any authenticated user)
-	mux.Handle("GET /v1/users/search", middleware.Auth(jwtManager)(http.HandlerFunc(adminHandler.Search)))
+	// Setup HTTP handlers
+	mux := mount(authHandler, adminHandler, syncHandler, jwtManager, database.DB)
 
 	// Apply middleware chain
 	handler := middleware.Chain(
@@ -167,6 +142,60 @@ func runServer() {
 func fatal(message string, err error) {
 	slog.Error(message, "error", err)
 	os.Exit(1)
+}
+
+// mount registers every route and returns the multiplexer. It is separate from
+// runServer so a test can ask whether a path the client actually calls resolves:
+// a route table is exactly the kind of thing that looks correct and answers 404.
+func mount(
+	authHandler *auth.Handler,
+	adminHandler *admin.Handler,
+	syncHandler *sync.Handler,
+	jwtManager *auth.JWTManager,
+	database *sql.DB,
+) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	// Health checks
+	mux.HandleFunc("/healthz", healthz())
+	mux.HandleFunc("/readyz", readyz(database))
+
+	// Auth routes
+	noStore := middleware.NoStore()
+	mux.Handle("POST /v1/auth/login", noStore(http.HandlerFunc(authHandler.SignIn)))
+	mux.Handle("POST /v1/auth/refresh", noStore(http.HandlerFunc(authHandler.Refresh)))
+	mux.Handle("POST /v1/auth/signout", noStore(http.HandlerFunc(authHandler.SignOut)))
+
+	// Sync routes (protected)
+	mux.Handle("POST /v1/sync/push", middleware.Auth(jwtManager)(http.HandlerFunc(syncHandler.Push)))
+
+	// A scope is not an entity type. The `workItems` stream also carries project
+	// changes, because renaming a project has to reach a client that never asked
+	// for projects — so the client names its scopes in the plural, and these are
+	// the paths it actually calls.
+	pullProjects := middleware.Auth(jwtManager)(http.HandlerFunc(syncHandler.PullProject))
+	pullWorkItems := middleware.Auth(jwtManager)(http.HandlerFunc(syncHandler.PullWorkItem))
+	mux.Handle("GET /v1/sync/changes/projects", pullProjects)
+	mux.Handle("GET /v1/sync/changes/workItems", pullWorkItems)
+
+	// The singular spellings this server shipped first, kept as aliases so a
+	// build already pointing at them does not start seeing 404s.
+	mux.Handle("GET /v1/sync/changes/project", pullProjects)
+	mux.Handle("GET /v1/sync/changes/workItem", pullWorkItems)
+
+	// Admin routes (admin only)
+	adminMW := func(handler http.HandlerFunc) http.Handler {
+		return middleware.Chain(handler, middleware.Auth(jwtManager), middleware.AdminOnly())
+	}
+	mux.Handle("POST /v1/admin/users", adminMW(http.HandlerFunc(adminHandler.Create)))
+	mux.Handle("GET /v1/admin/users", adminMW(http.HandlerFunc(adminHandler.List)))
+	mux.Handle("PATCH /v1/admin/users/{id}", adminMW(http.HandlerFunc(adminHandler.Update)))
+	mux.Handle("DELETE /v1/admin/users/{id}", adminMW(http.HandlerFunc(adminHandler.Deactivate)))
+
+	// Directory search (any authenticated user)
+	mux.Handle("GET /v1/users/search", middleware.Auth(jwtManager)(http.HandlerFunc(adminHandler.Search)))
+
+	return mux
 }
 
 // healthz is the liveness probe: the process is up. It deliberately does not
