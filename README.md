@@ -10,13 +10,14 @@ that shape was chosen and what still needs building.
 ## Status
 
 The server compiles, boots, and serves requests: configuration, JWT auth with
-refresh-token rotation, admin-managed user provisioning, middleware, and the
-sync engine are all wired in.
+refresh-token rotation and sign-in throttling, admin-managed user provisioning,
+middleware (security headers, request IDs, structured logging), and the sync
+engine are all wired in.
 
-Milestones 0–2 of `docs/PLAN.md` are done. Milestone 3 is partially done:
-T3.1 (refresh-token rotation) and T3.3 (user provisioning) are complete;
-T3.2 (rate-limiting) and T3.4 (security headers) are next. Milestone 5's
-Docker image (T5.4) is also done. See `docs/PLAN.md` for the full roadmap.
+Milestones 0–4 of `docs/PLAN.md` are done. Milestone 5 is done except for T5.6
+(trusted-proxy client address). In milestone 6, T6.3 (middleware tests) and T6.5
+(CI hardening) remain; milestone 7 (freezing the client contract) has not
+started. See `docs/PLAN.md` for the full roadmap.
 
 Verified: `gofmt`, `go build ./...`, `go vet ./...` and `go test ./...` all pass,
 and an end-to-end run signs in, pushes a project and a work item, pulls them back
@@ -61,9 +62,10 @@ The server refuses to start if `JWT_SECRET` is missing or shorter than 32 bytes.
 Real environment variables always win over `.env`, so a host can inject secrets
 without any file on disk:
 
-- **systemd** — `EnvironmentFile=/etc/tasktracker/secrets.env` (mode `0600`,
-  owned by the service user).
-- **Docker / Compose** — see [Docker](#docker) above. Pass `JWT_SECRET`
+- **systemd** — `EnvironmentFile=/etc/tasktracker/secrets.env` (mode `0640`,
+  owned by `root:tasktracker`). See
+  [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) for the full unit.
+- **Docker / Compose** — see [Docker](#docker) below. Pass `JWT_SECRET`
   as an environment variable or via `.env`; Docker secrets also work.
 - **GitLab CI/CD** — project *Settings → CI/CD → Variables*, marked *Masked* and
   *Protected*.
@@ -175,6 +177,10 @@ docker run -p 8080:8080 -e JWT_SECRET=$(openssl rand -hex 32) \
   -v tt-data:/data tasktracker-server
 ```
 
+Not using Docker? [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) covers running
+the binary directly on a Linux host under systemd — the unit file, secrets,
+TLS termination, and backups.
+
 ## Verifying
 
 ```bash
@@ -229,6 +235,7 @@ are green, so a red run is a real regression.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture and code review.
 - [`docs/PLAN.md`](docs/PLAN.md) — the ordered, task-by-task implementation plan.
+- [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) — the bare-metal/systemd deployment path, without Docker.
 - [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) — admin-managed user flow: CLI bootstrap, admin API, directory search.
 - [`AGENTS.md`](AGENTS.md) — working agreement for this repository.
 - [`.env.example`](.env.example) — every configuration variable.

@@ -33,7 +33,7 @@ are the way they are; this file is *what to do next*.
 | 2 — Versioned migrations | **Done** |
 | 3 — Auth and security | **Done** |
 | 4 — Sync engine | **Done** |
-| 5 — Observability and ops | T5.1–T5.4 done; T5.5 not started |
+| 5 — Observability and ops | T5.1–T5.5 done; T5.6 not started |
 | 6 — Testing | T6.1–T6.4 done; T6.3 middleware tests still missing; T6.5 not started |
 | 7 — Client contract | Not started |
 
@@ -694,16 +694,64 @@ the image carries the same check for a standalone `docker run`.
 
 See [Docker](../README.md#docker) in the README.
 
-### T5.5 — Self-hosting guide (bare-metal)
+### T5.5 — Self-hosting guide (bare-metal) (done)
 
-**Files:** new `docs/SELF-HOSTING.md`, `deploy/tasktracker.service`.
+Done. `docs/SELF-HOSTING.md` is the bare-metal counterpart to the Docker path,
+in twelve sections: prerequisites (a C toolchain is a *build-time* need only),
+build and install, the service user and directories, configuration and secrets,
+SQLite vs Postgres setup, installing the unit, creating the first admin, TLS
+termination, backups and restore, upgrades, operations, and a troubleshooting
+table.
 
-**Context:** Docker self-hosting is already documented in the
-[README](../README.md#docker). What remains is the bare-metal/systemd path
-for operators who do not use Docker.
+`deploy/tasktracker.service` is the unit the guide installs: `EnvironmentFile`
+at `/etc/tasktracker/secrets.env`, `StateDirectory=tasktracker`, and hardening
+(`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`,
+`CapabilityBoundingSet=`, `SystemCallFilter=@system-service`).
 
-**Steps:** document the systemd unit, the `EnvironmentFile` permissions,
-Postgres setup, TLS termination, and backup/restore for SQLite and Postgres.
+Two things the guide records rather than hides:
+
+- **The sign-in rate limiter does not read `X-Forwarded-For`.** Behind a
+  reverse proxy every request appears to come from the proxy, so the
+  per-address limit collapses to one global limit while the per-account limit
+  keeps working. Trusting the header without knowing which proxies are yours
+  would be worse — that is T5.6.
+- **`user-create` is a separate process** and does not inherit the unit's
+  `EnvironmentFile`; the guide passes `ENV_FILE` explicitly. Without it the
+  command finds no `JWT_SECRET` and refuses to start.
+
+**Files:** `docs/SELF-HOSTING.md`, `deploy/tasktracker.service`.
+
+See [Self-Hosting](SELF-HOSTING.md), linked from the README.
+
+### T5.6 — Trusted-proxy aware client address
+
+**Context:** the sign-in rate limiter keys on `r.RemoteAddr`. Behind the
+reverse proxy that T5.5 recommends, every request carries the proxy's address,
+so the per-address limit degrades into a single global limit. The per-account
+limit is unaffected, which is why this is a follow-up and not a blocker: a
+determined attacker cannot exceed the per-account budget, only spread across
+accounts.
+
+Reading `X-Forwarded-For` unconditionally would be worse than the status quo —
+any client could forge the header and evade the per-address limit entirely.
+The fix is to trust the header only when the peer is a configured proxy.
+
+**Steps:**
+
+1. Add `TRUSTED_PROXIES` (comma-separated CIDRs) to `internal/config`, parsed
+   and validated; empty means "trust nothing", i.e. today's behaviour.
+2. In `internal/auth`, take the client address from `X-Forwarded-For` (or
+   `Forwarded`) only when `RemoteAddr` falls inside a trusted CIDR, walking the
+   list right-to-left and stopping at the first untrusted hop. Cache the parsed
+   prefixes at startup, not per request.
+3. Reject an unparsable or oversized header by falling back to `RemoteAddr`
+   rather than trusting it.
+4. Test the forgery case: an untrusted peer sending `X-Forwarded-For` must be
+   limited under its real address.
+5. Document the variable in `.env.example` and in
+   [`docs/SELF-HOSTING.md`](SELF-HOSTING.md) §8.
+
+**Depends on:** T3.2.
 
 ---
 
