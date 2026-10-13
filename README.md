@@ -238,10 +238,11 @@ test are green, so a red run is a real regression.
 ## Documentation
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture and code review.
+- [`docs/API.md`](docs/API.md) — the HTTP contract: auth, users, and the sync endpoints, checked against the client's own DTOs.
 - [`docs/PLAN.md`](docs/PLAN.md) — the ordered, task-by-task implementation plan.
 - [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) — the bare-metal/systemd deployment path, without Docker.
-- [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) — admin-managed user flow: CLI bootstrap, admin API, directory search.
-- [`AGENTS.md`](AGENTS.md) — working agreement for this repository.
+- [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) — roles, CLI bootstrap, token lifecycle, and how a user gets provisioned.
+- [`AGENTS.md`](AGENTS.md) — working agreement for this repository, including the wire-compatibility policy.
 - [`.env.example`](.env.example) — every configuration variable.
 
 ## License
