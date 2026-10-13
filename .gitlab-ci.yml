@@ -38,3 +38,16 @@ test:
   stage: test
   script:
     - go test ./...
+
+# The same suite against Postgres; internal/dbtest gives each test its own schema.
+test-postgres:
+  stage: test
+  services:
+    - name: postgres:16
+      alias: postgres
+  variables:
+    POSTGRES_PASSWORD: postgres
+    POSTGRES_DB: tasktracker_test
+    TASKTRACKER_TEST_POSTGRES_URL: "postgres://postgres:postgres@postgres:5432/tasktracker_test?sslmode=disable"
+  script:
+    - go test ./...

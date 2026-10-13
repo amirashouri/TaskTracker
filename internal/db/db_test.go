@@ -13,9 +13,9 @@ func TestParseURL(t *testing.T) {
 		driver string
 		dsn    string
 	}{
-		{"sqlite:///tmp/x.db", driverSQLite, "/tmp/x.db"},
-		{"postgres://u:p@h/db", driverPostgres, "postgres://u:p@h/db"},
-		{"postgresql://u:p@h/db", driverPostgres, "postgresql://u:p@h/db"},
+		{"sqlite:///tmp/x.db", DriverSQLite, "/tmp/x.db"},
+		{"postgres://u:p@h/db", DriverPostgres, "postgres://u:p@h/db"},
+		{"postgresql://u:p@h/db", DriverPostgres, "postgresql://u:p@h/db"},
 	}
 	for _, tc := range cases {
 		driver, dsn, err := parseURL(tc.in)
@@ -33,7 +33,7 @@ func TestParseURL(t *testing.T) {
 }
 
 func TestMigrationsForDriver(t *testing.T) {
-	sqlite := strings.Join(migrationsFor(driverSQLite), "\n")
+	sqlite := strings.Join(migrationsFor(DriverSQLite), "\n")
 	if !strings.Contains(sqlite, "INTEGER PRIMARY KEY AUTOINCREMENT") {
 		t.Error("SQLite DDL should turn BIGSERIAL into an autoincrementing key")
 	}
@@ -47,7 +47,7 @@ func TestMigrationsForDriver(t *testing.T) {
 		t.Error("SQLite supports ON DELETE CASCADE and it must be preserved")
 	}
 
-	postgres := strings.Join(migrationsFor(driverPostgres), "\n")
+	postgres := strings.Join(migrationsFor(DriverPostgres), "\n")
 	if strings.Contains(postgres, "AUTOINCREMENT") {
 		t.Error("Postgres must not receive SQLite-only DDL")
 	}

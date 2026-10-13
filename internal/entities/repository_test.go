@@ -3,23 +3,15 @@ package entities
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/amirashouri/tasktracker-server/internal/db"
+	"github.com/amirashouri/tasktracker-server/internal/dbtest"
 )
 
 func newTestDB(t *testing.T) *db.DB {
 	t.Helper()
-	database, err := db.New("sqlite://" + filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-	if err := db.Migrate(database); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	t.Cleanup(func() { database.Close() })
-	return database
+	return dbtest.NewDatabase(t)
 }
 
 func intPtr(v int) *int       { return &v }

@@ -166,7 +166,8 @@ Severity is about what blocks a working server.
    repositories; this is the largest single source of runtime failure.
 3. **B3 + B4** — get `internal/entities` and `internal/db` compiling and wire
    `main.go` correctly.
-4. **C4 + D1 + D2** — make the Postgres path real; today only SQLite works.
+4. **C4 + D1 + D2** — make the Postgres path real. Done: the driver comes from
+   the URL, and the suite runs against Postgres in CI.
 5. **D3** — replace inline DDL with a versioned migration runner.
 6. **B2** — implement `auth`, `middleware` and `sync`.
 7. **E2/E3/E4** — readiness probe, refresh-token rotation, deploy artifacts.

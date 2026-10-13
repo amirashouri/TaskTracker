@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	driverPostgres = "pgx"
-	driverSQLite   = "sqlite3"
+	DriverPostgres = "pgx"
+	DriverSQLite   = "sqlite3"
 	sqliteDriver   = "sqlite3_custom"
 )
 
@@ -20,7 +20,7 @@ var registerSQLiteDriver sync.Once
 
 type DB struct {
 	*sql.DB
-	Driver string // driverPostgres or driverSQLite
+	Driver string // DriverPostgres or DriverSQLite
 }
 
 func New(databaseURL string) (*DB, error) {
@@ -31,9 +31,9 @@ func New(databaseURL string) (*DB, error) {
 
 	var conn *sql.DB
 	switch driverName {
-	case driverPostgres:
-		conn, err = sql.Open(driverPostgres, dsn)
-	case driverSQLite:
+	case DriverPostgres:
+		conn, err = sql.Open(DriverPostgres, dsn)
+	case DriverSQLite:
 		registerSQLiteDriver.Do(registerCustomSQLite)
 		conn, err = sql.Open(sqliteDriver, dsn+"?_fk=1&_journal_mode=WAL&_busy_timeout=5000")
 	}
@@ -53,9 +53,9 @@ func New(databaseURL string) (*DB, error) {
 func parseURL(databaseURL string) (driverName, dsn string, err error) {
 	switch {
 	case strings.HasPrefix(databaseURL, "postgres://"), strings.HasPrefix(databaseURL, "postgresql://"):
-		return driverPostgres, databaseURL, nil
+		return DriverPostgres, databaseURL, nil
 	case strings.HasPrefix(databaseURL, "sqlite://"):
-		return driverSQLite, strings.TrimPrefix(databaseURL, "sqlite://"), nil
+		return DriverSQLite, strings.TrimPrefix(databaseURL, "sqlite://"), nil
 	default:
 		return "", "", fmt.Errorf("unsupported database URL: %s", databaseURL)
 	}
@@ -72,7 +72,7 @@ func registerCustomSQLite() {
 
 func configurePool(conn *sql.DB, driverName string) {
 	// SQLite serialises writers, so a single connection avoids SQLITE_BUSY.
-	if driverName == driverSQLite {
+	if driverName == DriverSQLite {
 		conn.SetMaxOpenConns(1)
 		conn.SetMaxIdleConns(1)
 		return
@@ -185,7 +185,7 @@ func Migrate(database *DB) error {
 }
 
 func migrationsFor(driverName string) []string {
-	if driverName == driverSQLite {
+	if driverName == DriverSQLite {
 		return adjustForSQLite(statements)
 	}
 	return statements

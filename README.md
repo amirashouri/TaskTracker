@@ -82,8 +82,22 @@ Then `GET /healthz` should return `ok`.
 gofmt -l . && go build ./... && go vet ./... && go test ./...
 ```
 
-All four pass on `main`. `internal/config` has tests for the `.env` loader and
-secret validation; the other packages have none yet — see `docs/PLAN.md` →
+Tests run on SQLite by default. To run the same suite against Postgres:
+
+```bash
+docker run -d --name tt-pg -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=tasktracker_test -p 55432:5432 postgres:16
+
+TASKTRACKER_TEST_POSTGRES_URL="postgres://postgres:postgres@localhost:55432/tasktracker_test?sslmode=disable" \
+  go test ./...
+```
+
+Each test creates and drops its own schema, so the database must be disposable.
+CI runs this as the `test-postgres` job.
+
+Covered today: `internal/config` (secrets), `internal/db` (migrations and driver
+branching), `internal/entities` (repositories), `internal/sync` (push/pull).
+Auth and middleware are exercised by hand only — see `docs/PLAN.md` →
 Milestone 6.
 
 ## Database and migrations

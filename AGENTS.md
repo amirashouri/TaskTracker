@@ -72,9 +72,13 @@ Place new code in the closest existing package. Prefer a new file over growing a
 ## Database changes
 
 The DDL lives inline in `internal/db/db.go` and is not versioned yet
-(`docs/ARCHITECTURE.md`, D3). Schema changes therefore need extra care, and the
-driver differences between Postgres and SQLite are real — `isSQLite` currently
-misdetects Postgres, so a change verified on SQLite is not verified on Postgres.
+(`docs/ARCHITECTURE.md`, D3). Schema changes therefore need extra care. Both
+drivers are supported and both are tested: the suite runs on SQLite by default
+and on Postgres when `TASKTRACKER_TEST_POSTGRES_URL` points at a throwaway
+server (`internal/dbtest`, and the CI `test-postgres` job). A schema change is
+verified only once it has passed on both — SQLite succeeding proves the SQLite
+path and nothing more.
+
 Read the `go-migrations-and-repositories` skill before touching a table or a
 repository, and change the DDL and the repository in the same commit.
 

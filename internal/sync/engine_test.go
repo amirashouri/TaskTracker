@@ -3,24 +3,16 @@ package sync
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
-	"github.com/amirashouri/tasktracker-server/internal/db"
+	"github.com/amirashouri/tasktracker-server/internal/dbtest"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
 )
 
 func newTestEngine(t *testing.T) (*Engine, *entities.UserRepository, *entities.ProjectRepository, *entities.WorkItemRepository, string) {
 	t.Helper()
 
-	database, err := db.New("sqlite://" + filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-	if err := db.Migrate(database); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	t.Cleanup(func() { database.Close() })
+	database := dbtest.NewDatabase(t)
 
 	users := entities.NewUserRepository(database.DB)
 	projects := entities.NewProjectRepository(database.DB)

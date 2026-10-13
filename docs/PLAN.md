@@ -93,6 +93,12 @@ Two defects surfaced that the review had not found, both fixed here:
 One guard was added: `Engine.apply` rejects a change with an empty `entityId`,
 which would otherwise write a `sync_log` row pointing at nothing.
 
+**Postgres is no longer unverified.** `internal/dbtest` runs the same suite
+against Postgres when `TASKTRACKER_TEST_POSTGRES_URL` is set, giving each test
+its own schema so packages can still run in parallel, and CI runs it as the
+`test-postgres` job. T2.2 is still open: Postgres currently uses the base DDL
+unmodified and SQLite its rewritten copy, in one string rather than two files.
+
 ### T1.1 — Settle the time representation
 
 **Goal:** one representation for every time column, matching between Go and SQL.
