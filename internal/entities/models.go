@@ -2,7 +2,6 @@ package entities
 
 import (
 	"encoding/json"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -60,6 +59,7 @@ type Project struct {
 	NextItemNumber int       `json:"nextItemNumber"`
 	CreatedAt      int64     `json:"createdAt"` // epoch millis
 	UpdatedAt      int64     `json:"updatedAt"`
+	Version        string    `json:"version"`
 }
 
 func (p *Project) NextKey() string {

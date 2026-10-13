@@ -3,7 +3,6 @@ package entities
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"time"
 

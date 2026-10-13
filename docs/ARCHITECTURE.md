@@ -56,11 +56,16 @@ entity for optimistic concurrency.
 
 | Check | Result |
 | --- | --- |
-| `go.mod` parses, `go.sum` complete | yes — after repair |
+| `go.mod` parses, `go.sum` complete | yes |
 | `gofmt -l .` | clean |
-| `go test ./internal/config/` | passes |
-| `go build ./...` | **fails** — see B2/B3 |
-| `go vet ./...` | **fails** — same cause |
+| `go build ./...`, `go vet ./...` | pass |
+| `go test ./...` | passes (config only) |
+| server on SQLite | boots; `/healthz` 200; auth returns 400/401 |
+
+The blockers below were fixed in Milestone 0 of `docs/PLAN.md` and are kept here
+as the record of what was wrong. What remains is a runtime gap, not a build
+failure: reads of `TIMESTAMP` columns fail on SQLite, and `projects` /
+`work_items` writes name columns the schema never creates (Milestone 1).
 
 ## Findings
 
@@ -164,5 +169,6 @@ Severity is about what blocks a working server.
 6. **B2** — implement `auth`, `middleware` and `sync`.
 7. **E2/E3/E4** — readiness probe, refresh-token rotation, deploy artifacts.
 
-Until step 3 lands, `go build ./...` and `go test ./...` stay red; the CI
-pipeline in `.gitlab-ci.yml` reflects that and is not evidence of a regression.
+Steps 1–3 are the blocking Milestone 1 of `docs/PLAN.md`. The build is green
+today, so a red CI run is a real regression; the runtime failures Milestone 1
+tracks are known and are not build failures.

@@ -9,13 +9,17 @@ that shape was chosen and what still needs building.
 
 ## Status
 
-Early scaffold. `cmd/server/main.go` wires the intended HTTP surface, but:
+The server compiles, boots, and serves requests: configuration, JWT auth,
+middleware and the sync engine are all wired in.
 
-- `internal/auth`, `internal/middleware` and `internal/sync` are empty, so the
-  server does not build.
-- `internal/entities` and `internal/db` have compile errors.
+It is **not yet safe for real data.** Reads of `TIMESTAMP` columns fail on SQLite,
+and writes to `projects` and `work_items` name columns the schema never creates,
+so sign-in and sync cannot complete. `docs/PLAN.md` → Milestone 1 is the fix and
+blocks everything after it.
 
-`docs/ARCHITECTURE.md` is the full review. The list above is the short version.
+Verified: `gofmt`, `go build ./...`, `go vet ./...` and `go test ./...` all pass;
+the binary boots on SQLite, `/healthz` returns `ok`, and protected routes return
+`401` without a valid token.
 
 ## Requirements
 
@@ -76,13 +80,12 @@ Then `GET /healthz` should return `ok`.
 ## Verifying
 
 ```bash
-gofmt -l .        # must print nothing
-go build ./...    # requires the missing packages (see Status)
-go vet ./...
-go test ./...
+gofmt -l . && go build ./... && go vet ./... && go test ./...
 ```
 
-`internal/config` has tests for the `.env` loader and secret validation.
+All four pass on `main`. `internal/config` has tests for the `.env` loader and
+secret validation; the other packages have none yet — see `docs/PLAN.md` →
+Milestone 6.
 
 ## Database and migrations
 
@@ -100,6 +103,7 @@ pipeline. Build and test are red until the scaffold compiles.
 ## Documentation
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture and code review.
+- [`docs/PLAN.md`](docs/PLAN.md) — the ordered, task-by-task implementation plan.
 - [`AGENTS.md`](AGENTS.md) — working agreement for this repository.
 - [`.env.example`](.env.example) — every configuration variable.
 

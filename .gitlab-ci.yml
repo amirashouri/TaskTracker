@@ -1,9 +1,7 @@
 # Simple CI pipeline: lint (format + vet), build, test.
 #
-# `build` and `test` are currently red by design: internal/auth,
-# internal/middleware and internal/sync are still empty, and internal/entities
-# and internal/db do not compile. See docs/ARCHITECTURE.md before treating a
-# red pipeline as a regression.
+# The tree is green on main, so a red pipeline is a real regression. Known
+# runtime gaps (which still build and pass) are tracked in docs/PLAN.md.
 
 stages:
   - lint

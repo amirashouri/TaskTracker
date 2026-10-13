@@ -2,8 +2,10 @@
 
 Working agreement for `TaskTrackerServer`. Read this before changing anything.
 
+- `docs/PLAN.md` — the ordered, task-by-task implementation roadmap. Work from
+  this; one task, one branch, one MR.
 - `docs/ARCHITECTURE.md` — the design record and review: what exists, what is
-  broken, and the order to fix it in.
+  broken, and why.
 - `README.md` — how to configure and run the server.
 
 ## What this is
@@ -20,11 +22,12 @@ a reason that survives that constraint.
 gofmt -l . && go build ./... && go vet ./... && go test ./...
 ```
 
-`gofmt -l .` printing nothing is the only part that is green today. `go build`
-and `go test` are **red for known reasons** — the empty `internal/auth`,
-`internal/middleware` and `internal/sync` packages, plus the compile errors
-listed in `docs/ARCHITECTURE.md`. Do not report that as a regression you caused,
-and do not make it green by deleting code or stubbing a check.
+All four pass on `main`. Keep it that way: never make a check green by deleting
+code, stubbing a proof, or weakening an assertion.
+
+The server compiles and boots but cannot yet read or write data — Milestone 1 of
+`docs/PLAN.md` is the blocking work. A runtime failure that Milestone 1 lists is
+known, not a regression you caused.
 
 ## Toolchain
 

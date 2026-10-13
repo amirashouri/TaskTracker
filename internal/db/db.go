@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/stdlib"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 )
 
 type DB struct {
@@ -189,6 +189,7 @@ func adjustForSQLite(migrations []string) []string {
 		m = strings.ReplaceAll(m, "BIGSERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
 		m = strings.ReplaceAll(m, "JSONB", "TEXT")
 		m = strings.ReplaceAll(m, "UUID[]", "TEXT") // SQLite doesn't have arrays
+		m = strings.ReplaceAll(m, "DEFAULT NOW()", "DEFAULT CURRENT_TIMESTAMP")
 		m = strings.ReplaceAll(m, "ON DELETE CASCADE", "")
 		m = strings.ReplaceAll(m, "ON DELETE SET NULL", "")
 		result[i] = m

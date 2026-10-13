@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
