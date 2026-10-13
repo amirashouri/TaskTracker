@@ -11,10 +11,10 @@ import (
 )
 
 type WorkItemRepository struct {
-	db *sql.DB
+	db Querier
 }
 
-func NewWorkItemRepository(db *sql.DB) *WorkItemRepository {
+func NewWorkItemRepository(db Querier) *WorkItemRepository {
 	return &WorkItemRepository{db: db}
 }
 

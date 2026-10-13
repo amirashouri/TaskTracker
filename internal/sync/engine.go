@@ -28,30 +28,11 @@ const (
 )
 
 type Engine struct {
-	db        *sql.DB
-	projects  *entities.ProjectRepository
-	workItems *entities.WorkItemRepository
-	sprints   *entities.SprintRepository
-	comments  *entities.CommentRepository
-	users     *entities.UserRepository
+	db *sql.DB
 }
 
-func NewEngine(
-	db *sql.DB,
-	projects *entities.ProjectRepository,
-	workItems *entities.WorkItemRepository,
-	sprints *entities.SprintRepository,
-	comments *entities.CommentRepository,
-	users *entities.UserRepository,
-) *Engine {
-	return &Engine{
-		db:        db,
-		projects:  projects,
-		workItems: workItems,
-		sprints:   sprints,
-		comments:  comments,
-		users:     users,
-	}
+func NewEngine(db *sql.DB) *Engine {
+	return &Engine{db: db}
 }
 
 // versionConflict reports that the row moved on since the client read it.
@@ -80,19 +61,28 @@ func (e *Engine) apply(ctx context.Context, userID string, change entities.PushC
 		return result
 	}
 
-	var (
-		version string
-		err     error
-	)
+	// One transaction per change: the entity write and its log row commit
+	// together, so a crash between them cannot strand a change with nothing
+	// queued. Each change is independent — one failure never rolls back another.
+	tx, err := e.db.BeginTx(ctx, nil)
+	if err != nil {
+		result.Status = StatusRetryLater
+		result.Message = err.Error()
+		return result
+	}
+	defer tx.Rollback()
+
+	// Repositories bound to the transaction, so their writes join it.
+	var version string
 	switch change.Entity {
 	case entities.OutboxEntityProject:
-		version, err = e.applyProject(ctx, change)
+		version, err = applyProject(ctx, entities.NewProjectRepository(tx), change)
 	case entities.OutboxEntityWorkItem:
-		version, err = e.applyWorkItem(ctx, change)
+		version, err = applyWorkItem(ctx, entities.NewWorkItemRepository(tx), change)
 	case entities.OutboxEntitySprint:
-		version, err = e.applySprint(ctx, change)
+		version, err = applySprint(ctx, entities.NewSprintRepository(tx), change)
 	case entities.OutboxEntityComment:
-		version, err = e.applyComment(ctx, change)
+		version, err = applyComment(ctx, entities.NewCommentRepository(tx), change)
 	default:
 		result.Status = StatusRejected
 		result.Message = fmt.Sprintf("unknown entity %q", change.Entity)
@@ -116,7 +106,13 @@ func (e *Engine) apply(ctx context.Context, userID string, change entities.PushC
 		return result
 	}
 
-	if err := e.appendLog(ctx, change, userID, version); err != nil {
+	if err := appendLog(ctx, tx, change, userID, version); err != nil {
+		result.Status = StatusRetryLater
+		result.Message = err.Error()
+		return result
+	}
+
+	if err := tx.Commit(); err != nil {
 		result.Status = StatusRetryLater
 		result.Message = err.Error()
 		return result
@@ -127,22 +123,22 @@ func (e *Engine) apply(ctx context.Context, userID string, change entities.PushC
 	return result
 }
 
-func (e *Engine) applyProject(ctx context.Context, change entities.PushChange) (string, error) {
+func applyProject(ctx context.Context, projects *entities.ProjectRepository, change entities.PushChange) (string, error) {
 	if change.Operation == entities.OutboxOperationDelete {
-		return "", e.projects.Delete(ctx, entities.ProjectID(change.EntityID))
+		return "", projects.Delete(ctx, entities.ProjectID(change.EntityID))
 	}
 
 	project, err := entities.ProjectFromJSON(change.Payload)
 	if err != nil {
 		return "", fmt.Errorf("decode project: %w", err)
 	}
-	existing, err := e.projects.GetByID(ctx, entities.ProjectID(change.EntityID))
+	existing, err := projects.GetByID(ctx, entities.ProjectID(change.EntityID))
 	if err != nil {
 		return "", err
 	}
 	if existing == nil {
 		project.ID = entities.ProjectID(change.EntityID)
-		if err := e.projects.Create(ctx, project); err != nil {
+		if err := projects.Create(ctx, project); err != nil {
 			return "", err
 		}
 		return project.Version, nil
@@ -152,28 +148,28 @@ func (e *Engine) applyProject(ctx context.Context, change entities.PushChange) (
 	}
 	project.ID = existing.ID
 	project.CreatedAt = existing.CreatedAt
-	if err := e.projects.Update(ctx, project); err != nil {
+	if err := projects.Update(ctx, project); err != nil {
 		return "", err
 	}
 	return project.Version, nil
 }
 
-func (e *Engine) applyWorkItem(ctx context.Context, change entities.PushChange) (string, error) {
+func applyWorkItem(ctx context.Context, workItems *entities.WorkItemRepository, change entities.PushChange) (string, error) {
 	if change.Operation == entities.OutboxOperationDelete {
-		return "", e.workItems.Delete(ctx, entities.WorkItemID(change.EntityID))
+		return "", workItems.Delete(ctx, entities.WorkItemID(change.EntityID))
 	}
 
 	workItem, err := entities.WorkItemFromJSON(change.Payload)
 	if err != nil {
 		return "", fmt.Errorf("decode work item: %w", err)
 	}
-	existing, err := e.workItems.GetByID(ctx, entities.WorkItemID(change.EntityID))
+	existing, err := workItems.GetByID(ctx, entities.WorkItemID(change.EntityID))
 	if err != nil {
 		return "", err
 	}
 	if existing == nil {
 		workItem.ID = entities.WorkItemID(change.EntityID)
-		if err := e.workItems.Create(ctx, workItem); err != nil {
+		if err := workItems.Create(ctx, workItem); err != nil {
 			return "", err
 		}
 		return workItem.Version, nil
@@ -183,28 +179,28 @@ func (e *Engine) applyWorkItem(ctx context.Context, change entities.PushChange) 
 	}
 	workItem.ID = existing.ID
 	workItem.CreatedAt = existing.CreatedAt
-	if err := e.workItems.Update(ctx, workItem); err != nil {
+	if err := workItems.Update(ctx, workItem); err != nil {
 		return "", err
 	}
 	return workItem.Version, nil
 }
 
-func (e *Engine) applySprint(ctx context.Context, change entities.PushChange) (string, error) {
+func applySprint(ctx context.Context, sprints *entities.SprintRepository, change entities.PushChange) (string, error) {
 	if change.Operation == entities.OutboxOperationDelete {
-		return "", e.sprints.Delete(ctx, entities.SprintID(change.EntityID))
+		return "", sprints.Delete(ctx, entities.SprintID(change.EntityID))
 	}
 
 	sprint, err := entities.SprintFromJSON(change.Payload)
 	if err != nil {
 		return "", fmt.Errorf("decode sprint: %w", err)
 	}
-	existing, err := e.sprints.GetByID(ctx, entities.SprintID(change.EntityID))
+	existing, err := sprints.GetByID(ctx, entities.SprintID(change.EntityID))
 	if err != nil {
 		return "", err
 	}
 	if existing == nil {
 		sprint.ID = entities.SprintID(change.EntityID)
-		if err := e.sprints.Create(ctx, sprint); err != nil {
+		if err := sprints.Create(ctx, sprint); err != nil {
 			return "", err
 		}
 		return sprint.Version, nil
@@ -214,28 +210,28 @@ func (e *Engine) applySprint(ctx context.Context, change entities.PushChange) (s
 	}
 	sprint.ID = existing.ID
 	sprint.CreatedAt = existing.CreatedAt
-	if err := e.sprints.Update(ctx, sprint); err != nil {
+	if err := sprints.Update(ctx, sprint); err != nil {
 		return "", err
 	}
 	return sprint.Version, nil
 }
 
-func (e *Engine) applyComment(ctx context.Context, change entities.PushChange) (string, error) {
+func applyComment(ctx context.Context, comments *entities.CommentRepository, change entities.PushChange) (string, error) {
 	if change.Operation == entities.OutboxOperationDelete {
-		return "", e.comments.Delete(ctx, entities.CommentID(change.EntityID))
+		return "", comments.Delete(ctx, entities.CommentID(change.EntityID))
 	}
 
 	comment, err := entities.CommentFromJSON(change.Payload)
 	if err != nil {
 		return "", fmt.Errorf("decode comment: %w", err)
 	}
-	existing, err := e.comments.GetByID(ctx, entities.CommentID(change.EntityID))
+	existing, err := comments.GetByID(ctx, entities.CommentID(change.EntityID))
 	if err != nil {
 		return "", err
 	}
 	if existing == nil {
 		comment.ID = entities.CommentID(change.EntityID)
-		if err := e.comments.Create(ctx, comment); err != nil {
+		if err := comments.Create(ctx, comment); err != nil {
 			return "", err
 		}
 		return comment.Version, nil
@@ -245,7 +241,7 @@ func (e *Engine) applyComment(ctx context.Context, change entities.PushChange) (
 	}
 	comment.ID = existing.ID
 	comment.CreatedAt = existing.CreatedAt
-	if err := e.comments.Update(ctx, comment); err != nil {
+	if err := comments.Update(ctx, comment); err != nil {
 		return "", err
 	}
 	return comment.Version, nil
@@ -312,8 +308,10 @@ func (e *Engine) Pull(ctx context.Context, entity entities.OutboxEntity, cursor 
 	return page, nil
 }
 
-func (e *Engine) appendLog(ctx context.Context, change entities.PushChange, userID, version string) error {
-	_, err := e.db.ExecContext(ctx, `
+// appendLog writes the change feed row. It takes the caller's transaction so
+// the entity write and this row commit together.
+func appendLog(ctx context.Context, q entities.Querier, change entities.PushChange, userID, version string) error {
+	_, err := q.ExecContext(ctx, `
 		INSERT INTO sync_log (entity, entity_id, operation, payload, version, user_id, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		string(change.Entity),

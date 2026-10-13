@@ -10,10 +10,10 @@ import (
 )
 
 type CommentRepository struct {
-	db *sql.DB
+	db Querier
 }
 
-func NewCommentRepository(db *sql.DB) *CommentRepository {
+func NewCommentRepository(db Querier) *CommentRepository {
 	return &CommentRepository{db: db}
 }
 

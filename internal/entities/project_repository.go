@@ -10,16 +10,11 @@ import (
 )
 
 type ProjectRepository struct {
-	db *sql.DB
+	db Querier
 }
 
-func NewProjectRepository(db *sql.DB) *ProjectRepository {
+func NewProjectRepository(db Querier) *ProjectRepository {
 	return &ProjectRepository{db: db}
-}
-
-// executor is satisfied by both *sql.DB and *sql.Tx.
-type executor interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 const projectColumns = `id, key_prefix, name, details, is_archived, next_item_number, created_at, updated_at, version`
@@ -35,22 +30,15 @@ func (r *ProjectRepository) Create(ctx context.Context, p *Project) error {
 	p.UpdatedAt = now
 	p.Version = uuid.New().String()
 
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	_, err = tx.ExecContext(ctx, `INSERT INTO projects (id, key_prefix, name, details, is_archived, next_item_number, created_at, updated_at, version)
+	// The row and its member set must land together.
+	return inTx(ctx, r.db, func(q Querier) error {
+		if _, err := q.ExecContext(ctx, `INSERT INTO projects (id, key_prefix, name, details, is_archived, next_item_number, created_at, updated_at, version)
 	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		p.ID, p.KeyPrefix, p.Name, p.Details, p.IsArchived, p.NextItemNumber, p.CreatedAt, p.UpdatedAt, p.Version)
-	if err != nil {
-		return err
-	}
-	if err := replaceMembers(ctx, tx, p.ID, p.MemberIDs); err != nil {
-		return err
-	}
-	return tx.Commit()
+			p.ID, p.KeyPrefix, p.Name, p.Details, p.IsArchived, p.NextItemNumber, p.CreatedAt, p.UpdatedAt, p.Version); err != nil {
+			return err
+		}
+		return replaceMembers(ctx, q, p.ID, p.MemberIDs)
+	})
 }
 
 func (r *ProjectRepository) GetByID(ctx context.Context, id ProjectID) (*Project, error) {
@@ -77,30 +65,23 @@ func (r *ProjectRepository) Update(ctx context.Context, p *Project) error {
 	p.UpdatedAt = time.Now().UnixMilli()
 	p.Version = uuid.New().String()
 
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	// Placeholders ascend in text order: SQLite numbers them by appearance.
-	result, err := tx.ExecContext(ctx, `UPDATE projects SET key_prefix=$1, name=$2, details=$3, is_archived=$4, next_item_number=$5, updated_at=$6, version=$7
+	return inTx(ctx, r.db, func(q Querier) error {
+		// Placeholders ascend in text order: SQLite numbers them by appearance.
+		result, err := q.ExecContext(ctx, `UPDATE projects SET key_prefix=$1, name=$2, details=$3, is_archived=$4, next_item_number=$5, updated_at=$6, version=$7
 	          WHERE id=$8 AND version=$9`,
-		p.KeyPrefix, p.Name, p.Details, p.IsArchived, p.NextItemNumber, p.UpdatedAt, p.Version, p.ID, previous)
-	if err != nil {
-		return err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return fmt.Errorf("%w: project %s", ErrVersionConflict, p.ID)
-	}
-	if err := replaceMembers(ctx, tx, p.ID, p.MemberIDs); err != nil {
-		return err
-	}
-	return tx.Commit()
+			p.KeyPrefix, p.Name, p.Details, p.IsArchived, p.NextItemNumber, p.UpdatedAt, p.Version, p.ID, previous)
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return fmt.Errorf("%w: project %s", ErrVersionConflict, p.ID)
+		}
+		return replaceMembers(ctx, q, p.ID, p.MemberIDs)
+	})
 }
 
 func (r *ProjectRepository) Delete(ctx context.Context, id ProjectID) error {
@@ -197,7 +178,7 @@ func (r *ProjectRepository) memberIDs(ctx context.Context, projectID ProjectID) 
 }
 
 // replaceMembers makes project_members the single writable store for membership.
-func replaceMembers(ctx context.Context, exec executor, projectID ProjectID, members []UserID) error {
+func replaceMembers(ctx context.Context, exec Querier, projectID ProjectID, members []UserID) error {
 	if _, err := exec.ExecContext(ctx, `DELETE FROM project_members WHERE project_id = $1`, projectID); err != nil {
 		return err
 	}

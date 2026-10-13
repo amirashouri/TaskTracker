@@ -10,10 +10,10 @@ import (
 )
 
 type SprintRepository struct {
-	db *sql.DB
+	db Querier
 }
 
-func NewSprintRepository(db *sql.DB) *SprintRepository {
+func NewSprintRepository(db Querier) *SprintRepository {
 	return &SprintRepository{db: db}
 }
 

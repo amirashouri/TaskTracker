@@ -59,21 +59,10 @@ func runServer() {
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
 
 	// Initialize repositories
-	projectRepo := entities.NewProjectRepository(database.DB)
-	workItemRepo := entities.NewWorkItemRepository(database.DB)
-	sprintRepo := entities.NewSprintRepository(database.DB)
-	commentRepo := entities.NewCommentRepository(database.DB)
 	userRepo := entities.NewUserRepository(database.DB)
 
 	// Initialize sync engine
-	syncEngine := sync.NewEngine(
-		database.DB,
-		projectRepo,
-		workItemRepo,
-		sprintRepo,
-		commentRepo,
-		userRepo,
-	)
+	syncEngine := sync.NewEngine(database.DB)
 
 	// Initialize auth handler with token store
 	tokenStore := auth.NewTokenStore(database.DB)

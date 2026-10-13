@@ -17,10 +17,7 @@ func newTestEngine(t *testing.T) (*Engine, *entities.UserRepository, *entities.P
 	users := entities.NewUserRepository(database.DB)
 	projects := entities.NewProjectRepository(database.DB)
 	workItems := entities.NewWorkItemRepository(database.DB)
-	engine := NewEngine(database.DB, projects, workItems,
-		entities.NewSprintRepository(database.DB),
-		entities.NewCommentRepository(database.DB),
-		users)
+	engine := NewEngine(database.DB)
 
 	user := &entities.User{Email: "sync@example.com", PasswordHash: "secret"}
 	if err := users.Create(context.Background(), user); err != nil {
@@ -177,6 +174,27 @@ func TestPushWorkItem(t *testing.T) {
 	}
 	if stored.Recurrence == nil || stored.Recurrence.Type != "weekly" {
 		t.Errorf("recurrence = %+v, want weekly", stored.Recurrence)
+	}
+}
+
+// A failure after the entity write but before its log row must leave neither:
+// the two writes share one transaction. An invalid operation value passes the
+// entity write (it is not a delete) and then violates the sync_log CHECK
+// constraint, which is the induced failure.
+func TestPushRollsBackWhenTheLogRowFails(t *testing.T) {
+	engine, _, projects, _, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := &entities.Project{ID: "66666666-6666-6666-6666-666666666666", KeyPrefix: "TT", Name: "Doomed"}
+	change := projectChange(t, "e1", project, entities.OutboxOperation("frobnicate"), "")
+
+	result := pushOne(t, engine, userID, change)
+	if result.Status != StatusRetryLater {
+		t.Fatalf("status = %s (%s), want retry_later", result.Status, result.Message)
+	}
+
+	if stored, err := projects.GetByID(ctx, project.ID); err != nil || stored != nil {
+		t.Errorf("the project survived a push whose log row failed (stored=%v, err=%v)", stored, err)
 	}
 }
 
