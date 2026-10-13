@@ -14,10 +14,9 @@ refresh-token rotation and sign-in throttling, admin-managed user provisioning,
 middleware (security headers, request IDs, structured logging), and the sync
 engine are all wired in.
 
-Milestones 0–4 of `docs/PLAN.md` are done. Milestone 5 is done except for T5.6
-(trusted-proxy client address). In milestone 6, T6.3 (middleware tests) and T6.5
-(CI hardening) remain; milestone 7 (freezing the client contract) has not
-started. See `docs/PLAN.md` for the full roadmap.
+Milestones 0–6 of `docs/PLAN.md` are done, except T5.6 (trusted-proxy client
+address). Milestone 7 (freezing the client contract) has not started. See
+`docs/PLAN.md` for the full roadmap.
 
 Verified: `gofmt`, `go build ./...`, `go vet ./...` and `go test ./...` all pass,
 and an end-to-end run signs in, pushes a project and a work item, pulls them back
@@ -228,9 +227,13 @@ before the runner existed is adopted on the next start.
 ## CI/CD
 
 `.gitlab-ci.yml` runs three stages on every push: `lint` (gofmt + `go vet`),
-`build`, and `test` — the last with a `test-postgres` job alongside the SQLite
-run. It is intentionally minimal — a gate, not a release pipeline. Build and test
-are green, so a red run is a real regression.
+`build`, and `test`. The `test` job runs the suite under the race detector
+(`go test -race`) and reports coverage, with a `test-postgres` job alongside it
+for dialect parity. Race detection is on because the sync engine, the rate
+limiter and refresh-token rotation are concurrent, and a data race there is a
+correctness bug a plain run cannot see. Coverage is a reported trend, not a
+gate. It is intentionally minimal — a gate, not a release pipeline. Build and
+test are green, so a red run is a real regression.
 
 ## Documentation
 

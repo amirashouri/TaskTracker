@@ -34,7 +34,7 @@ are the way they are; this file is *what to do next*.
 | 3 — Auth and security | **Done** |
 | 4 — Sync engine | **Done** |
 | 5 — Observability and ops | T5.1–T5.5 done; T5.6 not started |
-| 6 — Testing | T6.1–T6.4 done; T6.5 not started |
+| 6 — Testing | **Done** |
 | 7 — Client contract | Not started |
 
 ---
@@ -757,8 +757,7 @@ The fix is to trust the header only when the peer is a configured proxy.
 
 ## Milestone 6 — Testing
 
-T6.1–T6.4 are done as part of milestones 1–3. T6.5 (CI hardening) is the
-remaining open task.
+T6.1–T6.4 are done as part of milestones 1–3; T6.5 completes the milestone.
 
 ### T6.1 — Test harness (done)
 
@@ -819,12 +818,30 @@ unknown entity → `rejected`, and work-item push. Runs on both drivers via
 
 **Files:** `internal/sync/engine_test.go`.
 
-### T6.5 — CI hardening
+### T6.5 — CI hardening (done)
+
+Done. The `test` job now runs `go test -race -covermode=atomic
+-coverprofile=coverage.out ./...` and prints the module-wide total, so the
+race detector guards the concurrent code — the sync engine, the rate
+limiter, and refresh-token rotation — on every push. `-race` requires
+`-covermode=atomic`, which is why the mode is stated rather than left to
+default.
+
+Coverage is reported, not enforced: GitLab reads the total out of the job
+log into the MR widget, and `coverage.out` is kept as an artifact for a
+week. A threshold was rejected — it would either be set low enough to be
+meaningless or would block a legitimate change, and the useful signal is
+the direction of the number across MRs.
+
+`test-postgres` stays without `-race` on purpose: that job exists to prove
+dialect parity, and the concurrency the race detector guards lives in Go
+code the job above already runs. Adding it there would roughly double the
+pipeline for no new signal.
+
+The whole suite was verified race-clean locally before this landed, so the
+pipeline is not left red.
 
 **Files:** `.gitlab-ci.yml`.
-
-**Steps:** once the tree is green, add `go test -race ./...` and a coverage
-report. Do not add `-race` before T6.1 exists or the pipeline stays red.
 
 ---
 

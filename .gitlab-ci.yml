@@ -34,12 +34,29 @@ build:
   script:
     - go build ./...
 
+# The primary suite, with the race detector on. The sync engine, the rate
+# limiter, and refresh-token rotation are all concurrent, and a data race there
+# is a correctness bug a plain run cannot see. -race requires -covermode=atomic.
+#
+# Coverage is reported as a trend, not enforced: a threshold would either be
+# too low to mean anything or would block a legitimate change, and the useful
+# signal is the direction of the number across MRs.
 test:
   stage: test
   script:
-    - go test ./...
+    - go test -race -covermode=atomic -coverprofile=coverage.out ./...
+    - go tool cover -func=coverage.out | tail -1
+  coverage: '/^total:\s+\(statements\)\s+(\d+\.\d+)%$/'
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - coverage.out
 
 # The same suite against Postgres; internal/dbtest gives each test its own schema.
+# Deliberately without -race: this job exists to prove dialect parity, and the
+# concurrency the race detector guards lives in Go code the job above already
+# exercises. Adding it here would roughly double the pipeline for no new signal.
 test-postgres:
   stage: test
   services:
