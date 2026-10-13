@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 type ProjectRepository struct {
@@ -20,20 +18,34 @@ func NewProjectRepository(db Querier) *ProjectRepository {
 
 const projectColumns = `id, key_prefix, name, details, is_archived, next_item_number, created_at, updated_at, version`
 
+// scanProject reads one row selected with projectColumns. MemberIDs is not a
+// column: membership lives in project_members and is loaded separately.
+func scanProject(row scanner, p *Project) error {
+	return row.Scan(&p.ID, &p.KeyPrefix, &p.Name, &p.Details, &p.IsArchived, &p.NextItemNumber, &p.CreatedAt, &p.UpdatedAt, &p.Version)
+}
+
+// scanMember reads the reduced projection GetMembers selects: a membership
+// listing has no use for the password hash, so it never leaves the database.
+func scanMember(row scanner, u *User) error {
+	var lastSeen sql.NullInt64
+
+	if err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Position, &u.AvatarID, &u.Status, &lastSeen, &u.CreatedAt); err != nil {
+		return err
+	}
+
+	if lastSeen.Valid {
+		u.LastSeen = &lastSeen.Int64
+	}
+	return nil
+}
+
 func (r *ProjectRepository) Create(ctx context.Context, p *Project) error {
-	if p.ID == "" {
-		p.ID = NewProjectID()
-	}
-	now := time.Now().UnixMilli()
-	if p.CreatedAt == 0 {
-		p.CreatedAt = now
-	}
-	p.UpdatedAt = now
-	p.Version = uuid.New().String()
+	p.ID = orNewID(p.ID, NewProjectID)
+	p.CreatedAt, p.UpdatedAt, p.Version = createStamp(p.CreatedAt)
 
 	// The row and its member set must land together.
 	return inTx(ctx, r.db, func(q Querier) error {
-		if _, err := q.ExecContext(ctx, `INSERT INTO projects (id, key_prefix, name, details, is_archived, next_item_number, created_at, updated_at, version)
+		if _, err := q.ExecContext(ctx, `INSERT INTO projects (`+projectColumns+`)
 	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 			p.ID, p.KeyPrefix, p.Name, p.Details, p.IsArchived, p.NextItemNumber, p.CreatedAt, p.UpdatedAt, p.Version); err != nil {
 			return err
@@ -45,18 +57,14 @@ func (r *ProjectRepository) Create(ctx context.Context, p *Project) error {
 func (r *ProjectRepository) GetByID(ctx context.Context, id ProjectID) (*Project, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE id = $1`, id)
 
-	var p Project
-	err := row.Scan(&p.ID, &p.KeyPrefix, &p.Name, &p.Details, &p.IsArchived, &p.NextItemNumber, &p.CreatedAt, &p.UpdatedAt, &p.Version)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
+	p, err := oneOrNil(row, scanProject)
+	if err != nil || p == nil {
 		return nil, err
 	}
 	if p.MemberIDs, err = r.memberIDs(ctx, p.ID); err != nil {
 		return nil, err
 	}
-	return &p, nil
+	return p, nil
 }
 
 // Update replaces the project row and its member set, and fails with
@@ -64,22 +72,14 @@ func (r *ProjectRepository) GetByID(ctx context.Context, id ProjectID) (*Project
 func (r *ProjectRepository) Update(ctx context.Context, p *Project) error {
 	previous := p.Version
 	p.UpdatedAt = time.Now().UnixMilli()
-	p.Version = uuid.New().String()
+	p.Version = newVersion()
 
 	return inTx(ctx, r.db, func(q Querier) error {
 		// Placeholders ascend in text order: SQLite numbers them by appearance.
-		result, err := q.ExecContext(ctx, `UPDATE projects SET key_prefix=$1, name=$2, details=$3, is_archived=$4, next_item_number=$5, updated_at=$6, version=$7
+		if err := execOneRow(ctx, q, conflict("project", p.ID), `UPDATE projects SET key_prefix=$1, name=$2, details=$3, is_archived=$4, next_item_number=$5, updated_at=$6, version=$7
 	          WHERE id=$8 AND version=$9`,
-			p.KeyPrefix, p.Name, p.Details, p.IsArchived, p.NextItemNumber, p.UpdatedAt, p.Version, p.ID, previous)
-		if err != nil {
+			p.KeyPrefix, p.Name, p.Details, p.IsArchived, p.NextItemNumber, p.UpdatedAt, p.Version, p.ID, previous); err != nil {
 			return err
-		}
-		rows, err := result.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if rows == 0 {
-			return fmt.Errorf("%w: project %s", ErrVersionConflict, p.ID)
 		}
 		return replaceMembers(ctx, q, p.ID, p.MemberIDs)
 	})
@@ -122,18 +122,13 @@ func (r *ProjectRepository) List(ctx context.Context, includeArchived bool) ([]*
 	}
 	defer rows.Close()
 
-	var projects []*Project
-	for rows.Next() {
-		var p Project
-		if err := rows.Scan(&p.ID, &p.KeyPrefix, &p.Name, &p.Details, &p.IsArchived, &p.NextItemNumber, &p.CreatedAt, &p.UpdatedAt, &p.Version); err != nil {
-			return nil, err
-		}
-		projects = append(projects, &p)
-	}
-	if err := rows.Err(); err != nil {
+	projects, err := collectRows(rows, scanProject)
+	if err != nil {
 		return nil, err
 	}
 
+	// One extra query per project rather than a join: a project has a handful
+	// of members, and the join would have to be collapsed back into a list.
 	for _, project := range projects {
 		if project.MemberIDs, err = r.memberIDs(ctx, project.ID); err != nil {
 			return nil, err
@@ -164,19 +159,7 @@ func (r *ProjectRepository) GetMembers(ctx context.Context, projectID ProjectID)
 	}
 	defer rows.Close()
 
-	var users []*User
-	for rows.Next() {
-		var u User
-		var lastSeen sql.NullInt64
-		if err := rows.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Position, &u.AvatarID, &u.Status, &lastSeen, &u.CreatedAt); err != nil {
-			return nil, err
-		}
-		if lastSeen.Valid {
-			u.LastSeen = &lastSeen.Int64
-		}
-		users = append(users, &u)
-	}
-	return users, rows.Err()
+	return collectRows(rows, scanMember)
 }
 
 func (r *ProjectRepository) memberIDs(ctx context.Context, projectID ProjectID) ([]UserID, error) {
