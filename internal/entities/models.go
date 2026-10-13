@@ -2,9 +2,14 @@ package entities
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/google/uuid"
 )
+
+// ErrVersionConflict is returned by a repository Update when the row has changed
+// since the caller read it.
+var ErrVersionConflict = errors.New("version conflict")
 
 // ============ Core Types ============
 

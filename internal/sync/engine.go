@@ -73,6 +73,12 @@ func (e *Engine) Push(ctx context.Context, userID string, changes []entities.Pus
 
 func (e *Engine) apply(ctx context.Context, userID string, change entities.PushChange) entities.PushResult {
 	result := entities.PushResult{EntryID: change.ID}
+	// Without an id the log row could not point back at the stored entity.
+	if change.EntityID == "" {
+		result.Status = StatusRejected
+		result.Message = "entityId is required"
+		return result
+	}
 
 	var (
 		version string
@@ -95,14 +101,18 @@ func (e *Engine) apply(ctx context.Context, userID string, change entities.PushC
 
 	if err != nil {
 		var conflict *versionConflict
-		if errors.As(err, &conflict) {
+		switch {
+		case errors.As(err, &conflict):
 			result.Status = StatusConflict
 			result.Version = conflict.current
 			result.Message = "version mismatch"
-			return result
+		case errors.Is(err, entities.ErrVersionConflict):
+			result.Status = StatusConflict
+			result.Message = err.Error()
+		default:
+			result.Status = StatusRetryLater
+			result.Message = err.Error()
 		}
-		result.Status = StatusRetryLater
-		result.Message = err.Error()
 		return result
 	}
 

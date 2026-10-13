@@ -12,14 +12,13 @@ that shape was chosen and what still needs building.
 The server compiles, boots, and serves requests: configuration, JWT auth,
 middleware and the sync engine are all wired in.
 
-It is **not yet safe for real data.** Reads of `TIMESTAMP` columns fail on SQLite,
-and writes to `projects` and `work_items` name columns the schema never creates,
-so sign-in and sync cannot complete. `docs/PLAN.md` → Milestone 1 is the fix and
-blocks everything after it.
+Milestone 1 of `docs/PLAN.md` is done: the data layer is consistent, sign-in
+works, and push/pull round-trips a project and a work item. The next work is
+Milestone 2 (versioned migrations) onward.
 
-Verified: `gofmt`, `go build ./...`, `go vet ./...` and `go test ./...` all pass;
-the binary boots on SQLite, `/healthz` returns `ok`, and protected routes return
-`401` without a valid token.
+Verified: `gofmt`, `go build ./...`, `go vet ./...` and `go test ./...` all pass,
+and an end-to-end run signs in, pushes a project and a work item, pulls them back
+and cascades a delete.
 
 ## Requirements
 

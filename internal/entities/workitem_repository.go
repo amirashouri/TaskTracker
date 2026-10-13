@@ -19,9 +19,13 @@ func NewWorkItemRepository(db *sql.DB) *WorkItemRepository {
 }
 
 func (r *WorkItemRepository) Create(ctx context.Context, w *WorkItem) error {
-	w.ID = NewWorkItemID()
+	if w.ID == "" {
+		w.ID = NewWorkItemID()
+	}
 	now := time.Now().UnixMilli()
-	w.CreatedAt = now
+	if w.CreatedAt == 0 {
+		w.CreatedAt = now
+	}
 	w.UpdatedAt = now
 	w.Version = uuid.New().String()
 
@@ -81,24 +85,28 @@ func (r *WorkItemRepository) GetByID(ctx context.Context, id WorkItemID) (*WorkI
 }
 
 func (r *WorkItemRepository) Update(ctx context.Context, w *WorkItem) error {
+	previous := w.Version
 	w.UpdatedAt = time.Now().UnixMilli()
 	w.Version = uuid.New().String()
 
 	blockedJSON, _ := json.Marshal(w.BlockedByIDs)
 	recurrenceJSON, _ := json.Marshal(w.Recurrence)
 
-	query := `UPDATE work_items SET project_id=$2, key=$3, title=$4, details=$5, status=$6, priority=$7, assignee_id=$8, due_date=$9, recurrence=$10, story_points=$11, blocked_by_ids=$12, sprint_id=$13, rank=$14, updated_at=$15, resolved_at=$16, version=$17
-	          WHERE id=$1 AND version=$18`
+	query := `UPDATE work_items SET project_id=$1, key=$2, title=$3, details=$4, status=$5, priority=$6, assignee_id=$7, due_date=$8, recurrence=$9, story_points=$10, blocked_by_ids=$11, sprint_id=$12, rank=$13, updated_at=$14, resolved_at=$15, version=$16
+	          WHERE id=$17 AND version=$18`
 	result, err := r.db.ExecContext(ctx, query,
-		w.ID, w.ProjectID, w.Key, w.Title, w.Details, w.Status, w.Priority,
+		w.ProjectID, w.Key, w.Title, w.Details, w.Status, w.Priority,
 		w.AssigneeID, w.DueDate, recurrenceJSON, w.StoryPoints, blockedJSON,
-		w.SprintID, w.Rank, w.UpdatedAt, w.ResolvedAt, w.Version, w.Version)
+		w.SprintID, w.Rank, w.UpdatedAt, w.ResolvedAt, w.Version, w.ID, previous)
 	if err != nil {
 		return err
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if rows == 0 {
-		return fmt.Errorf("work item not found or version conflict")
+		return fmt.Errorf("%w: work item %s", ErrVersionConflict, w.ID)
 	}
 	return nil
 }

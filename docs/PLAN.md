@@ -28,7 +28,7 @@ are the way they are; this file is *what to do next*.
 | Milestone | State |
 | --- | --- |
 | 0 — Compiling baseline | **Done** |
-| 1 — Data-layer integrity | Not started (blocking everything below) |
+| 1 — Data-layer integrity | **Done** |
 | 2 — Versioned migrations | Not started |
 | 3 — Auth and security | Not started |
 | 4 — Sync engine | Not started |
@@ -66,25 +66,32 @@ Verified by hand:
   returns `400` on a bad body and `401` on bad credentials, protected routes
   return `401` without or with a bad token, and SIGTERM shuts down cleanly.
 
-**Not working yet — this is what Milestone 1 fixes.** Reads of any `TIMESTAMP`
-column fail on SQLite:
-
-```
-sql: Scan error on column index 8, name "created_at":
-converting driver.Value type time.Time ("2026-10-13 10:00:22.935 +0000 UTC")
-to a int64: invalid syntax
-```
-
-Because of that, sign-in can never succeed even for a correctly seeded user.
-Writes to `projects` and `work_items` also fail, because the repositories name
-columns the DDL never creates.
+**Resolved by Milestone 1.** Reads of `TIMESTAMP` columns used to fail on SQLite
+(`converting driver.Value type time.Time ... to a int64`) and writes named
+columns the DDL never created, so sign-in and sync could not complete. Milestone
+1 fixed the representation, the schema drift and the placeholder ordering; an
+end-to-end run now signs in and round-trips a project and a work item.
 
 ---
 
-## Milestone 1 — Data-layer integrity (blocking)
+## Milestone 1 — Data-layer integrity (done)
 
-Nothing above this milestone can be trusted until it is done. Every task here
-touches `internal/db/db.go` and/or `internal/entities/*`.
+Completed. Every task below lands in `internal/db/db.go` and
+`internal/entities/*`, and is covered by `internal/db/db_test.go`,
+`internal/entities/repository_test.go` and `internal/sync/engine_test.go`.
+
+Two defects surfaced that the review had not found, both fixed here:
+
+- **SQLite numbers placeholders by appearance, not by name.** `SELECT $2, $1`
+  binds `$2` to the *first* argument, so every `UPDATE ... SET x=$2 ... WHERE
+  id=$1` scrambled its values. All SQL now lists placeholders in ascending text
+  order, which Postgres and SQLite agree on. Do not reintroduce a non-ascending
+  list.
+- **`Create` overwrote the caller's `CreatedAt`**, not only the `ID`, so client
+  timestamps were dropped.
+
+One guard was added: `Engine.apply` rejects a change with an empty `entityId`,
+which would otherwise write a `sync_log` row pointing at nothing.
 
 ### T1.1 — Settle the time representation
 

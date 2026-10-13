@@ -18,9 +18,12 @@ func NewCommentRepository(db *sql.DB) *CommentRepository {
 }
 
 func (r *CommentRepository) Create(ctx context.Context, c *Comment) error {
-	c.ID = NewCommentID()
-	now := time.Now().UnixMilli()
-	c.CreatedAt = now
+	if c.ID == "" {
+		c.ID = NewCommentID()
+	}
+	if c.CreatedAt == 0 {
+		c.CreatedAt = time.Now().UnixMilli()
+	}
 	c.Version = uuid.New().String()
 
 	query := `INSERT INTO comments (id, work_item_id, author_id, body, parent_id, created_at, version)
@@ -53,18 +56,22 @@ func (r *CommentRepository) GetByID(ctx context.Context, id CommentID) (*Comment
 }
 
 func (r *CommentRepository) Update(ctx context.Context, c *Comment) error {
+	previous := c.Version
 	c.Version = uuid.New().String()
 
-	query := `UPDATE comments SET work_item_id=$2, author_id=$3, body=$4, parent_id=$5, version=$6
-	          WHERE id=$1 AND version=$7`
+	query := `UPDATE comments SET work_item_id=$1, author_id=$2, body=$3, parent_id=$4, version=$5
+	          WHERE id=$6 AND version=$7`
 	result, err := r.db.ExecContext(ctx, query,
-		c.ID, c.WorkItemID, c.AuthorID, c.Body, c.ParentID, c.Version, c.Version)
+		c.WorkItemID, c.AuthorID, c.Body, c.ParentID, c.Version, c.ID, previous)
 	if err != nil {
 		return err
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if rows == 0 {
-		return fmt.Errorf("comment not found or version conflict")
+		return fmt.Errorf("%w: comment %s", ErrVersionConflict, c.ID)
 	}
 	return nil
 }

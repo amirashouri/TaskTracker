@@ -18,9 +18,13 @@ func NewSprintRepository(db *sql.DB) *SprintRepository {
 }
 
 func (r *SprintRepository) Create(ctx context.Context, s *Sprint) error {
-	s.ID = NewSprintID()
+	if s.ID == "" {
+		s.ID = NewSprintID()
+	}
 	now := time.Now().UnixMilli()
-	s.CreatedAt = now
+	if s.CreatedAt == 0 {
+		s.CreatedAt = now
+	}
 	s.UpdatedAt = now
 	s.Version = uuid.New().String()
 
@@ -60,20 +64,24 @@ func (r *SprintRepository) GetByID(ctx context.Context, id SprintID) (*Sprint, e
 }
 
 func (r *SprintRepository) Update(ctx context.Context, s *Sprint) error {
+	previous := s.Version
 	s.UpdatedAt = time.Now().UnixMilli()
 	s.Version = uuid.New().String()
 
-	query := `UPDATE sprints SET project_id=$2, name=$3, goal_story_points=$4, goal=$5, start_date=$6, end_date=$7, owner_id=$8, is_finished=$9, finished_at=$10, is_archived=$11, updated_at=$12, version=$13
-	          WHERE id=$1 AND version=$14`
+	query := `UPDATE sprints SET project_id=$1, name=$2, goal_story_points=$3, goal=$4, start_date=$5, end_date=$6, owner_id=$7, is_finished=$8, finished_at=$9, is_archived=$10, updated_at=$11, version=$12
+	          WHERE id=$13 AND version=$14`
 	result, err := r.db.ExecContext(ctx, query,
-		s.ID, s.ProjectID, s.Name, s.GoalStoryPoints, s.Goal, s.StartDate, s.EndDate,
-		s.OwnerID, s.IsFinished, s.FinishedAt, s.IsArchived, s.UpdatedAt, s.Version, s.Version)
+		s.ProjectID, s.Name, s.GoalStoryPoints, s.Goal, s.StartDate, s.EndDate,
+		s.OwnerID, s.IsFinished, s.FinishedAt, s.IsArchived, s.UpdatedAt, s.Version, s.ID, previous)
 	if err != nil {
 		return err
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if rows == 0 {
-		return fmt.Errorf("sprint not found or version conflict")
+		return fmt.Errorf("%w: sprint %s", ErrVersionConflict, s.ID)
 	}
 	return nil
 }

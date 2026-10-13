@@ -50,6 +50,22 @@ A repository is the only place that knows SQL. It takes a `*sql.DB`, uses
 `$1`-style placeholders (both drivers accept them), and returns entities or
 `nil, nil` for a missing row.
 
+### Placeholders must ascend in text order
+
+SQLite numbers `$N` placeholders by **order of appearance**, not by name: in
+`SELECT $2, $1`, `$2` binds to the first argument. Postgres numbers them by the
+written index. The two agree only when the placeholders appear in ascending
+order, so write every statement that way — a `SET` list before a `WHERE id = $1`
+is the classic trap, and it fails silently by matching zero rows.
+
+```go
+// Wrong on SQLite: $1 appears last, so every value binds to the wrong column.
+`UPDATE projects SET name=$2, version=$3 WHERE id=$1`
+
+// Right on both drivers.
+`UPDATE projects SET name=$1, version=$2 WHERE id=$3`
+```
+
 ```go
 func (r *ProjectRepository) GetByID(ctx context.Context, id ProjectID) (*Project, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT ... FROM projects WHERE id = $1`, id)

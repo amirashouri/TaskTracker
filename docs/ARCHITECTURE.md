@@ -60,12 +60,11 @@ entity for optimistic concurrency.
 | `gofmt -l .` | clean |
 | `go build ./...`, `go vet ./...` | pass |
 | `go test ./...` | passes (config only) |
-| server on SQLite | boots; `/healthz` 200; auth returns 400/401 |
+| server on SQLite | boots; signs in; push/pull round-trips a project and work item |
 
-The blockers below were fixed in Milestone 0 of `docs/PLAN.md` and are kept here
-as the record of what was wrong. What remains is a runtime gap, not a build
-failure: reads of `TIMESTAMP` columns fail on SQLite, and `projects` /
-`work_items` writes name columns the schema never creates (Milestone 1).
+The blockers below were fixed in Milestone 0 and the runtime gaps in Milestone 1
+of `docs/PLAN.md`; they are kept here as the record of what was wrong. C1 and C2
+in particular are worth reading before writing new SQL.
 
 ## Findings
 
@@ -103,8 +102,11 @@ Severity is about what blocks a working server.
   `WHERE id = $1 AND version = $10`, passing the same new version. The stored row
   still holds the *old* version, so the predicate never matches and every update
   fails with "not found or version conflict". The pattern needs the old version
-  in the `WHERE` and the new one in `SET`. Affects project, work item, sprint and
-  comment repositories.
+  in  the `WHERE` and the new one in `SET`. Affects project, work item, sprint and
+  comment repositories. A second, independent cause hid behind the same symptom:
+  SQLite assigns `$N` placeholders by order of appearance, not by name, so
+  `UPDATE ... SET x=$2 ... WHERE id=$1` bound the wrong values. Both are fixed;
+  SQL must now list placeholders in ascending text order.
 - **C2 — timestamps are epoch millis in Go and `TIMESTAMP` in SQL.** Models carry
   `int64` millis; inserts pass those directly into `created_at`/`updated_at`/
   `due_date`, and reads scan a `TIMESTAMP` into `sql.NullInt64`. SQLite tolerates

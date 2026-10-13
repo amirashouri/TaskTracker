@@ -18,9 +18,12 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 }
 
 func (r *UserRepository) Create(ctx context.Context, u *User) error {
-	u.ID = NewUserID()
-	now := time.Now().UnixMilli()
-	u.CreatedAt = now
+	if u.ID == "" {
+		u.ID = NewUserID()
+	}
+	if u.CreatedAt == 0 {
+		u.CreatedAt = time.Now().UnixMilli()
+	}
 
 	// Hash password
 	hashed, err := bcrypt.GenerateFromPassword([]byte(u.PasswordHash), bcrypt.DefaultCost)
@@ -81,10 +84,10 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*User, e
 }
 
 func (r *UserRepository) Update(ctx context.Context, u *User) error {
-	query := `UPDATE users SET email=$2, display_name=$3, position=$4, avatar_id=$5, status=$6, last_seen=$7
-	          WHERE id=$1`
+	query := `UPDATE users SET email=$1, display_name=$2, position=$3, avatar_id=$4, status=$5, last_seen=$6
+	          WHERE id=$7`
 	result, err := r.db.ExecContext(ctx, query,
-		u.ID, u.Email, u.DisplayName, u.Position, u.AvatarID, u.Status, u.LastSeen)
+		u.Email, u.DisplayName, u.Position, u.AvatarID, u.Status, u.LastSeen, u.ID)
 	if err != nil {
 		return err
 	}
