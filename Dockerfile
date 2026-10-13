@@ -38,4 +38,9 @@ USER app
 
 EXPOSE 8080
 
+# Readiness, not liveness: /readyz checks the database, so an unhealthy
+# container is one that cannot serve rather than one that merely stopped.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget -qO- http://localhost:8080/readyz >/dev/null || exit 1
+
 ENTRYPOINT ["./server"]

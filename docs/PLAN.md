@@ -33,7 +33,7 @@ are the way they are; this file is *what to do next*.
 | 2 — Versioned migrations | **Done** |
 | 3 — Auth and security | **Done** |
 | 4 — Sync engine | **Done** |
-| 5 — Observability and ops | T5.4 done; T5.1–T5.3, T5.5 not started |
+| 5 — Observability and ops | T5.1, T5.4 done; T5.2, T5.3, T5.5 not started |
 | 6 — Testing | T6.1–T6.4 done; T6.3 middleware tests still missing; T6.5 not started |
 | 7 — Client contract | Not started |
 
@@ -620,12 +620,20 @@ already pulling everything that survived.
 
 ## Milestone 5 — Observability and operations
 
-### T5.1 — Readiness probe
+### T5.1 — Readiness probe (done)
 
-**Files:** `cmd/server/main.go`.
+Done. `/healthz` stays liveness and deliberately never touches the
+database, so a database outage does not get the process restarted.
+`/readyz` pings the database with a 2s timeout and returns `503` with the
+standard error envelope when it fails. Both Docker images and both compose
+services now healthcheck `/readyz` instead of relying on the process being
+alive.
 
-**Steps:** keep `/healthz` as liveness and add `/readyz` that pings the database
-and returns `503` when it fails.
+**Files:** `cmd/server/main.go`, `Dockerfile`, `docker-compose.yml`,
+`README.md`.
+
+**Tests:** `cmd/server/main_test.go` — liveness survives a dead database,
+readiness flips from `200` to `503` when it is closed.
 
 ### T5.2 — Structured logging and `LOG_LEVEL`
 
@@ -653,9 +661,8 @@ with a non-root `app` user and a `/data` volume for SQLite.
 profile starts `postgres:16-alpine` with a healthcheck and the server waits
 for it before booting. `.dockerignore` keeps the build context small.
 
-The compose healthcheck currently targets the Postgres container, not the
-server itself — once T5.1 adds `/readyz`, update the server service to
-healthcheck against it.
+The compose healthcheck now targets `/readyz` on the server services, and
+the image carries the same check for a standalone `docker run`.
 
 **Files:** `Dockerfile`, `docker-compose.yml`, `.dockerignore`.
 

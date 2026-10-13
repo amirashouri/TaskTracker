@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -17,10 +18,15 @@ import (
 	"github.com/amirashouri/tasktracker-server/internal/config"
 	"github.com/amirashouri/tasktracker-server/internal/db"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
+	"github.com/amirashouri/tasktracker-server/internal/httpx"
 	"github.com/amirashouri/tasktracker-server/internal/middleware"
 	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
 	"github.com/amirashouri/tasktracker-server/internal/sync"
 )
+
+// readyzTimeout bounds the readiness ping, so a hung database cannot make the
+// probe hang with it.
+const readyzTimeout = 2 * time.Second
 
 func main() {
 	if len(os.Args) > 1 {
@@ -75,11 +81,9 @@ func runServer() {
 	// Setup HTTP handlers
 	mux := http.NewServeMux()
 
-	// Health check
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
+	// Health checks
+	mux.HandleFunc("/healthz", healthz())
+	mux.HandleFunc("/readyz", readyz(database.DB))
 
 	// Auth routes
 	noStore := middleware.NoStore()
@@ -152,6 +156,31 @@ func runServer() {
 	}
 
 	log.Println("Server exited")
+}
+
+// healthz is the liveness probe: the process is up. It deliberately does not
+// touch the database, so a database outage does not get the process restarted.
+func healthz() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	}
+}
+
+// readyz is the readiness probe: the process can serve, which means the
+// database answers. A failure returns 503 so a load balancer stops sending
+// traffic without killing the process.
+func readyz(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), readyzTimeout)
+		defer cancel()
+		if err := db.PingContext(ctx); err != nil {
+			httpx.WriteError(w, http.StatusServiceUnavailable, "database unavailable")
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	}
 }
 
 // pruneChangeFeed deletes change-feed rows older than retention once an hour

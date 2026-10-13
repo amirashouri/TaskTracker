@@ -77,7 +77,11 @@ If you keep a `.env` file on a server, restrict it to `chmod 600`. Rotating
 go run ./cmd/server
 ```
 
-Then `GET /healthz` should return `ok`.
+Then `GET /healthz` should return `ok`, and `GET /readyz` should too once the
+database answers. `/healthz` is liveness — it never touches the database, so a
+database outage does not get the process restarted. `/readyz` is readiness: it
+pings the database and returns `503` when that fails, which is what a load
+balancer or container orchestrator should watch.
 
 ## Docker
 
@@ -125,7 +129,10 @@ deployment shapes:
 
    ```bash
    curl http://localhost:8080/healthz    # → ok
+   curl http://localhost:8080/readyz     # → ok once the database answers
    ```
+
+   Both containers define a healthcheck against `/readyz`.
 
 4. **Stop:**
 
