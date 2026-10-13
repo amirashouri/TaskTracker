@@ -41,10 +41,11 @@ internal/db/migrations    versioned SQL, one file per driver
 
 | Endpoint | Method | Middleware | Notes |
 | --- | --- | --- | --- |
-| `/healthz` | GET | logging, CORS, recover | returns `ok`; does not check the database |
-| `/v1/auth/login` | POST | logging, CORS, recover | email + password → token pair; starts a token family |
-| `/v1/auth/refresh` | POST | logging, CORS, recover | rotates the refresh token and returns a new pair |
-| `/v1/auth/signout` | POST | logging, CORS, recover | revokes the refresh token's whole family; `204` |
+| `/healthz` | GET | security, request-id, logging, CORS, recover | liveness; returns `ok`; does not check the database |
+| `/readyz` | GET | security, request-id, logging, CORS, recover | readiness; pings the database, `503` when it fails |
+| `/v1/auth/login` | POST | + no-store | email + password → token pair; starts a token family; `429` when rate-limited |
+| `/v1/auth/refresh` | POST | + no-store | rotates the refresh token and returns a new pair |
+| `/v1/auth/signout` | POST | + no-store | revokes the refresh token's whole family; `204` |
 | `/v1/sync/push` | POST | + Auth | apply client changes, return per-entry verdicts |
 | `/v1/sync/changes/project` | GET | + Auth | cursor-paged pull |
 | `/v1/sync/changes/workItem` | GET | + Auth | cursor-paged pull |

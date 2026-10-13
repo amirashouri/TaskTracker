@@ -43,12 +43,16 @@ func Logging(logger *slog.Logger) Middleware {
 			recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(recorder, r)
 
-			attrs := []any{
+			attrs := make([]any, 0, 10)
+			if id := RequestIDFrom(r.Context()); id != "" {
+				attrs = append(attrs, "request_id", id)
+			}
+			attrs = append(attrs,
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", recorder.status,
 				"duration_ms", time.Since(start).Milliseconds(),
-			}
+			)
 			if recorder.status >= http.StatusInternalServerError {
 				logger.Error("request failed", attrs...)
 				return

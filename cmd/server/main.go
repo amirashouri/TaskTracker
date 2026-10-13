@@ -116,6 +116,7 @@ func runServer() {
 	handler := middleware.Chain(
 		mux,
 		middleware.SecurityHeaders(),
+		middleware.RequestID(),
 		middleware.Logging(logger),
 		middleware.CORS(cfg.CORSOrigins),
 		middleware.Recover(logger),

@@ -33,7 +33,7 @@ are the way they are; this file is *what to do next*.
 | 2 — Versioned migrations | **Done** |
 | 3 — Auth and security | **Done** |
 | 4 — Sync engine | **Done** |
-| 5 — Observability and ops | T5.1, T5.2, T5.4 done; T5.3, T5.5 not started |
+| 5 — Observability and ops | T5.1–T5.4 done; T5.5 not started |
 | 6 — Testing | T6.1–T6.4 done; T6.3 middleware tests still missing; T6.5 not started |
 | 7 — Client contract | Not started |
 
@@ -659,12 +659,24 @@ fails loudly instead of silently logging at info.
 500 and a panic log at error) and `internal/config/config_test.go` (level
 mapping, unknown level rejected).
 
-### T5.3 — Request IDs
+### T5.3 — Request IDs (done)
 
-**Files:** `internal/middleware/middleware.go`.
+Done. `middleware.RequestID` reuses a client-supplied `X-Request-ID` when
+it is safe and generates one otherwise, puts it on the context
+(`RequestIDFrom`), and echoes it back in the response header. `Logging`
+includes it as `request_id`, so a response can be traced to its log line.
 
-**Steps:** generate or accept `X-Request-ID`, put it on the context, echo it in
-the response and include it in the request log.
+A supplied id must be printable ASCII and at most 128 characters; anything
+else is replaced rather than passed through, so a client cannot inject a
+header or bloat a log line. The middleware sits outside `Logging` in the
+chain so the id exists before the request is logged.
+
+**Files:** new `internal/middleware/requestid.go`,
+`internal/middleware/middleware.go`, `cmd/server/main.go`.
+
+**Tests:** `internal/middleware/middleware_test.go` — a supplied id is
+echoed on the context and the response, an absent one is generated, an
+unsafe one is replaced, and the request log carries it.
 
 ### T5.4 — Container image (done)
 
