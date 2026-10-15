@@ -53,13 +53,23 @@ check cannot see a case-only rename.
 ## The command that decides whether you are done
 
 ```bash
+scripts/check.sh
+```
+
+That script is the one place the command lives:
+
+```bash
 gofmt -l . && go build ./... && go vet ./... && go test ./...
 ```
+
+It runs `gofmt` as a **gate** — a bare `gofmt -l . && …` cannot fail on formatting, because
+`gofmt -l` exits 0 even when it lists files, so the script exits non-zero on a non-empty list.
+Scopes: `all` (default), `race`, `docs`.
 
 All four pass on `main`. Keep it that way: never make a check green by deleting
 code, stubbing a proof, or weakening an assertion.
 
-Run `go test -race ./...` before touching anything concurrent — the sync engine,
+Run `scripts/check.sh race` before touching anything concurrent — the sync engine,
 the rate limiter and refresh-token rotation all are. CI runs it, so a plain local
 run is not the same check.
 
@@ -145,8 +155,7 @@ git switch -c feat/<kebab-case-slug>
 the task is done, read your own diff as a stranger would and answer three
 questions:
 
-1. Is the validation command green?
-   `gofmt -l . && go build ./... && go vet ./... && go test ./...`
+1. Is the validation command green? `scripts/check.sh`
 2. Does the diff change only what the task called for — no drive-by cleanup,
    no bundled task?
 3. Does every behaviour change ship with a test that fails without it?
