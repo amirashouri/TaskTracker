@@ -22,10 +22,13 @@ a reason that survives that constraint.
 
 The client is an installed mobile app that syncs offline and cannot be updated on
 this server's schedule. **The installed client is the fixed point**: when the two
-disagree, the server changes. Three contract mismatches have already shipped and
+disagree, the server changes. Four contract mismatches have already shipped and
 been found this way — `entityId` vs `entityID`, an undeclared `resyncRequired`,
-and ISO-8601 timestamps against `int64` millis — and the first two were invisible
-from the server side alone.
+ISO-8601 timestamps against `int64` millis, and `token_type`/`expires_in` on the
+token pair — and the first two were invisible from the server side alone. The
+fourth was worse than invisible: `contract_test.go`'s `clientTokenPair` carried
+all seven keys, so the executable contract *required* the server to send two keys
+no client version has ever declared.
 
 Two rules follow, and the second is the one that gets missed.
 
@@ -49,6 +52,14 @@ order is a new `/v1` version and a migration path.
 executable one. It decodes responses into the client's own DTOs *and* compares the
 key names, because Go matches JSON keys case-insensitively and a decode-based
 check cannot see a case-only rename.
+
+**The contract test can drift too, and then it hides the mismatch instead of
+catching it.** A test that restates this server's own struct is a mirror, not a
+check — which is how the token pair's two extra keys survived: the test carried
+them, so it *required* the drift it existed to detect. When a response changes,
+pin the key set the **client** declares, and add that key-name assertion to every
+path that decodes one, not just the first. A path that decodes without pinning is
+a path nobody is checking.
 
 ## The command that decides whether you are done
 

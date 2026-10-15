@@ -102,11 +102,20 @@ that survived.
 
 The client is an installed mobile app that syncs offline and cannot be updated on
 this server's schedule. That makes **the installed client the fixed point**: when
-the two disagree, the server changes. Three mismatches have already shipped on
-that basis — `entityId` against `entityID`, an undeclared `resyncRequired`, and
-ISO-8601 timestamps against `int64` epoch millis — and two of them were invisible
-from the server side alone, because Go decodes JSON keys case-insensitively and
-because the pull path re-serves stored bytes rather than re-encoding them.
+the two disagree, the server changes. Four mismatches have already shipped on that
+basis — `entityId` against `entityID`, an undeclared `resyncRequired`, ISO-8601
+timestamps against `int64` epoch millis, and `token_type`/`expires_in` on the
+token pair — and the first two were invisible from the server side alone, because
+Go decodes JSON keys case-insensitively and because the pull path re-serves stored
+bytes rather than re-encoding them.
+
+The fourth was invisible for a different reason, and a worse one: the executable
+contract had drifted *with* the server. `cmd/server/contract_test.go`'s
+`clientTokenPair` carried all seven keys the server sent, including the two no
+client version has ever declared (`git log -S'expires_in' --all` in
+`TaskTrackerKMP` returns nothing), so the test **required** the drift it existed to
+catch. A contract test that restates this server's own struct is a mirror; it has
+to pin the client's declared key set to be a check at all.
 
 The client leaves `ignoreUnknownKeys` off on purpose, which gives two rules:
 
