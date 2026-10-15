@@ -156,14 +156,25 @@ type refreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+// tokenResponse is the token pair, and its key set is the client's DTO.
+//
+// Two keys it used to carry are gone: `token_type` and `expires_in`. The client
+// has never declared either, and it leaves `ignoreUnknownKeys` off on purpose —
+// so sending them was not an extra field it skipped, it was a decoding failure on
+// every sign-in and every refresh. Nothing is lost by dropping them: the client
+// hardcodes `Bearer` in its interceptor and reads the access token's lifetime
+// from the JWT's own `exp` claim, which cannot drift from the server's TTL the
+// way a second copy of it can.
+//
+// Do not add a field here without adding it to the client's `AuthTokenResponse`
+// first. See "The wire format is a contract with a client you cannot update" in
+// AGENTS.md.
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	UserID       string `json:"user_id,omitempty"`
 	Email        string `json:"email,omitempty"`
 	DisplayName  string `json:"display_name,omitempty"`
-	TokenType    string `json:"token_type,omitempty"`
-	ExpiresIn    int64  `json:"expires_in,omitempty"`
 }
 
 func (h *Handler) SignIn(w http.ResponseWriter, r *http.Request) {
@@ -387,7 +398,5 @@ func (h *Handler) writePair(w http.ResponseWriter, user *entities.User, refresh 
 		UserID:       string(user.ID),
 		Email:        user.Email,
 		DisplayName:  user.DisplayName,
-		TokenType:    "Bearer",
-		ExpiresIn:    int64(h.jwt.AccessTTL().Seconds()),
 	})
 }

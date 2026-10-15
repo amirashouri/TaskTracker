@@ -117,13 +117,15 @@ usable until it expires; that is what its short lifetime is for.
   "refresh_token": "eyJhbGciOi...",
   "user_id": "550e8400-e29b-41d4-a716-446655440000",
   "email": "jane@example.com",
-  "display_name": "Jane Doe",
-  "token_type": "Bearer",
-  "expires_in": 3600
+  "display_name": "Jane Doe"
 }
 ```
 
-`expires_in` is the access token's lifetime in seconds.
+The access token's lifetime is its JWT's own `exp` claim, and the scheme is always
+`Bearer` — so neither is repeated in the envelope. This example is the client's
+`AuthTokenResponse`, key for key; it carried `token_type` and `expires_in` until
+those were found to break every sign-in, because the client rejects an undeclared
+key rather than skipping it.
 
 ## Users
 
@@ -373,3 +375,15 @@ migration path. The full policy is in [`AGENTS.md`](../AGENTS.md).
 document to the code. It compares **key names**, not just decoded values, because
 Go matches JSON keys case-insensitively and a decode-based check cannot see a
 rename like `entityId` → `entityID`.
+
+### The contract test can drift too
+
+That file is a hand-transcription of the client's DTOs — which is what lets it
+disagree with the server, and also what lets it disagree with the *client*. It
+did. `clientTokenPair` carried `token_type` and `expires_in`, which the client has
+never declared in any commit, so the test **required** the server to send two keys
+the client rejects: both suites green, and no sign-in or refresh working.
+
+So a passing contract test is not proof of agreement. It proves the server matches
+the transcription, and the transcription is the part that has to be re-read
+against `TaskTrackerKMP`'s DTOs when the two are suspected of diverging.

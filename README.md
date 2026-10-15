@@ -163,6 +163,28 @@ deployment shapes:
    Add `-v` to also delete the database volume — **this destroys all
    data**, so use it only for a fresh start.
 
+### After changing the code
+
+`up -d` recreates the *container* from the image that already exists. It does
+**not** rebuild the image, so after editing the server a plain `up -d` brings
+the old binary back and the change looks like it had no effect at all:
+
+```bash
+# Rebuild the image from the working tree, then recreate the container.
+docker compose --profile postgres up -d --build
+```
+
+The database lives in a named volume (`pg-data` / `sqlite-data`) and is
+untouched by a rebuild. To check which build is actually running, compare the
+image's creation time against your last edit:
+
+```bash
+docker images --format '{{.Repository}}\t{{.CreatedAt}}' | grep tasktracker
+```
+
+This is the Docker counterpart to the bare-metal upgrade steps in
+[`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) — § 10, Upgrades.
+
 ### Environment variables
 
 Docker Compose reads `.env` in the project root automatically. Every

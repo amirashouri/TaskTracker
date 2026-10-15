@@ -31,14 +31,20 @@ import (
 
 // clientTokenPair mirrors the client's token response. Its `@SerialName`s are
 // snake_case, so these are too.
+//
+// Five fields, and the count is the assertion. This transcription previously
+// carried `token_type` and `expires_in` as well, which the client has never
+// declared in any commit — so the test required the server to send two keys the
+// client rejects, and the pair of them stayed green while every real sign-in
+// failed with "The server sent something unexpected." A hand-transcription is
+// only a contract if it is transcribed from something; this one was written from
+// what the server sent.
 type clientTokenPair struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	UserID       string `json:"user_id"`
 	Email        string `json:"email"`
 	DisplayName  string `json:"display_name"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int64  `json:"expires_in"`
 }
 
 // clientPushBody mirrors PushRequestBody. Note `payload` is a *string*: the
@@ -184,10 +190,10 @@ func (e *contractEnv) signIn(t *testing.T) clientTokenPair {
 		t.Fatalf("decode the client's token pair from %s: %v", rec.Body.String(), err)
 	}
 
-	// Every field is populated on a successful sign-in, so all seven are required.
+	// Every field the client declares is populated on a successful sign-in, so all
+	// five are required — and the key set is closed, because the client's DTO is.
 	assertWireKeys(t, "the token pair", rec.Body.Bytes(), []string{
-		"access_token", "refresh_token", "user_id", "email",
-		"display_name", "token_type", "expires_in",
+		"access_token", "refresh_token", "user_id", "email", "display_name",
 	}, nil)
 
 	return tokens
@@ -271,12 +277,6 @@ func TestTheLoginResponseIsWhatTheClientDecodes(t *testing.T) {
 	if tokens.DisplayName != "Ada" {
 		t.Errorf("display_name = %q, want %q", tokens.DisplayName, "Ada")
 	}
-	if tokens.TokenType != "Bearer" {
-		t.Errorf("token_type = %q, want %q", tokens.TokenType, "Bearer")
-	}
-	if tokens.ExpiresIn <= 0 {
-		t.Errorf("expires_in = %d, want a positive lifetime", tokens.ExpiresIn)
-	}
 }
 
 func TestTheRefreshResponseIsWhatTheClientDecodes(t *testing.T) {
@@ -291,6 +291,16 @@ func TestTheRefreshResponseIsWhatTheClientDecodes(t *testing.T) {
 	}
 
 	rotated := decodeInto[clientTokenPair](t, rec)
+
+	// The key set is pinned here too, and it is the assertion this test was missing. It
+	// decoded into the transcription without checking keys, so while that transcription
+	// carried two members the client does not declare, the refresh path could send them
+	// and stay green — the same blind spot as the login pair, on the other call that
+	// returns one.
+	assertWireKeys(t, "the rotated token pair", rec.Body.Bytes(), []string{
+		"access_token", "refresh_token", "user_id", "email", "display_name",
+	}, nil)
+
 	if rotated.RefreshToken == "" || rotated.RefreshToken == tokens.RefreshToken {
 		t.Errorf("refresh_token = %q, want a new one", rotated.RefreshToken)
 	}
