@@ -56,17 +56,11 @@ check cannot see a case-only rename.
 scripts/check.sh
 ```
 
-That script is the one place the command lives:
+That script is the one place the command lives. It runs `gofmt` as a **gate** — a bare
+`gofmt -l . && …` cannot fail on formatting, because `gofmt -l` exits 0 even when it lists
+files, so the script exits non-zero on a non-empty list. Scopes: `all` (default), `race`, `docs`.
 
-```bash
-gofmt -l . && go build ./... && go vet ./... && go test ./...
-```
-
-It runs `gofmt` as a **gate** — a bare `gofmt -l . && …` cannot fail on formatting, because
-`gofmt -l` exits 0 even when it lists files, so the script exits non-zero on a non-empty list.
-Scopes: `all` (default), `race`, `docs`.
-
-All four pass on `main`. Keep it that way: never make a check green by deleting
+All four checks pass on `main`. Keep it that way: never make a check green by deleting
 code, stubbing a proof, or weakening an assertion.
 
 Run `scripts/check.sh race` before touching anything concurrent — the sync engine,
@@ -76,10 +70,10 @@ run is not the same check.
 ## Toolchain
 
 - **Go 1.27**, matching `go.mod`. Do not lower it.
-- **CGO required** — `mattn/go-sqlite3` is a cgo driver. Build with
-  `CGO_ENABLED=1` and a C compiler present.
 - After changing imports run `go mod tidy` and commit `go.mod` and `go.sum`
   together.
+
+Build prerequisites (CGO, Postgres/SQLite): `README.md` → Requirements.
 
 ## Comments
 
@@ -89,12 +83,11 @@ decorative banners, no commented-out code.
 
 ## Configuration and secrets
 
-- Configuration comes from the environment, optionally seeded from `.env`.
 - **A secret never enters this repository.** `.env` is git-ignored; only
   `.env.example` is tracked and it holds no real values.
-- Add a variable in three places: `.env.example`, a read in
+- Adding a variable means three places: `.env.example`, a read in
   `internal/config/config.go`, and a rule in `Config.validate` when a bad value
-  should stop startup. Details are in the `go-config-and-secrets` skill.
+  should stop startup. Details: `README.md` and the `go-config-and-secrets` skill.
 
 ## Architecture boundaries
 
