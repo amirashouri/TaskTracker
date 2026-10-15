@@ -135,7 +135,26 @@ deployment shapes:
 
    Both containers define a healthcheck against `/readyz`.
 
-4. **Stop:**
+4. **Create the first admin.** There is no self-signup: an admin provisions
+   every user, and the first one has to be created from the command line. Run
+   the subcommand inside the running server container, where it inherits the
+   compose environment (`DATABASE_URL`, `JWT_SECRET`) and needs nothing else:
+
+   ```bash
+   docker compose --profile postgres exec server-pg \
+     /app/server user-create \
+     --email admin@example.com \
+     --password 'a-strong-password' \
+     --display-name 'Admin' \
+     --admin
+   ```
+
+   Use `server-sqlite` in place of `server-pg` for the SQLite profile. It
+   prints `Created user … (role=admin)`. See
+   [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) for the flags and how
+   the admin then creates everyone else through the API.
+
+5. **Stop:**
 
    ```bash
    docker compose --profile postgres down       # or: sqlite

@@ -68,7 +68,21 @@ Because it loads the same configuration as the server, it needs the same
 one-off command, so pass it explicitly — see
 [`SELF-HOSTING.md`](SELF-HOSTING.md) for the exact invocation.
 
-In Docker:
+In Docker the same subcommand runs inside the server container. With Compose,
+`exec` into the service — `server-pg` for the Postgres profile, `server-sqlite`
+for the SQLite one — so it inherits the compose environment (`DATABASE_URL`,
+`JWT_SECRET`) and needs nothing else:
+
+```bash
+docker compose --profile postgres exec server-pg \
+  /app/server user-create \
+  --email admin@example.com \
+  --password 'a-strong-password' \
+  --display-name 'Admin' \
+  --admin
+```
+
+With a plain `docker run` (no Compose), exec against the container by name:
 
 ```bash
 docker exec -it <container-name> /app/server user-create \

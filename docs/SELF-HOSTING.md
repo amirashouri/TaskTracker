@@ -176,6 +176,24 @@ migrations itself and writes to the database directly, so it works whether or
 not the service is running. The password is hashed before it is stored, and the
 command refuses an email that already exists.
 
+### In a container
+
+If you deployed the Docker image rather than the systemd unit, the same
+subcommand runs inside the server container. It inherits the compose
+environment, so no `ENV_FILE` is needed:
+
+```bash
+docker compose --profile postgres exec server-pg \
+  /app/server user-create \
+  --email admin@example.com \
+  --password 'a-strong-password' \
+  --display-name 'Admin' \
+  --admin
+```
+
+Use `server-sqlite` for the SQLite profile. The container deployment itself is
+covered in the [README](../README.md#docker).
+
 After that, the admin creates everyone else through the API — see
 [`docs/USER-MANAGEMENT.md`](USER-MANAGEMENT.md).
 
