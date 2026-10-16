@@ -131,6 +131,23 @@ func (s *TokenStore) RevokeFamily(ctx context.Context, familyID string, at time.
 	return err
 }
 
+// RevokeAllForUser revokes every live refresh token the user holds, across all
+// of their families.
+//
+// Deleting a member calls this: revocation is what makes the deletion take
+// effect for someone who is already signed in, since their access token is
+// stateless and expires only on its own TTL. Rows are marked revoked rather than
+// deleted, so the reuse detection that reads them keeps working.
+func (s *TokenStore) RevokeAllForUser(ctx context.Context, userID string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE refresh_tokens SET revoked_at = $1 WHERE user_id = $2 AND revoked_at IS NULL`,
+		at.UnixMilli(), userID)
+	if err != nil {
+		return fmt.Errorf("revoke refresh tokens for user: %w", err)
+	}
+	return nil
+}
+
 // revokeFamilyTx works on both a pool and a transaction, so Rotate can revoke a
 // family inside the transaction that detected the reuse.
 type execer interface {

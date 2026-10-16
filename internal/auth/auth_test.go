@@ -372,8 +372,6 @@ func TestRotateReportsReuseAndRevokesTheFamily(t *testing.T) {
 	}
 }
 
-// Repeated guesses from one address must be throttled, not merely slowed by
-// bcrypt.
 // A deleted account keeps its row but must not be able to sign in again. The
 // answer is the same 401 a wrong password gets, so the response cannot be used
 // to tell a deleted account from a mistyped one.
@@ -432,6 +430,52 @@ func TestSignInStillAcceptsAnInactiveUser(t *testing.T) {
 	}
 }
 
+// Deleting a member must end every session that member holds, across all of
+// their families, and leave every other account's sessions alone.
+func TestRevokeAllForUserEndsEverySessionForThatUserOnly(t *testing.T) {
+	env := newTestEnv(t)
+	first := env.signIn(t)
+	second := env.signIn(t)
+
+	other := &entities.User{Email: "grace@example.com", PasswordHash: "hopper"}
+	if err := env.users.Create(context.Background(), other); err != nil {
+		t.Fatalf("create second user: %v", err)
+	}
+	_, otherTokenID, err := env.jwt.IssueRefreshWithID(string(other.ID), other.Email, other.Role)
+	if err != nil {
+		t.Fatalf("issue other token: %v", err)
+	}
+	if err := env.store.Save(context.Background(), RefreshToken{
+		TokenHash: HashTokenID(otherTokenID),
+		FamilyID:  "grace-family",
+		UserID:    string(other.ID),
+		IssuedAt:  time.Now().UnixMilli(),
+		ExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatalf("save other token: %v", err)
+	}
+
+	if err := env.store.RevokeAllForUser(context.Background(), string(env.user.ID), time.Now()); err != nil {
+		t.Fatalf("revoke all for user: %v", err)
+	}
+
+	for i, tokens := range []tokenResponse{first, second} {
+		if !env.stored(t, tokens.RefreshToken).Revoked() {
+			t.Errorf("session %d survived RevokeAllForUser; a deleted member's other sessions still rotate", i+1)
+		}
+	}
+
+	grace, err := env.store.Get(context.Background(), HashTokenID(otherTokenID))
+	if err != nil {
+		t.Fatalf("get other token: %v", err)
+	}
+	if grace == nil || grace.Revoked() {
+		t.Error("another user's refresh token was revoked; RevokeAllForUser is not scoped to one user")
+	}
+}
+
+// Repeated guesses from one address must be throttled, not merely slowed by
+// bcrypt.
 func TestSignInThrottlesPerAddress(t *testing.T) {
 	env := newTestEnv(t)
 	env.handler.limiter = ratelimit.New(2, time.Minute)
