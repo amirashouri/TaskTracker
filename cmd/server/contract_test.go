@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -142,6 +143,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 		mux: mount(
 			auth.NewHandler(jwtManager, users, tokens, ratelimit.New(100, time.Minute)),
 			admin.NewHandler(users, tokens),
+			admin.NewProjectHandler(entities.NewProjectRepository(database.DB), sync.NewEngine(database.DB)),
 			sync.NewHandler(sync.NewEngine(database.DB), jwtManager),
 			jwtManager,
 			database.DB,
@@ -728,5 +730,107 @@ func TestStatusCannotBeSetToDeletedThroughUpdate(t *testing.T) {
 		if u.ID == grace.ID && u.Status == entities.StatusDeleted {
 			t.Error("the refused write still marked the member deleted")
 		}
+	}
+}
+
+// The admin edit page is seeded with a project and saves the whole thing back.
+// Its response has to be the same project shape the client already decodes from
+// the change feed, so the page can reuse the client's project model rather than
+// a second one that would drift.
+func TestAdminProjectEditSavesTheProjectAndReachesTheFeed(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+
+	// Seed the change feed with an ordinary push, so there is a genuine sync
+	// payload and version to work from rather than a shape restated here.
+	seed := fmt.Sprintf(
+		`{"id":%q,"keyPrefix":"TT","name":"Demo","details":"","memberIds":[%q],"isArchived":false,"nextItemNumber":1,"createdAt":"1970-01-01T00:00:00Z","updatedAt":"1970-01-01T00:00:00Z","version":""}`,
+		string(env.project.ID), string(env.user.ID))
+	seeded := env.do(t, http.MethodPost, "/v1/sync/push", admin.AccessToken, map[string]any{
+		"changes": []map[string]any{{
+			"id": "seed", "entity": "project", "entityId": string(env.project.ID),
+			"operation": "upsert", "payload": seed,
+		}},
+	})
+	if seeded.Code != http.StatusOK {
+		t.Fatalf("seed push = %d, body = %s", seeded.Code, seeded.Body.String())
+	}
+	if results := decodeInto[clientPushResponse](t, seeded); len(results.Results) != 1 || results.Results[0].Status != "accepted" {
+		t.Fatalf("seed push was not accepted: %s", seeded.Body.String())
+	}
+
+	pulled := env.do(t, http.MethodGet, "/v1/sync/changes/projects", admin.AccessToken, nil)
+	page := decodeInto[clientChangesPage](t, pulled)
+	if len(page.Changes) != 1 {
+		t.Fatalf("the seeded push is not the only project change: %s", pulled.Body.String())
+	}
+	var feedPayload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(page.Changes[0].Payload), &feedPayload); err != nil {
+		t.Fatalf("decode the feed payload: %v", err)
+	}
+	// The version lives in the change's own column, not in the payload: the
+	// payload carries whatever the client sent, and a client does not mint it.
+	if page.Changes[0].Version == nil || *page.Changes[0].Version == "" {
+		t.Fatalf("the seeded change carries no version: %s", pulled.Body.String())
+	}
+	feedVersion := *page.Changes[0].Version
+
+	rec := env.do(t, http.MethodPatch, "/v1/admin/projects/"+string(env.project.ID), admin.AccessToken, map[string]any{
+		"id":             string(env.project.ID),
+		"keyPrefix":      env.project.KeyPrefix,
+		"name":           "Renamed",
+		"details":        "Edited from the admin app",
+		"memberIds":      []string{string(env.user.ID)},
+		"isArchived":     true,
+		"nextItemNumber": env.project.NextItemNumber,
+		"version":        feedVersion,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("edit project = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var saved map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &saved); err != nil {
+		t.Fatalf("decode the saved project: %v", err)
+	}
+	if got, want := strings.Join(keysOf(saved), ","), strings.Join(keysOf(feedPayload), ","); got != want {
+		t.Errorf("the admin project keys are %s, want the sync payload's %s", got, want)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{`"name":"Renamed"`, `"details":"Edited from the admin app"`, `"isArchived":true`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the saved project is missing %s: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `"version":"`+feedVersion+`"`) {
+		t.Errorf("the version did not move, so the client cannot save against it again: %s", body)
+	}
+
+	// The edit is on the feed, which is the only way the project's members learn
+	// about it.
+	after := decodeInto[clientChangesPage](t, env.do(t, http.MethodGet, "/v1/sync/changes/projects", admin.AccessToken, nil))
+	if len(after.Changes) != 2 {
+		t.Fatalf("the feed holds %d project changes, want the seed and the admin edit", len(after.Changes))
+	}
+	if last := after.Changes[len(after.Changes)-1]; !strings.Contains(last.Payload, `"name":"Renamed"`) {
+		t.Errorf("the admin edit did not reach the change feed: %s", last.Payload)
+	}
+
+	// Saving against a version that has moved on is a conflict, not a silent
+	// overwrite of whatever the other writer did.
+	stale := env.do(t, http.MethodPatch, "/v1/admin/projects/"+string(env.project.ID), admin.AccessToken, map[string]any{
+		"keyPrefix": "TT", "name": "Stale write", "version": feedVersion,
+	})
+	if stale.Code != http.StatusConflict {
+		t.Errorf("editing with a stale version = %d, want 409 (body %s)", stale.Code, stale.Body.String())
+	}
+
+	// Editing a project that does not exist is a 404, not a create.
+	missing := env.do(t, http.MethodPatch, "/v1/admin/projects/00000000-0000-0000-0000-000000000000", admin.AccessToken, map[string]any{
+		"keyPrefix": "TT", "name": "Ghost",
+	})
+	if missing.Code != http.StatusNotFound {
+		t.Errorf("editing an unknown project = %d, want 404 (body %s)", missing.Code, missing.Body.String())
 	}
 }

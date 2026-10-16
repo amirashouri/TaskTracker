@@ -57,6 +57,33 @@ func (e *Engine) Push(ctx context.Context, userID string, changes []entities.Pus
 }
 
 func (e *Engine) apply(ctx context.Context, userID string, change entities.PushChange) entities.PushResult {
+	return e.applyChange(ctx, userID, change, true)
+}
+
+// ApplyAdminProject applies a project change authored by an admin and records it
+// in the change feed, so the project's members pull it exactly as they would a
+// change one of their own clients pushed.
+//
+// It is not the push path: an admin may edit a project they are not a member of,
+// and a push is authorized by membership. The caller is authorized by the admin
+// route instead, so the membership check is the one thing this skips. Everything
+// else — the version compare-and-swap, the write and its log row in one
+// transaction — is shared with apply, because a change that skipped the log row
+// would be invisible to every client.
+func (e *Engine) ApplyAdminProject(ctx context.Context, actorID string, change entities.PushChange) entities.PushResult {
+	if change.Entity != entities.OutboxEntityProject {
+		return entities.PushResult{
+			EntryID: change.ID,
+			Status:  StatusRejected,
+			Message: fmt.Sprintf("the admin API writes projects, not %q", change.Entity),
+		}
+	}
+	return e.applyChange(ctx, actorID, change, false)
+}
+
+// applyChange is the body of apply. checkMembership is false only for a change
+// already authorized by an admin-only route.
+func (e *Engine) applyChange(ctx context.Context, userID string, change entities.PushChange, checkMembership bool) entities.PushResult {
 	result := entities.PushResult{EntryID: change.ID}
 	// Without an id the log row could not point back at the stored entity.
 	if change.EntityID == "" {
@@ -97,7 +124,7 @@ func (e *Engine) apply(ctx context.Context, userID string, change entities.PushC
 		result.Message = errNoProject.Error()
 		return result
 	}
-	if projectID != "" {
+	if projectID != "" && checkMembership {
 		allowed, err := canWrite(ctx, tx, userID, change, projectID)
 		if err != nil {
 			result.Status = StatusRetryLater

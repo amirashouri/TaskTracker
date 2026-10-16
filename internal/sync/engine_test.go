@@ -739,3 +739,79 @@ func TestStoredTimestampsAreWholeSeconds(t *testing.T) {
 		}
 	}
 }
+
+// An admin edits a project server-wide, including projects they are not a
+// member of, and the edit still has to reach that project's members. Only the
+// change feed does that, so the write must be logged exactly as a push is.
+func TestApplyAdminProjectEditsAProjectTheAdminIsNotIn(t *testing.T) {
+	engine, users, projects, _, ownerID := newTestEngine(t)
+	ctx := context.Background()
+
+	admin := createUser(t, users, "admin@example.com")
+
+	project := newProject(ownerID, "66666666-6666-6666-6666-666666666666")
+	if res := pushOne(t, engine, ownerID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create project = %s (%s)", res.Status, res.Message)
+	}
+	stored, err := projects.GetByID(ctx, project.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("reload project: %v", err)
+	}
+
+	// The admin is not in MemberIDs, so this edit would be refused by a push.
+	edited := *stored
+	edited.Name = "Renamed by the admin"
+	res := engine.ApplyAdminProject(ctx, string(admin.ID), projectChange(t, "e2", &edited, entities.OutboxOperationUpsert, stored.Version))
+	if res.Status != StatusAccepted {
+		t.Fatalf("admin edit = %s (%s)", res.Status, res.Message)
+	}
+
+	after, err := projects.GetByID(ctx, project.ID)
+	if err != nil || after == nil {
+		t.Fatalf("reload project: %v", err)
+	}
+	if after.Name != "Renamed by the admin" {
+		t.Errorf("stored name = %q, want the admin's edit", after.Name)
+	}
+
+	// The member pulls the edit: the row and the log committed together.
+	page, err := engine.Pull(ctx, ownerID, entities.OutboxEntityProject, "", 0)
+	if err != nil {
+		t.Fatalf("member pull: %v", err)
+	}
+	if len(page.Changes) != 2 {
+		t.Fatalf("member sees %d changes, want the create and the edit: %+v", len(page.Changes), page.Changes)
+	}
+	last := page.Changes[len(page.Changes)-1]
+	payload, err := entities.ProjectFromJSON([]byte(last.Payload))
+	if err != nil {
+		t.Fatalf("decode pulled payload: %v", err)
+	}
+	if payload.Name != "Renamed by the admin" {
+		t.Errorf("the pulled edit names %q, want the admin's edit: the write was not logged", payload.Name)
+	}
+}
+
+// The admin path skips the membership check; it must not have removed it. A
+// push by the same non-member admin is still refused.
+func TestPushStillRefusesANonMemberAfterTheAdminPathExists(t *testing.T) {
+	engine, users, projects, _, ownerID := newTestEngine(t)
+	ctx := context.Background()
+
+	admin := createUser(t, users, "admin@example.com")
+	project := newProject(ownerID, "77777777-7777-7777-7777-777777777777")
+	if res := pushOne(t, engine, ownerID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create project = %s (%s)", res.Status, res.Message)
+	}
+
+	stored, err := projects.GetByID(ctx, project.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("reload project: %v", err)
+	}
+	edited := *stored
+	edited.Name = "Sneaky"
+
+	if res := pushOne(t, engine, string(admin.ID), projectChange(t, "e2", &edited, entities.OutboxOperationUpsert, stored.Version)); res.Status != StatusRejected {
+		t.Errorf("a non-member's push = %s, want rejected: the membership check was weakened", res.Status)
+	}
+}

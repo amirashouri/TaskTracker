@@ -105,6 +105,7 @@ func newTestMux(t *testing.T) *http.ServeMux {
 	return mount(
 		auth.NewHandler(jwtManager, users, tokens, ratelimit.New(5, time.Minute)),
 		admin.NewHandler(users, tokens),
+		admin.NewProjectHandler(entities.NewProjectRepository(database.DB), sync.NewEngine(database.DB)),
 		sync.NewHandler(sync.NewEngine(database.DB), jwtManager),
 		jwtManager,
 		database.DB,

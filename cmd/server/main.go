@@ -84,8 +84,12 @@ func runServer() {
 	// Initialize sync handler
 	syncHandler := sync.NewHandler(syncEngine, jwtManager)
 
+	// Admin project screens read projects through the same engine, so an edit
+	// lands in the change feed the clients pull.
+	projectHandler := admin.NewProjectHandler(entities.NewProjectRepository(database.DB), syncEngine)
+
 	// Setup HTTP handlers
-	mux := mount(authHandler, adminHandler, syncHandler, jwtManager, database.DB)
+	mux := mount(authHandler, adminHandler, projectHandler, syncHandler, jwtManager, database.DB)
 
 	// Apply middleware chain
 	handler := middleware.Chain(
@@ -150,6 +154,7 @@ func fatal(message string, err error) {
 func mount(
 	authHandler *auth.Handler,
 	adminHandler *admin.Handler,
+	projectHandler *admin.ProjectHandler,
 	syncHandler *sync.Handler,
 	jwtManager *auth.JWTManager,
 	database *sql.DB,
@@ -191,6 +196,10 @@ func mount(
 	mux.Handle("GET /v1/admin/users", adminMW(http.HandlerFunc(adminHandler.List)))
 	mux.Handle("PATCH /v1/admin/users/{id}", adminMW(http.HandlerFunc(adminHandler.Update)))
 	mux.Handle("DELETE /v1/admin/users/{id}", adminMW(http.HandlerFunc(adminHandler.Delete)))
+
+	// Admin project routes. Projects are otherwise reachable only through the
+	// sync feed, which is scoped to membership; an admin manages every project.
+	mux.Handle("PATCH /v1/admin/projects/{id}", adminMW(http.HandlerFunc(projectHandler.Update)))
 
 	// Directory search (any authenticated user)
 	mux.Handle("GET /v1/users/search", middleware.Auth(jwtManager)(http.HandlerFunc(adminHandler.Search)))
