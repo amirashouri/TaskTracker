@@ -99,11 +99,12 @@ func newTestMux(t *testing.T) *http.ServeMux {
 
 	database := dbtest.NewDatabase(t)
 	users := entities.NewUserRepository(database.DB)
+	tokens := auth.NewTokenStore(database.DB)
 	jwtManager := auth.NewJWTManager(strings.Repeat("s", 32), time.Hour, time.Hour)
 
 	return mount(
-		auth.NewHandler(jwtManager, users, auth.NewTokenStore(database.DB), ratelimit.New(5, time.Minute)),
-		admin.NewHandler(users),
+		auth.NewHandler(jwtManager, users, tokens, ratelimit.New(5, time.Minute)),
+		admin.NewHandler(users, tokens),
 		sync.NewHandler(sync.NewEngine(database.DB), jwtManager),
 		jwtManager,
 		database.DB,

@@ -115,6 +115,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 
 	database := dbtest.NewDatabase(t)
 	users := entities.NewUserRepository(database.DB)
+	tokens := auth.NewTokenStore(database.DB)
 	jwtManager := auth.NewJWTManager(strings.Repeat("s", 32), time.Hour, 720*time.Hour)
 
 	user := &entities.User{
@@ -139,8 +140,8 @@ func newContractEnv(t *testing.T) *contractEnv {
 
 	return &contractEnv{
 		mux: mount(
-			auth.NewHandler(jwtManager, users, auth.NewTokenStore(database.DB), ratelimit.New(100, time.Minute)),
-			admin.NewHandler(users),
+			auth.NewHandler(jwtManager, users, tokens, ratelimit.New(100, time.Minute)),
+			admin.NewHandler(users, tokens),
 			sync.NewHandler(sync.NewEngine(database.DB), jwtManager),
 			jwtManager,
 			database.DB,
@@ -490,8 +491,10 @@ func TestTheUserObjectIsWhatTheClientDecodes(t *testing.T) {
 		t.Fatalf("search returned %d users, want 1: %s", len(users), rec.Body.String())
 	}
 
-	// position, avatar_id and status are omitempty and empty on a fresh user, so
-	// they are permitted rather than required.
+	// position and avatar_id are omitempty and empty on a fresh user, so they are
+	// permitted rather than required. status is always present now that Create
+	// defaults it to active, but the client declares it with a default, so the
+	// contract still only promises it may be there.
 	var rawUsers []json.RawMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &rawUsers); err != nil {
 		t.Fatalf("decode users: %v", err)
@@ -509,5 +512,106 @@ func TestTheUserObjectIsWhatTheClientDecodes(t *testing.T) {
 	}
 	if user.CreatedAt <= 0 {
 		t.Errorf("created_at = %d, want the epoch-millis the admin API uses", user.CreatedAt)
+	}
+}
+
+// Deleting a member is a soft delete: the row stays, but the account can no
+// longer sign in and the sessions it already had stop working. That is the
+// whole point of the story, so it is checked end to end, through the same
+// routes the client calls.
+func TestDeletingAMemberEndsTheirSessionsAndBlocksSignIn(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+
+	created := env.do(t, http.MethodPost, "/v1/admin/users", admin.AccessToken, map[string]string{
+		"email":        "grace@example.com",
+		"password":     "grace-password",
+		"display_name": "Grace",
+		"role":         entities.RoleMember,
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create member = %d, body = %s", created.Code, created.Body.String())
+	}
+	grace := decodeInto[clientUser](t, created)
+
+	// Sign the member in, so there is a live session for the delete to end.
+	signIn := env.do(t, http.MethodPost, "/v1/auth/login", "", map[string]string{
+		"email": "grace@example.com", "password": "grace-password",
+	})
+	if signIn.Code != http.StatusOK {
+		t.Fatalf("member sign-in = %d, body = %s", signIn.Code, signIn.Body.String())
+	}
+	graceTokens := decodeInto[clientTokenPair](t, signIn)
+
+	deleted := env.do(t, http.MethodDelete, "/v1/admin/users/"+grace.ID, admin.AccessToken, nil)
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete member = %d, body = %s", deleted.Code, deleted.Body.String())
+	}
+	if body := deleted.Body.String(); body != "" {
+		t.Errorf("delete returned body %q, want none on a 204", body)
+	}
+
+	// The session that was open when the row changed must not rotate.
+	rotated := env.do(t, http.MethodPost, "/v1/auth/refresh", "", map[string]string{
+		"refresh_token": graceTokens.RefreshToken,
+	})
+	if rotated.Code != http.StatusUnauthorized {
+		t.Errorf("a deleted member's refresh = %d, want 401", rotated.Code)
+	}
+
+	// And the account must not be able to start a new session.
+	again := env.do(t, http.MethodPost, "/v1/auth/login", "", map[string]string{
+		"email": "grace@example.com", "password": "grace-password",
+	})
+	if again.Code != http.StatusUnauthorized {
+		t.Errorf("sign-in after deletion = %d, want 401", again.Code)
+	}
+
+	// The row is still there, but it left the live list.
+	list := decodeInto[[]clientUser](t, env.do(t, http.MethodGet, "/v1/admin/users", admin.AccessToken, nil))
+	for _, u := range list {
+		if u.ID == grace.ID {
+			t.Errorf("a deleted member (%s) is still in the live list", grace.Email)
+		}
+	}
+}
+
+// Deleting the only admin would leave nobody able to manage users, so it is
+// refused. The caller's own role cannot decide this: the claim can outlive the
+// role it names, which is exactly the case constructed here.
+func TestDeletingTheLastAdminIsRefused(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+
+	// Demote the caller's row while the access token still claims admin, then
+	// promote a second account. The database now holds one admin, and the caller
+	// is not it.
+	demoted := env.do(t, http.MethodPatch, "/v1/admin/users/"+string(env.user.ID), admin.AccessToken,
+		map[string]string{"role": entities.RoleMember})
+	if demoted.Code != http.StatusOK {
+		t.Fatalf("demote caller = %d, body = %s", demoted.Code, demoted.Body.String())
+	}
+	created := env.do(t, http.MethodPost, "/v1/admin/users", admin.AccessToken, map[string]string{
+		"email": "root@example.com", "password": "root-password", "role": entities.RoleAdmin,
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create the remaining admin = %d, body = %s", created.Code, created.Body.String())
+	}
+	root := decodeInto[clientUser](t, created)
+
+	refused := env.do(t, http.MethodDelete, "/v1/admin/users/"+root.ID, admin.AccessToken, nil)
+	if refused.Code != http.StatusConflict {
+		t.Errorf("deleting the last admin = %d, want 409 (body %s)", refused.Code, refused.Body.String())
+	}
+}
+
+// The admin cannot delete their own account out from under their session.
+func TestDeletingYourselfIsRefused(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+
+	refused := env.do(t, http.MethodDelete, "/v1/admin/users/"+string(env.user.ID), admin.AccessToken, nil)
+	if refused.Code != http.StatusBadRequest {
+		t.Errorf("deleting yourself = %d, want 400 (body %s)", refused.Code, refused.Body.String())
 	}
 }

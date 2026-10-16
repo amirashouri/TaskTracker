@@ -114,6 +114,20 @@ func (r *UserRepository) VerifyPassword(ctx context.Context, email, password str
 	return u, nil
 }
 
+// CountByRole returns how many accounts hold the role and have not been
+// soft-deleted. Deleting the last admin is what it exists to prevent: an
+// account that has been deleted cannot manage users, so it must not count.
+func (r *UserRepository) CountByRole(ctx context.Context, role string) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE role = $1 AND COALESCE(status, '') <> $2`,
+		role, StatusDeleted).Scan(&n)
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // List returns every user that has not been soft-deleted, newest first.
 func (r *UserRepository) List(ctx context.Context) ([]*User, error) {
 	return r.list(ctx, false)

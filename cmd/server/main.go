@@ -79,7 +79,7 @@ func runServer() {
 	authHandler := auth.NewHandler(jwtManager, userRepo, tokenStore, limiter)
 
 	// Initialize admin handler
-	adminHandler := admin.NewHandler(userRepo)
+	adminHandler := admin.NewHandler(userRepo, tokenStore)
 
 	// Initialize sync handler
 	syncHandler := sync.NewHandler(syncEngine, jwtManager)
@@ -190,7 +190,7 @@ func mount(
 	mux.Handle("POST /v1/admin/users", adminMW(http.HandlerFunc(adminHandler.Create)))
 	mux.Handle("GET /v1/admin/users", adminMW(http.HandlerFunc(adminHandler.List)))
 	mux.Handle("PATCH /v1/admin/users/{id}", adminMW(http.HandlerFunc(adminHandler.Update)))
-	mux.Handle("DELETE /v1/admin/users/{id}", adminMW(http.HandlerFunc(adminHandler.Deactivate)))
+	mux.Handle("DELETE /v1/admin/users/{id}", adminMW(http.HandlerFunc(adminHandler.Delete)))
 
 	// Directory search (any authenticated user)
 	mux.Handle("GET /v1/users/search", middleware.Auth(jwtManager)(http.HandlerFunc(adminHandler.Search)))

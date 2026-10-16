@@ -6,6 +6,7 @@ package admin
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
@@ -13,11 +14,12 @@ import (
 )
 
 type Handler struct {
-	users *entities.UserRepository
+	users  *entities.UserRepository
+	tokens *auth.TokenStore
 }
 
-func NewHandler(users *entities.UserRepository) *Handler {
-	return &Handler{users: users}
+func NewHandler(users *entities.UserRepository, tokens *auth.TokenStore) *Handler {
+	return &Handler{users: users, tokens: tokens}
 }
 
 // ── Create ──────────────────────────────────────────────────────────
@@ -150,22 +152,56 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, toUserResponse(user))
 }
 
-// ── Deactivate ──────────────────────────────────────────────────────
+// ── Delete ──────────────────────────────────────────────────────────
 
-func (h *Handler) Deactivate(w http.ResponseWriter, r *http.Request) {
+// Delete removes a member without removing the row. The account is marked
+// deleted, which is what refuses its next sign-in and refresh, and every live
+// refresh token is revoked so sessions that are already open stop rotating.
+// The row itself stays: sync_log and project_members still reference it, and a
+// reactivate has to be able to find it.
+func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
 		httpx.WriteError(w, http.StatusBadRequest, "user id is required")
 		return
 	}
 
-	callerID, _ := auth.UserFrom(r.Context())
-	if callerID == id {
-		httpx.WriteError(w, http.StatusBadRequest, "cannot deactivate yourself")
+	if callerID, ok := auth.UserFrom(r.Context()); ok && callerID == id {
+		httpx.WriteError(w, http.StatusBadRequest, "cannot delete yourself")
 		return
 	}
 
-	if err := h.users.SetStatus(r.Context(), entities.UserID(id), "inactive"); err != nil {
+	user, err := h.users.GetByID(r.Context(), entities.UserID(id))
+	if err != nil || user == nil {
+		httpx.WriteError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	// Deleting the only admin would leave nobody able to manage users. The caller
+	// is an admin by claim, but a claim can outlive the role it names, so the
+	// count is what decides — not the caller's own role.
+	if user.Role == entities.RoleAdmin {
+		admins, err := h.users.CountByRole(r.Context(), entities.RoleAdmin)
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "could not count admins")
+			return
+		}
+		if admins <= 1 {
+			httpx.WriteError(w, http.StatusConflict, "cannot delete the last admin")
+			return
+		}
+	}
+
+	// Revoke before flipping the status. The other order leaves a window in which
+	// a refresh in flight is still accepted and mints a token the revoke never
+	// sees; this order makes that refresh hit a revoked token and be treated as
+	// reuse, which ends the family instead.
+	if err := h.tokens.RevokeAllForUser(r.Context(), id, time.Now()); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke user sessions")
+		return
+	}
+
+	if err := h.users.SetStatus(r.Context(), entities.UserID(id), entities.StatusDeleted); err != nil {
 		httpx.WriteError(w, http.StatusNotFound, "user not found")
 		return
 	}

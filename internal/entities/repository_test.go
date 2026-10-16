@@ -136,6 +136,37 @@ func containsEmail(users []*User, email string) bool {
 	return false
 }
 
+// CountByRole is what stops the last admin from being deleted, so a deleted
+// admin must not count.
+func TestCountByRoleIgnoresDeletedAccounts(t *testing.T) {
+	database := newTestDB(t)
+	repo := NewUserRepository(database.DB)
+	ctx := context.Background()
+
+	first := &User{Email: "first@example.com", PasswordHash: "x", Role: RoleAdmin}
+	second := &User{Email: "second@example.com", PasswordHash: "x", Role: RoleAdmin}
+	member := &User{Email: "member@example.com", PasswordHash: "x", Role: RoleMember}
+	for _, u := range []*User{first, second, member} {
+		if err := repo.Create(ctx, u); err != nil {
+			t.Fatalf("create %s: %v", u.Email, err)
+		}
+	}
+
+	if n, err := repo.CountByRole(ctx, RoleAdmin); err != nil || n != 2 {
+		t.Fatalf("CountByRole(admin) = %d, %v, want 2", n, err)
+	}
+
+	if err := repo.SetStatus(ctx, second.ID, StatusDeleted); err != nil {
+		t.Fatalf("delete admin: %v", err)
+	}
+	if n, err := repo.CountByRole(ctx, RoleAdmin); err != nil || n != 1 {
+		t.Errorf("CountByRole(admin) = %d, %v, want 1: a deleted admin must not count", n, err)
+	}
+	if n, err := repo.CountByRole(ctx, RoleMember); err != nil || n != 1 {
+		t.Errorf("CountByRole(member) = %d, %v, want 1", n, err)
+	}
+}
+
 func TestProjectRoundTripMembersAndClientID(t *testing.T) {
 	database := newTestDB(t)
 	users := NewUserRepository(database.DB)
