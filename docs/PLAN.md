@@ -36,7 +36,7 @@ are the way they are; this file is *what to do next*.
 | 5 — Observability and ops | T5.1–T5.5 done; T5.6 not started |
 | 6 — Testing | **Done** |
 | 7 — Client contract | **Done** |
-| 8 — Admin management | T8.1–T8.6 done; T8.7 blocked on the client; T8.8 done |
+| 8 — Admin management | **Done** — T8.1–T8.8; T8.7 closed as unnecessary (the role is already on the JWT claim the client reads) |
 
 ---
 
@@ -1036,22 +1036,31 @@ nested object.
 `cmd/server/contract_test.go` — `TestAdminProjectEditSavesTheProjectAndReachesTheFeed`,
 `TestAdminProjectListSplitsActiveFromArchived`.
 
-### T8.7 — `role` on the auth token pair (blocked)
+### T8.7 — `role` on the auth token pair (closed: not needed)
 
 The admin client decides whether to show the settings screen from the signed-in
-user's role. The `role` is on the JWT claim and on the user object, but not on
-the token pair's envelope, so the client has nothing to read at sign-in without a
-second request.
+user's role. This task assumed the role had to reach the client through the token
+pair's envelope, because the envelope carries `user_id`, `email` and
+`display_name`. That premise was wrong.
 
-This is **client first**: the KMP `AuthTokenResponse` must declare `role` with a
-default, ship, and only then may this server send it. The client reads
-`ignoreUnknownKeys` off, so sending it before the client declares it would fail
-every installed build's sign-in.
+The role is already on the JWT the server issues — `internal/auth` puts a `role`
+claim on both the access and the refresh token — and the client derives identity
+from that token rather than from the envelope's `user_*` fields. It reads the
+role from the claim, so there is nothing for the server to add.
 
-**Files:** `internal/auth/auth.go`, `cmd/server/contract_test.go` (its
-`clientTokenPair`).
+Adding `role` to the envelope would in fact be **wrong**, not merely redundant.
+The client leaves `ignoreUnknownKeys` off, so an undeclared key fails decoding —
+the exact failure that removed `token_type` and `expires_in` in T7.1. The client
+declares no `role` on its `AuthTokenResponse`, and `clientTokenPair` in
+`cmd/server/contract_test.go` asserts five keys precisely because that count is
+the contract.
 
-**Blocks:** the client's role-gated settings screen.
+**Resolved on the client.** KMP `CLI-1` reads the claim (`JWT.Claims.role`) into
+`UserIdentity.role`, failing closed to `Member` for an absent or unknown value.
+No server change, and the "client first" ordering this task described never
+starts.
+
+**Files:** none — this records why nothing ships.
 
 ### T8.8 — Document the admin surfaces (done)
 
