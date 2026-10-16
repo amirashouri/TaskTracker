@@ -199,6 +199,7 @@ func mount(
 
 	// Admin project routes. Projects are otherwise reachable only through the
 	// sync feed, which is scoped to membership; an admin manages every project.
+	mux.Handle("GET /v1/admin/projects", adminMW(http.HandlerFunc(projectHandler.List)))
 	mux.Handle("PATCH /v1/admin/projects/{id}", adminMW(http.HandlerFunc(projectHandler.Update)))
 
 	// Directory search (any authenticated user)

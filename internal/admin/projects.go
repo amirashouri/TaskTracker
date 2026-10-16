@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
@@ -21,6 +22,45 @@ type ProjectHandler struct {
 
 func NewProjectHandler(projects *entities.ProjectRepository, engine *sync.Engine) *ProjectHandler {
 	return &ProjectHandler{projects: projects, engine: engine}
+}
+
+// The buckets the projects screen's segmented control switches between. They
+// name the archived flag, which is a project's own state -- not the "deleted"
+// bucket the members list uses, where the row is gone.
+const (
+	projectStatusActive   = "active"
+	projectStatusArchived = "archived"
+)
+
+// List returns the server's projects in one bucket: the active ones by default,
+// or the archived ones with ?status=archived. Unlike the sync feed, which a
+// client sees only for its own projects, this is every project on the server.
+func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	if status == "" {
+		status = projectStatusActive
+	}
+	if status != projectStatusActive && status != projectStatusArchived {
+		httpx.WriteError(w, http.StatusBadRequest, "status must be 'active' or 'archived'")
+		return
+	}
+
+	archived := status == projectStatusArchived
+	projects, err := h.projects.List(r.Context(), archived)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not list projects")
+		return
+	}
+
+	// List already drops archived rows when they are not wanted; this keeps the
+	// archived bucket to archived rows only, since that call must include them.
+	resp := make([]*entities.Project, 0, len(projects))
+	for _, p := range projects {
+		if p.IsArchived == archived {
+			resp = append(resp, p)
+		}
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 // ── Update ──────────────────────────────────────────────────────────

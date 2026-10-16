@@ -834,3 +834,49 @@ func TestAdminProjectEditSavesTheProjectAndReachesTheFeed(t *testing.T) {
 		t.Errorf("editing an unknown project = %d, want 404 (body %s)", missing.Code, missing.Body.String())
 	}
 }
+
+// The projects screen has two buckets, and the default has to be the active one:
+// an admin opening the screen should be looking at live work, not the archive.
+func TestAdminProjectListSplitsActiveFromArchived(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+
+	type listedProject struct {
+		ID         string `json:"id"`
+		IsArchived bool   `json:"isArchived"`
+	}
+
+	// An archived project, created the way a client would create one.
+	const archivedID = "11111111-1111-1111-1111-111111111111"
+	payload := fmt.Sprintf(
+		`{"id":%q,"keyPrefix":"ARC","name":"Old work","details":"","memberIds":[%q],"isArchived":true,"nextItemNumber":1,"createdAt":"1970-01-01T00:00:00Z","updatedAt":"1970-01-01T00:00:00Z","version":""}`,
+		archivedID, string(env.user.ID))
+	pushed := env.do(t, http.MethodPost, "/v1/sync/push", admin.AccessToken, map[string]any{
+		"changes": []map[string]any{{
+			"id": "a1", "entity": "project", "entityId": archivedID,
+			"operation": "upsert", "payload": payload,
+		}},
+	})
+	if pushed.Code != http.StatusOK {
+		t.Fatalf("seed archived project = %d, body = %s", pushed.Code, pushed.Body.String())
+	}
+
+	active := decodeInto[[]listedProject](t, env.do(t, http.MethodGet, "/v1/admin/projects", admin.AccessToken, nil))
+	if len(active) != 1 || active[0].ID != string(env.project.ID) {
+		t.Errorf("the default list = %+v, want just the active fixture project %s", active, env.project.ID)
+	}
+
+	archived := decodeInto[[]listedProject](t, env.do(t, http.MethodGet, "/v1/admin/projects?status=archived", admin.AccessToken, nil))
+	if len(archived) != 1 || archived[0].ID != archivedID {
+		t.Errorf("the archived bucket = %+v, want just the archived project %s", archived, archivedID)
+	}
+	if len(archived) == 1 && !archived[0].IsArchived {
+		t.Error("the archived bucket holds a project that is not archived")
+	}
+
+	// A bucket name the server does not know is a client bug, not an empty list.
+	bad := env.do(t, http.MethodGet, "/v1/admin/projects?status=deleted", admin.AccessToken, nil)
+	if bad.Code != http.StatusBadRequest {
+		t.Errorf("listing an unknown bucket = %d, want 400 (body %s)", bad.Code, bad.Body.String())
+	}
+}
