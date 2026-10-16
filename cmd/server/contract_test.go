@@ -615,3 +615,118 @@ func TestDeletingYourselfIsRefused(t *testing.T) {
 		t.Errorf("deleting yourself = %d, want 400 (body %s)", refused.Code, refused.Body.String())
 	}
 }
+
+// The members screen has two buckets behind a segmented control, and the live
+// one is the default. A deleted member must appear in exactly one of them.
+func TestMembersListSplitsActiveFromDeleted(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+
+	created := env.do(t, http.MethodPost, "/v1/admin/users", admin.AccessToken, map[string]string{
+		"email": "grace@example.com", "password": "grace-password",
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create member = %d, body = %s", created.Code, created.Body.String())
+	}
+	grace := decodeInto[clientUser](t, created)
+
+	if rec := env.do(t, http.MethodDelete, "/v1/admin/users/"+grace.ID, admin.AccessToken, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete member = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	// No parameter means the live bucket, and grace is not in it.
+	defaultList := decodeInto[[]clientUser](t, env.do(t, http.MethodGet, "/v1/admin/users", admin.AccessToken, nil))
+	for _, u := range defaultList {
+		if u.ID == grace.ID {
+			t.Errorf("the default list contains the deleted member %s", u.Email)
+		}
+	}
+
+	// ?status=deleted is the other bucket, and grace is in it.
+	deletedList := decodeInto[[]clientUser](t, env.do(t, http.MethodGet, "/v1/admin/users?status=deleted", admin.AccessToken, nil))
+	found := false
+	for _, u := range deletedList {
+		if u.ID == grace.ID {
+			found = true
+			if u.Status != entities.StatusDeleted {
+				t.Errorf("deleted bucket row status = %q, want %q", u.Status, entities.StatusDeleted)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the deleted bucket does not contain %s (got %+v)", grace.Email, deletedList)
+	}
+
+	// A bucket name the server does not know is a client bug, not an empty list.
+	bad := env.do(t, http.MethodGet, "/v1/admin/users?status=archived", admin.AccessToken, nil)
+	if bad.Code != http.StatusBadRequest {
+		t.Errorf("listing an unknown bucket = %d, want 400 (body %s)", bad.Code, bad.Body.String())
+	}
+}
+
+// Reactivating a deleted member is a status write, and it has to actually
+// restore access -- sign-in was refused by the deleted status.
+func TestReactivatingADeletedMemberLetsThemSignInAgain(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+
+	created := env.do(t, http.MethodPost, "/v1/admin/users", admin.AccessToken, map[string]string{
+		"email": "grace@example.com", "password": "grace-password",
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create member = %d, body = %s", created.Code, created.Body.String())
+	}
+	grace := decodeInto[clientUser](t, created)
+
+	if rec := env.do(t, http.MethodDelete, "/v1/admin/users/"+grace.ID, admin.AccessToken, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete member = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	blocked := env.do(t, http.MethodPost, "/v1/auth/login", "", map[string]string{
+		"email": "grace@example.com", "password": "grace-password",
+	})
+	if blocked.Code != http.StatusUnauthorized {
+		t.Fatalf("sign-in while deleted = %d, want 401", blocked.Code)
+	}
+
+	reactivated := env.do(t, http.MethodPatch, "/v1/admin/users/"+grace.ID, admin.AccessToken,
+		map[string]string{"status": entities.StatusActive})
+	if reactivated.Code != http.StatusOK {
+		t.Fatalf("reactivate = %d, body = %s", reactivated.Code, reactivated.Body.String())
+	}
+
+	allowed := env.do(t, http.MethodPost, "/v1/auth/login", "", map[string]string{
+		"email": "grace@example.com", "password": "grace-password",
+	})
+	if allowed.Code != http.StatusOK {
+		t.Errorf("sign-in after reactivation = %d, want 200 (body %s)", allowed.Code, allowed.Body.String())
+	}
+}
+
+// Deleting through a status write would skip the session revocation DELETE
+// performs, so it is refused and the member is told to use DELETE.
+func TestStatusCannotBeSetToDeletedThroughUpdate(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+
+	created := env.do(t, http.MethodPost, "/v1/admin/users", admin.AccessToken, map[string]string{
+		"email": "grace@example.com", "password": "grace-password",
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create member = %d, body = %s", created.Code, created.Body.String())
+	}
+	grace := decodeInto[clientUser](t, created)
+
+	refused := env.do(t, http.MethodPatch, "/v1/admin/users/"+grace.ID, admin.AccessToken,
+		map[string]string{"status": entities.StatusDeleted})
+	if refused.Code != http.StatusBadRequest {
+		t.Errorf("PATCH status=deleted = %d, want 400 (body %s)", refused.Code, refused.Body.String())
+	}
+
+	// And it must not have taken effect on the way to the error.
+	list := decodeInto[[]clientUser](t, env.do(t, http.MethodGet, "/v1/admin/users", admin.AccessToken, nil))
+	for _, u := range list {
+		if u.ID == grace.ID && u.Status == entities.StatusDeleted {
+			t.Error("the refused write still marked the member deleted")
+		}
+	}
+}

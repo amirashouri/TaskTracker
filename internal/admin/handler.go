@@ -78,8 +78,31 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 // ── List ────────────────────────────────────────────────────────────
 
+// List returns the members in one bucket: the live ones by default, or the
+// deleted ones with ?status=deleted. The two buckets are what the members
+// screen's segmented control switches between, so the default has to be the
+// live one.
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	users, err := h.users.List(r.Context())
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	if status == "" {
+		status = entities.StatusActive
+	}
+
+	var (
+		users []*entities.User
+		err   error
+	)
+	switch status {
+	case entities.StatusActive:
+		// "active" is the whole non-deleted bucket: an inactive member is still a
+		// member who can be managed, and only a deleted one is gone.
+		users, err = h.users.List(r.Context())
+	case entities.StatusDeleted:
+		users, err = h.users.ListDeleted(r.Context())
+	default:
+		httpx.WriteError(w, http.StatusBadRequest, "status must be 'active' or 'deleted'")
+		return
+	}
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not list users")
 		return
@@ -127,7 +150,16 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		user.Position = *req.Position
 	}
 	if req.Status != nil {
-		user.Status = *req.Status
+		status := strings.TrimSpace(*req.Status)
+		// Removing access has to go through DELETE, which revokes the member's
+		// sessions. Letting a status write mark an account deleted would leave them
+		// signed in, so `deleted` is refused here by name.
+		if status != entities.StatusActive && status != entities.StatusInactive {
+			httpx.WriteError(w, http.StatusBadRequest,
+				"status must be 'active' or 'inactive'; DELETE the member to remove access")
+			return
+		}
+		user.Status = status
 	}
 
 	if err := h.users.Update(r.Context(), user); err != nil {
