@@ -374,6 +374,64 @@ func TestRotateReportsReuseAndRevokesTheFamily(t *testing.T) {
 
 // Repeated guesses from one address must be throttled, not merely slowed by
 // bcrypt.
+// A deleted account keeps its row but must not be able to sign in again. The
+// answer is the same 401 a wrong password gets, so the response cannot be used
+// to tell a deleted account from a mistyped one.
+func TestSignInRejectsADeletedUser(t *testing.T) {
+	env := newTestEnv(t)
+	if err := env.users.SetStatus(context.Background(), env.user.ID, entities.StatusDeleted); err != nil {
+		t.Fatalf("delete user: %v", err)
+	}
+
+	rec := postJSON(t, env.handler.SignIn, map[string]string{
+		"email": "ada@example.com", "password": "correct horse battery",
+	})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("sign-in by a deleted user = %d, want 401 (body %s)", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "invalid credentials") {
+		t.Errorf("deleted-user sign-in body = %s, want the same message a wrong password gets", body)
+	}
+}
+
+// A session that was live when the account was deleted must not be able to
+// rotate — and the deletion must revoke the family, not merely refuse once.
+func TestRefreshRejectsADeletedUserAndRevokesTheFamily(t *testing.T) {
+	env := newTestEnv(t)
+	tokens := env.signIn(t)
+
+	if err := env.users.SetStatus(context.Background(), env.user.ID, entities.StatusDeleted); err != nil {
+		t.Fatalf("delete user: %v", err)
+	}
+
+	rec := env.refresh(t, tokens.RefreshToken)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("refresh after deletion = %d, want 401 (body %s)", rec.Code, rec.Body.String())
+	}
+	if live := env.stored(t, tokens.RefreshToken); !live.Revoked() {
+		t.Error("refreshing a deleted user's token did not revoke the family, so the deletion can be outlived")
+	}
+	if again := env.refresh(t, tokens.RefreshToken); again.Code != http.StatusUnauthorized {
+		t.Errorf("a revoked token after deletion = %d, want 401", again.Code)
+	}
+}
+
+// An inactive account is not deleted, and must keep working: only `deleted`
+// blocks a session.
+func TestSignInStillAcceptsAnInactiveUser(t *testing.T) {
+	env := newTestEnv(t)
+	if err := env.users.SetStatus(context.Background(), env.user.ID, entities.StatusInactive); err != nil {
+		t.Fatalf("set inactive: %v", err)
+	}
+
+	rec := postJSON(t, env.handler.SignIn, map[string]string{
+		"email": "ada@example.com", "password": "correct horse battery",
+	})
+	if rec.Code != http.StatusOK {
+		t.Errorf("sign-in by an inactive user = %d, want 200 (only `deleted` blocks)", rec.Code)
+	}
+}
+
 func TestSignInThrottlesPerAddress(t *testing.T) {
 	env := newTestEnv(t)
 	env.handler.limiter = ratelimit.New(2, time.Minute)

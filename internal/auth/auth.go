@@ -204,6 +204,15 @@ func (h *Handler) SignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A deleted account keeps its row but must not be able to start a session.
+	// The check sits after the password so a deleted account is indistinguishable
+	// from a wrong one, and before the counter reset so it cannot clear the
+	// throttle on the way out.
+	if user.Status == entities.StatusDeleted {
+		httpx.WriteError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
 	// Clear the account's counter on success so a few typos do not lock a user
 	// out. The address counter is left alone, so spraying stays limited.
 	h.limiter.Reset("email:" + email)
@@ -279,6 +288,18 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.users.GetByID(r.Context(), entities.UserID(claims.UserID))
 	if err != nil || user == nil {
+		httpx.WriteError(w, http.StatusUnauthorized, "invalid refresh token")
+		return
+	}
+
+	// The account was deleted while this session was live. Revoking the family is
+	// what stops the deletion from being outlived by a rotation; returning 401 is
+	// the same answer a signed-out token gets, so the two are indistinguishable.
+	if user.Status == entities.StatusDeleted {
+		if err := h.tokens.RevokeFamily(r.Context(), presented.FamilyID, h.jwt.now()); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "could not revoke refresh token")
+			return
+		}
 		httpx.WriteError(w, http.StatusUnauthorized, "invalid refresh token")
 		return
 	}
