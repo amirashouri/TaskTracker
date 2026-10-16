@@ -1,4 +1,4 @@
-# Plan
+# TaskTrackerServer — Plan
 
 The implementation roadmap. Each task is self-contained, ordered, and sized for
 one branch and one merge request. `docs/ARCHITECTURE.md` explains *why* things
