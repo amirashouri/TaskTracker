@@ -46,6 +46,12 @@ func (r *UserRepository) Create(ctx context.Context, u *User) error {
 	if u.Role == "" {
 		u.Role = RoleMember
 	}
+	// A created account is active unless the caller says otherwise. Leaving the
+	// column empty works too, but an explicit value is what lets "deleted" be the
+	// only status that means "gone".
+	if u.Status == "" {
+		u.Status = StatusActive
+	}
 
 	// Hash password
 	hashed, err := bcrypt.GenerateFromPassword([]byte(u.PasswordHash), bcrypt.DefaultCost)
@@ -108,9 +114,32 @@ func (r *UserRepository) VerifyPassword(ctx context.Context, email, password str
 	return u, nil
 }
 
+// List returns every user that has not been soft-deleted, newest first.
 func (r *UserRepository) List(ctx context.Context) ([]*User, error) {
-	query := `SELECT ` + userColumns + ` FROM users ORDER BY created_at DESC`
-	rows, err := r.db.QueryContext(ctx, query)
+	return r.list(ctx, false)
+}
+
+// ListDeleted returns only soft-deleted users, newest first. A deleted account
+// stays in the table (see StatusDeleted), so it has to be asked for by name
+// rather than simply having disappeared from List.
+func (r *UserRepository) ListDeleted(ctx context.Context) ([]*User, error) {
+	return r.list(ctx, true)
+}
+
+func (r *UserRepository) list(ctx context.Context, deleted bool) ([]*User, error) {
+	query := `SELECT ` + userColumns + ` FROM users`
+	// Only `deleted` is excluded from the live list. An inactive or blank status
+	// is still a present account: this story adds the delete bucket, it does not
+	// reclassify the labels that already existed. COALESCE covers a row written
+	// before the column carried a default, where the status is NULL.
+	if deleted {
+		query += ` WHERE status = $1`
+	} else {
+		query += ` WHERE COALESCE(status, '') <> $1`
+	}
+	query += ` ORDER BY created_at DESC`
+
+	rows, err := r.db.QueryContext(ctx, query, StatusDeleted)
 	if err != nil {
 		return nil, err
 	}

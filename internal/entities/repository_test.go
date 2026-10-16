@@ -72,6 +72,70 @@ func TestUserRoundTripPreservesMillis(t *testing.T) {
 	}
 }
 
+// A deleted account is a separate bucket, and it is the *only* status that
+// leaves the live list. An inactive or blank status is still a present user:
+// this story adds the delete bucket, it does not reclassify what already existed.
+func TestListSplitsDeletedFromEveryOtherStatus(t *testing.T) {
+	database := newTestDB(t)
+	repo := NewUserRepository(database.DB)
+	ctx := context.Background()
+
+	fresh := mustCreateUser(t, repo, "fresh@example.com")
+	if fresh.Status != StatusActive {
+		t.Errorf("a created user's status = %q, want %q", fresh.Status, StatusActive)
+	}
+
+	inactive := mustCreateUser(t, repo, "inactive@example.com")
+	if err := repo.SetStatus(ctx, inactive.ID, StatusInactive); err != nil {
+		t.Fatalf("set inactive: %v", err)
+	}
+	blank := mustCreateUser(t, repo, "blank@example.com")
+	if err := repo.SetStatus(ctx, blank.ID, ""); err != nil {
+		t.Fatalf("set blank: %v", err)
+	}
+	removed := mustCreateUser(t, repo, "removed@example.com")
+	if err := repo.SetStatus(ctx, removed.ID, StatusDeleted); err != nil {
+		t.Fatalf("set deleted: %v", err)
+	}
+
+	live, err := repo.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if want := 3; len(live) != want {
+		t.Errorf("List returned %d users (%v), want the %d that are not deleted",
+			len(live), emailsOf(live), want)
+	}
+	if containsEmail(live, "removed@example.com") {
+		t.Error("List returned a deleted user; `deleted` is not excluded from the live list")
+	}
+
+	gone, err := repo.ListDeleted(ctx)
+	if err != nil {
+		t.Fatalf("list deleted: %v", err)
+	}
+	if len(gone) != 1 || gone[0].ID != removed.ID {
+		t.Errorf("ListDeleted = %v, want just removed@example.com", emailsOf(gone))
+	}
+}
+
+func emailsOf(users []*User) []string {
+	emails := make([]string, 0, len(users))
+	for _, u := range users {
+		emails = append(emails, u.Email)
+	}
+	return emails
+}
+
+func containsEmail(users []*User, email string) bool {
+	for _, u := range users {
+		if u.Email == email {
+			return true
+		}
+	}
+	return false
+}
+
 func TestProjectRoundTripMembersAndClientID(t *testing.T) {
 	database := newTestDB(t)
 	users := NewUserRepository(database.DB)

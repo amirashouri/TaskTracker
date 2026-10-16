@@ -34,6 +34,20 @@ const (
 	RoleMember = "member"
 )
 
+// User status values. The column is free text, so these constants are the only
+// place the vocabulary is written down.
+//
+// Deleted is a soft delete: the row is kept so sync_log and project_members
+// keep their referential integrity, but the account can no longer sign in and
+// its refresh tokens are revoked. It is deliberately distinct from a bare
+// status string so "the admin removed this person" can never be confused with
+// any other label the column might carry.
+const (
+	StatusActive   = "active"
+	StatusInactive = "inactive"
+	StatusDeleted  = "deleted"
+)
+
 type User struct {
 	ID           UserID `json:"id"`
 	Email        string `json:"email"`
