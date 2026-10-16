@@ -36,6 +36,7 @@ are the way they are; this file is *what to do next*.
 | 5 — Observability and ops | T5.1–T5.5 done; T5.6 not started |
 | 6 — Testing | **Done** |
 | 7 — Client contract | **Done** |
+| 8 — Admin management | T8.1–T8.6 done; T8.7 blocked on the client; T8.8 done |
 
 ---
 
@@ -932,4 +933,134 @@ executable.
 Reintroducing the `entityID` rename turns
 `TestThePullResponseIsWhatTheClientDecodes` red; so does pointing the plural pull
 routes elsewhere.
+
+---
+
+## Milestone 8 — Admin management
+
+The story the admin surfaces grew out of: an admin manages members and projects
+from the settings screen. Members could be created and deactivated but not
+removed; projects could not be managed at all outside a membership. This
+milestone makes deletion a real, session-ending operation and gives the admin
+server-wide project screens, then teaches the client to consume them.
+
+Everything here is on the server side of the contract in
+`docs/ARCHITECTURE.md` (E5–E7) and `docs/API.md`.
+
+### T8.1 — A status vocabulary with `deleted` as its own bucket (done)
+
+Done. `StatusActive`, `StatusInactive` and `StatusDeleted` are named constants.
+`UserRepository.Create` defaults `status` to `"active"`, `List` returns every
+status *except* `deleted`, and a new `ListDeleted` returns exactly those. Only
+`deleted` is withheld from the live list: an `inactive` member can still sign in
+and be managed.
+
+**Files:** `internal/entities/models.go`, `internal/entities/user_repository.go`.
+
+**Tests:** `internal/entities/repository_test.go` →
+`TestListSplitsDeletedFromEveryOtherStatus`.
+
+### T8.2 — Refuse sign-in and refresh for a deleted user (done)
+
+Done. `SignIn` checks the status *after* the password so the answer is the same
+`401` a wrong password gets — the response cannot be used to tell a deleted
+account from a mistyped one. `Refresh` revokes the presented token's family and
+returns `401`. An `inactive` user is still accepted.
+
+**Files:** `internal/auth/auth.go`.
+
+**Tests:** `internal/auth/auth_test.go` — `TestSignInRejectsADeletedUser`,
+`TestRefreshRejectsADeletedUserAndRevokesTheFamily`,
+`TestSignInStillAcceptsAnInactiveUser`.
+
+### T8.3 — `RevokeAllForUser` (done)
+
+Done. `RevokeFamily` closes one sign-in; a member may hold several. The new store
+method revokes every live token a user holds, scoped to that user, marking rows
+revoked rather than deleting them so reuse detection keeps working.
+
+**Files:** `internal/auth/token_store.go`.
+
+**Tests:** `internal/auth/auth_test.go` →
+`TestRevokeAllForUserEndsEverySessionForThatUserOnly`.
+
+### T8.4 — `DELETE /v1/admin/users/{id}` ends the member's sessions (done)
+
+Done. The route used to set `"inactive"` and leave every token alive. It now
+marks the account `deleted` and revokes the member's tokens, revoking *before*
+the status write to close the window in which a refresh in flight mints a token
+the revoke never sees. Deleting yourself is `400`; deleting the last admin is
+`409`, counted from admin rows rather than the caller's claim. `NewHandler` takes
+the token store for this.
+
+**Files:** `internal/admin/handler.go`, `internal/admin/handler_test.go`,
+`internal/entities/user_repository.go` (`CountByRole`), `cmd/server/main.go`.
+
+**Tests:** `cmd/server/contract_test.go` —
+`TestDeletingAMemberEndsTheirSessionsAndBlocksSignIn`,
+`TestDeletingTheLastAdminIsRefused`, `TestDeletingYourselfIsRefused`; and
+`internal/admin/handler_test.go` → `TestDeleteRevokesTheTargetsLiveTokens`, which
+reads the store directly because the status check alone would mask a missing
+revoke.
+
+### T8.5 — Members in two buckets, and reactivation (done)
+
+Done. `GET /v1/admin/users?status=active|deleted` defaults to `active` (the whole
+non-deleted set) and answers `400` for an unknown bucket. Reactivating a deleted
+member is an ordinary `PATCH` of `"active"`. `PATCH` is refused the value
+`"deleted"` — a status write that marked an account deleted would bypass the
+revocation `DELETE` performs and leave the member signed in.
+
+**Files:** `internal/admin/handler.go`.
+
+**Tests:** `cmd/server/contract_test.go` — `TestMembersListSplitsActiveFromDeleted`,
+`TestReactivatingADeletedMemberLetsThemSignInAgain`,
+`TestStatusCannotBeSetToDeletedThroughUpdate`.
+
+### T8.6 — Admin project screens (done)
+
+Done. `GET /v1/admin/projects?status=active|archived` returns every project on
+the server; `PATCH /v1/admin/projects/{id}` takes the whole project and applies it
+through the sync engine, so the row and its change-feed entry commit together and
+the members pull the edit as they would one of their own. `Engine.ApplyAdminProject`
+shares `apply`'s body and skips only the membership check, which the admin route
+performs instead. The stored payload is the JSON *string* a client sends, not a
+nested object.
+
+**Files:** new `internal/admin/projects.go`, `internal/sync/engine.go`,
+`cmd/server/main.go`.
+
+**Tests:** `internal/sync/engine_test.go` —
+`TestApplyAdminProjectEditsAProjectTheAdminIsNotIn`,
+`TestPushStillRefusesANonMemberAfterTheAdminPathExists`; and
+`cmd/server/contract_test.go` — `TestAdminProjectEditSavesTheProjectAndReachesTheFeed`,
+`TestAdminProjectListSplitsActiveFromArchived`.
+
+### T8.7 — `role` on the auth token pair (blocked)
+
+The admin client decides whether to show the settings screen from the signed-in
+user's role. The `role` is on the JWT claim and on the user object, but not on
+the token pair's envelope, so the client has nothing to read at sign-in without a
+second request.
+
+This is **client first**: the KMP `AuthTokenResponse` must declare `role` with a
+default, ship, and only then may this server send it. The client reads
+`ignoreUnknownKeys` off, so sending it before the client declares it would fail
+every installed build's sign-in.
+
+**Files:** `internal/auth/auth.go`, `cmd/server/contract_test.go` (its
+`clientTokenPair`).
+
+**Blocks:** the client's role-gated settings screen.
+
+### T8.8 — Document the admin surfaces (done)
+
+Done. `docs/API.md` gains the members buckets, the delete/reactivate semantics,
+the `PATCH` status rule, and the admin project endpoints; `docs/USER-MANAGEMENT.md`
+replaces "deactivating" with deletion and the status table;
+`docs/ARCHITECTURE.md` records E6 (deletion ends sessions) and E7 (admin projects
+through the change feed).
+
+**Files:** `docs/API.md`, `docs/USER-MANAGEMENT.md`, `docs/ARCHITECTURE.md`,
+`docs/PLAN.md`.
 

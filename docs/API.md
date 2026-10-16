@@ -165,9 +165,23 @@ null.
 | `400` | `{"error": "role must be 'admin' or 'member'"}` |
 | `409` | `{"error": "email already registered"}` |
 
-### `GET /v1/admin/users` — admin only
+### `GET /v1/admin/users?status=` — admin only
 
-`200` with an array of user objects, newest first.
+`200` with an array of user objects, newest first, in one of two buckets:
+
+| `status` | Returns |
+| --- | --- |
+| omitted, or `active` | every user that has not been deleted, including `inactive` ones |
+| `deleted` | the soft-deleted users only |
+
+`?"status=active"` is the whole non-deleted set. An `inactive` member can still
+sign in and be managed; only `deleted` is gone. Any other value is a `400`, so a
+typo is not read as an empty list.
+
+| Status | Body |
+| --- | --- |
+| `200` | array of user objects |
+| `400` | `{"error": "status must be 'active' or 'deleted'"}` |
 
 ### `PATCH /v1/admin/users/{id}` — admin only
 
@@ -177,29 +191,108 @@ null.
 
 Every field is optional; only the ones present are applied.
 
+`status` may be set to `"active"` or `"inactive"`. It may **not** be set to
+`"deleted"`: removing a member's access has to go through `DELETE`, which also
+revokes their sessions. A status write that marked an account deleted would leave
+it signed in. Reactivating a deleted member is an ordinary status write of
+`"active"`.
+
 | Status | Body |
 | --- | --- |
 | `200` | updated user object |
 | `400` | `{"error": "role must be 'admin' or 'member'"}` |
+| `400` | `{"error": "status must be 'active' or 'inactive'; DELETE the member to remove access"}` |
 | `404` | `{"error": "user not found"}` |
 
 ### `DELETE /v1/admin/users/{id}` — admin only
 
-Sets `status` to `"inactive"`; the row is not deleted, so `sync_log` and
-`project_members` keep their referential integrity. A caller cannot deactivate
-themselves.
+Soft-deletes the member. The account is marked `"deleted"`, which refuses its
+next sign-in and refresh, and every live refresh token it holds is revoked so its
+open sessions stop rotating. The row is not removed, so `sync_log` and
+`project_members` keep their referential integrity and a reactivate can find it.
+
+Access tokens are stateless and are not revoked; one already issued stays usable
+until its `exp` (at most an hour).
 
 | Status | Body |
 | --- | --- |
 | `204` | (empty) |
-| `400` | `{"error": "cannot deactivate yourself"}` |
+| `400` | `{"error": "cannot delete yourself"}` |
 | `404` | `{"error": "user not found"}` |
+| `409` | `{"error": "cannot delete the last admin"}` |
+
+The last-admin refusal counts admin rows rather than trusting the caller's own
+role claim, because a claim can outlive the role it names.
 
 ### `GET /v1/users/search?q=` — any authenticated user
 
 Case-insensitive substring match on `email` and `display_name`, limited to 50
 results, newest first. `200` with an array of user objects. `400` when `q` is
 missing or empty.
+
+`search` does **not** exclude deleted members; it is the directory a member picks
+a collaborator from, and a deleted account is still the author of the work it
+left behind. The members list, which is about managing accounts, uses
+`?status=` and does exclude them.
+
+## Projects (admin)
+
+Projects otherwise reach a client only through the sync feed, which is scoped to
+membership. These routes are what let an admin see and edit every project on the
+server, whether or not they are a member of it. Both are admin only.
+
+The project object is the same shape the sync feed carries — the client's project
+model decodes either:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "keyPrefix": "TT",
+  "name": "Demo",
+  "details": "",
+  "memberIds": ["550e8400-e29b-41d4-a716-446655440000"],
+  "isArchived": false,
+  "nextItemNumber": 1,
+  "createdAt": "2026-09-26T20:13:32Z",
+  "updatedAt": "2026-09-26T20:13:32Z",
+  "version": "the-version-now-stored"
+}
+```
+
+### `GET /v1/admin/projects?status=` — admin only
+
+`200` with an array of project objects in one of two buckets, the same two the
+members list offers except that archiving is the project's own `isArchived` flag
+rather than a deleted state:
+
+| `status` | Returns |
+| --- | --- |
+| omitted, or `active` | projects with `isArchived` false |
+| `archived` | projects with `isArchived` true |
+
+| Status | Body |
+| --- | --- |
+| `200` | array of project objects |
+| `400` | `{"error": "status must be 'active' or 'archived'"}` |
+
+### `PATCH /v1/admin/projects/{id}` — admin only
+
+The body is the whole project, as the client holds it; the edit screen is seeded
+with the project and saves it back. `id` and `createdAt` are taken from the row,
+not from the body. `version` is the version the caller read: it is the
+compare-and-swap, and omitting it is last-write-wins, exactly as in a push.
+
+The edit is applied through the sync engine, so the row and its change-feed entry
+commit together, and the project's members pull the edit as they would one of
+their own. The response is the stored project, carrying the new `version` the
+client saves against next time.
+
+| Status | Body |
+| --- | --- |
+| `200` | the stored project object |
+| `400` | `{"error": "invalid request body"}` |
+| `404` | `{"error": "project not found"}` |
+| `409` | `{"error": "the project changed since it was read"}` |
 
 ## Sync
 

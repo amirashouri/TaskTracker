@@ -15,9 +15,9 @@ written down.
 
 ## Roles
 
-| Role | Can manage users? | Can use the system? |
+| Role | Can manage users and projects? | Can use the system? |
 | --- | --- | --- |
-| `admin` | Yes — create, list, update, deactivate | Yes |
+| `admin` | Yes — create, list, update, delete, reactivate; list and edit every project | Yes |
 | `member` | No | Yes |
 
 The role is stored in the `users.role` column (migration `0003`, both drivers)
@@ -89,16 +89,41 @@ docker exec -it <container-name> /app/server user-create \
   --email admin@example.com --password '...' --admin
 ```
 
-## Deactivating a user
+## Deleting a user
 
-`DELETE /v1/admin/users/{id}` sets `status` to `"inactive"` rather than deleting
-the row, which preserves referential integrity in `sync_log` and
-`project_members`. A caller cannot deactivate themselves.
+`DELETE /v1/admin/users/{id}` soft-deletes the member. The row's `status` becomes
+`"deleted"` — a value distinct from `"inactive"` — which is what refuses the
+account's next sign-in and refresh, and every live refresh token it holds is
+revoked so its open sessions stop rotating. The row is not removed, which
+preserves referential integrity in `sync_log` and `project_members`; a reactivate
+is therefore an ordinary `PATCH` of `"status": "active"` and finds the same row.
 
-Deactivation does **not** revoke the user's existing tokens. Their access token
-stays usable until it expires, and their refresh token keeps working until it
-does — so a deactivated user can still rotate. Treat deactivation as removing
-future access, and see the token lifecycle below for what that means in practice.
+There are two statuses that stop short of deletion, and the difference matters:
+
+| `status` | Can sign in? | In the members list? | Set by |
+| --- | --- | --- | --- |
+| `active` | yes | yes (`?status=active`, the default) | create, or `PATCH` |
+| `inactive` | yes | yes (still a member to manage) | `PATCH` |
+| `deleted` | no | no — only `?status=deleted` | `DELETE` only |
+
+`deleted` cannot be set through `PATCH`: removing access has to go through
+`DELETE`, which also revokes the sessions. A status write that marked an account
+deleted would leave it signed in.
+
+Two refusals protect the admin set: a caller cannot delete themselves, and the
+last remaining admin cannot be deleted (`409`). The second counts admin rows
+rather than trusting the caller's own `role` claim, because a claim can outlive
+the role it names.
+
+Deletion does **not** revoke access tokens — they are stateless and are checked
+only for `exp`. One already issued to the deleted member stays usable until it
+expires (at most an hour), so deletion removes future access immediately and past
+access within the token's remaining lifetime. The refresh token, by contrast, is
+revoked at once and can never be rotated again; the client is expected to sign the
+user out on that first `401`.
+
+An `inactive` member is still able to sign in. Use deletion, not deactivation,
+when the intent is to cut someone off.
 
 ## Token lifecycle
 
@@ -107,7 +132,7 @@ future access, and see the token lifecycle below for what that means in practice
 | Sign-in (`POST /v1/auth/login`) | A new token family is started; access + refresh issued |
 | Refresh (`POST /v1/auth/refresh`) | The presented refresh token is revoked and replaced in the same family |
 | Sign-out (`POST /v1/auth/signout`) | The entire token family is revoked |
-| Admin deactivates a user | The user's refresh tokens are not auto-revoked; their access token expires per TTL |
+| Admin deletes a user | Every live refresh token the user holds is revoked; access token expires per TTL |
 
 Refresh tokens rotate, and a token that was already rotated is treated as theft:
 presenting one revokes its whole family. That is what makes a stolen refresh
@@ -126,18 +151,22 @@ the client calls it best-effort before clearing local state.
 3. Create users →  POST /v1/admin/users  (admin token required)
 4. New users sign in independently with their own credentials
 5. Any user searches the directory →  GET /v1/users/search?q=...
-6. Admin updates or deactivates as needed →  PATCH / DELETE /v1/admin/users/{id}
+6. Admin updates, deletes or reactivates as needed →  PATCH / DELETE /v1/admin/users/{id}
+7. Admin lists and edits any project →  GET / PATCH /v1/admin/projects[...]
 ```
 
 ## Implementation reference
 
 | Component | File |
 | --- | --- |
-| Role constants & User model | `internal/entities/models.go` |
-| User repository (CRUD, UpdateRole, SetStatus, Search) | `internal/entities/user_repository.go` |
+| Role & status constants, User model | `internal/entities/models.go` |
+| User repository (CRUD, UpdateRole, SetStatus, List, ListDeleted, CountByRole, Search) | `internal/entities/user_repository.go` |
+| Refresh-token store (rotation, RevokeFamily, RevokeAllForUser) | `internal/auth/token_store.go` |
 | JWT claims with role | `internal/auth/auth.go` |
 | Auth + AdminOnly middleware | `internal/middleware/middleware.go` |
-| Admin handler (Create, List, Update, Deactivate, Search) | `internal/admin/handler.go` |
+| Admin user handler (Create, List, Update, Delete, Search) | `internal/admin/handler.go` |
+| Admin project handler (List, Update) | `internal/admin/projects.go` |
+| Sync engine, incl. ApplyAdminProject | `internal/sync/engine.go` |
 | CLI bootstrap command | `cmd/server/main.go` (`createUserCmd`) |
 | Route wiring | `cmd/server/main.go` (`mount`) |
 | Migration 0003 (role column) | `internal/db/migrations/0003_user_roles.{postgres,sqlite}.sql` |

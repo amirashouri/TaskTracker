@@ -51,8 +51,10 @@ internal/db/migrations    versioned SQL, one file per driver
 | `/v1/sync/changes/workItems` | GET | + Auth | cursor-paged pull; carries project changes too |
 | `/v1/sync/changes/project` | GET | + Auth | alias for `/projects`, kept for a build that shipped against it |
 | `/v1/sync/changes/workItem` | GET | + Auth | alias for `/workItems` |
-| `/v1/admin/users` | POST, GET | + Auth + AdminOnly | admin creates and lists users; no self-signup |
-| `/v1/admin/users/{id}` | PATCH, DELETE | + Auth + AdminOnly | admin updates or deactivates a user |
+| `/v1/admin/users` | POST, GET | + Auth + AdminOnly | admin creates users and lists them in the `active`/`deleted` buckets; no self-signup |
+| `/v1/admin/users/{id}` | PATCH, DELETE | + Auth + AdminOnly | admin updates, soft-deletes or reactivates a user |
+| `/v1/admin/projects` | GET | + Auth + AdminOnly | admin lists every project in the `active`/`archived` buckets |
+| `/v1/admin/projects/{id}` | PATCH | + Auth + AdminOnly | admin edits any project, applied through the sync engine |
 | `/v1/users/search` | GET | + Auth | directory search; any authenticated user |
 
 The offline-first sync design is the strongest part of the scaffold and matches
@@ -269,6 +271,28 @@ Severity is about what blocks a working server.
   (`GET /v1/users/search`) is open to any authenticated user so the KMP
   client's `TeamPort` can find teammates without admin privileges. See
   [`docs/USER-MANAGEMENT.md`](USER-MANAGEMENT.md).
+- **E6 — fixed.** Admin management could create and deactivate users but not
+  remove access. `DELETE /v1/admin/users/{id}` used to set `status` to
+  `"inactive"`, which still permits sign-in, and left every token alive, so a
+  "deleted" member stayed signed in. Deletion is now its own `status` value,
+  `"deleted"`, which refuses sign-in and refresh, and the member's live refresh
+  tokens are revoked through a new `RevokeAllForUser` (the existing `RevokeFamily`
+  closes one sign-in; a member may hold several). Revoking *before* the status
+  write closes the window in which a refresh in flight mints a token the revoke
+  never sees. `PATCH` is refused the value `"deleted"` so that removing access
+  cannot bypass the revocation. Because access tokens are stateless and checked
+  only for `exp`, one already issued stays usable for up to its TTL — the same
+  bound E3 accepts for refresh-token abuse.
+- **E7 — fixed.** An admin could not see or edit a project they were not a member
+  of, because projects reach a client only through the sync feed, which is scoped
+  to membership. `GET/PATCH /v1/admin/projects` now expose the whole server to an
+  admin. The edit is applied through the sync engine rather than by writing the
+  repository directly: the row and its `sync_log` entry commit in one
+  transaction, so the project's members pull the edit as they would one of their
+  own. `ApplyAdminProject` shares `apply`'s body and skips only the membership
+  check, which the admin route performs instead. The stored payload stays the
+  JSON *string* a client sends, not a nested object — the client's DTO declares
+  `payload` as an opaque `String` and rejects an unknown shape.
 
 ## Recommended order of work
 
