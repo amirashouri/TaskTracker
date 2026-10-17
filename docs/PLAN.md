@@ -36,7 +36,7 @@ are the way they are; this file is *what to do next*.
 | 5 — Observability and ops | T5.1–T5.5 done; T5.6 not started |
 | 6 — Testing | **Done** |
 | 7 — Client contract | **Done** |
-| 8 — Admin management | T8.1–T8.8 done; T8.7 closed as unnecessary (the role is already on the JWT claim the client reads); T8.9 open |
+| 8 — Admin management | **Done** — T8.1–T8.9; T8.7 closed as unnecessary (the role is already on the JWT claim the client reads) |
 
 ---
 
@@ -1073,31 +1073,31 @@ through the change feed).
 **Files:** `docs/API.md`, `docs/USER-MANAGEMENT.md`, `docs/ARCHITECTURE.md`,
 `docs/PLAN.md`.
 
-### T8.9 — `GET /v1/admin/projects/{id}` (open)
+### T8.9 — `GET /v1/admin/projects/{id}` (done)
 
-T8.1–T8.8 left the two sides disagreeing about one path. `mount` in
-`cmd/server/main.go` registers `GET /v1/admin/projects` and
-`PATCH /v1/admin/projects/{id}`; the client also declares
-`GET /v1/admin/projects/{id}` — `AdminProjectsPort.project(id)`, implemented by
-`HttpAdminProjectsRemote.project()` with `HttpClientStatusExt.sendForStatus`
-existing for exactly that 200/404 split — and the path appears in neither
-`docs/API.md` nor `docs/ARCHITECTURE.md`.
+Done. `mount` registers it under `adminMW` on `ProjectHandler`: it reads through
+`ProjectRepository.GetByID`, 404s when the row is absent, and writes the same
+`*entities.Project` the list and the `PATCH` write — the client decodes all three
+into one DTO.
 
-**Mount it; do not drop the client's end.** The client's admin project editor has
-to be port-backed (client plan `CLI-12`), because a project the admin is not a
-member of is absent from that admin's Room store and the sync push refuses a
-non-member — so the local editor cannot seed or save it. That editor needs this
-`GET` to seed from, which makes this task its prerequisite.
+**Why it was needed.** T8.1–T8.8 left the two sides disagreeing about this path:
+the client declares `AdminProjectsPort.project(id)` (implemented by
+`HttpAdminProjectsRemote.project()`, with `HttpClientStatusExt.sendForStatus`
+existing for exactly that 200/404 split) and nothing served it. The client turns a
+404 into `null`, so an unmounted route read as "not on the server" rather than as
+a bug.
 
-The premise this task was first recorded with needs correcting: it said the client
-"seeds its project edit screen" from this path. As of 2026-10-17 that is intent,
-not behaviour — the client's destination ignores the selected project id and
-nothing in its UI reaches `project(id)`. `CLI-12` is where that gets wired, which
-is why the ordering is server-then-client here and not the reverse.
+**Why mounting was the answer rather than dropping the client's call.** The
+client's admin project editor has to be port-backed (client plan `CLI-12`),
+because a project the admin is not a member of is absent from that admin's Room
+store and the sync push refuses a non-member — so the local editor cannot seed or
+save it. This `GET` is its prerequisite, which is why the ordering is
+server-then-client.
 
-Mount it under `adminMW` on `ProjectHandler` (`ProjectRepository.GetByID` already
-exists, and `Update` already 404s through it) and pin its key set in
-`cmd/server/contract_test.go`.
+One correction to the premise this task was first recorded with: it said the
+client "seeds its project edit screen" from this path. As of 2026-10-17 that was
+intent, not behaviour — the client's destination ignored the selected project id
+and nothing in its UI reached `project(id)`. `CLI-12` is where that gets wired.
 
 **Files:** `internal/admin/projects.go`, `cmd/server/main.go`, `docs/API.md`,
 `docs/ARCHITECTURE.md`.
