@@ -36,7 +36,7 @@ are the way they are; this file is *what to do next*.
 | 5 — Observability and ops | T5.1–T5.5 done; T5.6 not started |
 | 6 — Testing | **Done** |
 | 7 — Client contract | **Done** |
-| 8 — Admin management | **Done** — T8.1–T8.9; T8.7 closed as unnecessary (the role is already on the JWT claim the client reads) |
+| 8 — Admin management | **Done** — T8.1–T8.10; T8.7 closed as unnecessary (the role is already on the JWT claim the client reads) |
 
 ---
 
@@ -1104,3 +1104,36 @@ and nothing in its UI reached `project(id)`. `CLI-12` is where that gets wired.
 
 **Tests:** `cmd/server/contract_test.go` — 200 with the sync project payload's
 key set; unknown id → 404.
+
+### T8.10 — `POST /v1/admin/projects` (done)
+
+Done. `mount` registers the create under `adminMW` on `ProjectHandler`. The body
+is the create form's fields plus the client-minted id; `isArchived`,
+`nextItemNumber` and the stamps are the server's. It writes through
+`Engine.ApplyAdminProject`, so the row, its member set and its change-feed entry
+commit together — the create is the sync path's project push, authorized by the
+admin route rather than by membership — and answers `201` with the same
+`*entities.Project` the list, the seed and the `PATCH` write.
+
+**Why it was needed.** The client's members section holds its create form in the
+wide right pane (`CLI-15`), and the projects section is being given the same
+arrangement (`CLI-16`). The projects screen's own create cannot serve it: that one
+is offline-first, writing a local Room row plus an outbox row and letting the sync
+engine push it, and the push authorizes creation by membership — so an admin
+creating a project for other people would be pushed into its member list, and a
+rejected push would land in the outbox where no admin screen looks. The admin
+section reads server truth; its create has to land there.
+
+**Why an existing id is a `409` rather than an upsert.** The engine's project
+upsert takes `nextItemNumber` from the payload, so a create that overwrote the row
+it collided with would rewind a project that has issued keys since and hand one
+number out to two work items. A create is a create; the caller that lost a
+response re-reads.
+
+**Files:** `internal/admin/projects.go`, `cmd/server/main.go`, `docs/API.md`,
+`docs/PLAN.md`.
+
+**Tests:** `cmd/server/contract_test.go` — `201` with the client's key set, the
+server-owned defaults (`isArchived` false, `nextItemNumber` 1, a live `version`),
+the row on the active list and the change on the feed; blank name or prefix →
+`400`; the same id twice → `409` with the row untouched.

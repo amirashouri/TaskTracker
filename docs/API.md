@@ -238,8 +238,8 @@ left behind. The members list, which is about managing accounts, uses
 ## Projects (admin)
 
 Projects otherwise reach a client only through the sync feed, which is scoped to
-membership. These routes are what let an admin see and edit every project on the
-server, whether or not they are a member of it. Both are admin only.
+membership. These routes are what let an admin see, create and edit every project
+on the server, whether or not they are a member of it. All four are admin only.
 
 The project object is the same shape the sync feed carries — the client's project
 model decodes either:
@@ -258,6 +258,44 @@ model decodes either:
   "version": "the-version-now-stored"
 }
 ```
+
+### `POST /v1/admin/projects` — admin only
+
+Creates a project. The body is the create form's fields plus the id the client
+minted — clients name their own project ids on the sync path too, so a response
+lost in flight leaves a row the caller can name rather than a second project:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "keyPrefix": "TT",
+  "name": "Demo",
+  "details": "",
+  "memberIds": ["550e8400-e29b-41d4-a716-446655440000"]
+}
+```
+
+`id` may be omitted, and the server mints one. `isArchived`, `nextItemNumber`,
+`createdAt`, `updatedAt` and `version` are the server's and are not read from the
+body: a project being created is active, has issued no keys, and needs the
+`version` its first edit saves against.
+
+The create is applied through the sync engine as a project push authorized by the
+admin route rather than by membership — an admin creating a project for other
+people is not on its member list — so the row, its member set and its change-feed
+entry commit together, and the members the body names pull the project exactly as
+they would one of their own clients pushed.
+
+| Status | Body |
+| --- | --- |
+| `201` | the stored project object |
+| `400` | `{"error": "invalid request body"}` |
+| `400` | `{"error": "name and keyPrefix are required"}` |
+| `409` | `{"error": "project already exists"}` |
+
+The `409` is deliberate rather than an upsert: a create that overwrote the row it
+collided with would write its own `nextItemNumber` over a project that has issued
+keys since, handing one number out to two work items.
 
 ### `GET /v1/admin/projects?status=` — admin only
 
@@ -279,8 +317,8 @@ rather than a deleted state:
 
 One project, whether or not the caller is a member of it: the seed for the edit
 screen, which then saves through the `PATCH` below. It answers with the same
-object the list and the `PATCH` return, so the client decodes all three into one
-DTO.
+object the create, the list and the `PATCH` return, so the client decodes all four
+into one DTO.
 
 | Status | Body |
 | --- | --- |

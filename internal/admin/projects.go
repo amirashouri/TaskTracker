@@ -86,6 +86,122 @@ func (h *ProjectHandler) Get(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, project)
 }
 
+// ── Create ──────────────────────────────────────────────────────────
+
+// createProjectRequest is what the create screen sends: the fields its form
+// collects, plus the id it minted. The id is the client's, as it is on the sync
+// path, which is what lets the caller name the row a lost response left behind
+// instead of sending the same project again under a second id.
+//
+// `isArchived`, `nextItemNumber` and the stamps are not in the body: a project
+// being created has no archived state and no items, so a client has nothing to
+// say about them, and the create's own default is the only correct one.
+type createProjectRequest struct {
+	ID        string   `json:"id"`
+	KeyPrefix string   `json:"keyPrefix"`
+	Name      string   `json:"name"`
+	Details   string   `json:"details"`
+	MemberIDs []string `json:"memberIds"`
+}
+
+// Create writes a project and its change-feed entry in one transaction, so the
+// members the body names pull it exactly as they would a project one of their
+// own clients pushed. It is that push, authorized by the admin route rather than
+// by membership: an admin creating a project for other people is not on its
+// member list, which is the one check `ApplyAdminProject` skips for the same
+// reason Update uses it.
+func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var req createProjectRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	keyPrefix := strings.TrimSpace(req.KeyPrefix)
+	if name == "" || keyPrefix == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "name and keyPrefix are required")
+		return
+	}
+
+	members := make([]entities.UserID, 0, len(req.MemberIDs))
+	for _, id := range req.MemberIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			members = append(members, entities.UserID(id))
+		}
+	}
+
+	project := &entities.Project{
+		ID:        entities.ProjectID(strings.TrimSpace(req.ID)),
+		KeyPrefix: keyPrefix,
+		Name:      name,
+		Details:   req.Details,
+		MemberIDs: members,
+		// The first key a new project issues is `-1`, which is the column's
+		// default as well -- but an insert names the column, so a zero here would
+		// start the project at `-0` and never consult that default.
+		NextItemNumber: 1,
+	}
+	if project.ID == "" {
+		project.ID = entities.NewProjectID()
+	}
+
+	// An id the server already holds is a request it has already applied, not a
+	// replace. Overwriting would also write this body's `nextItemNumber` over a
+	// row that has issued keys since, handing a number out twice.
+	existing, err := h.projects.GetByID(r.Context(), project.ID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	if existing != nil {
+		httpx.WriteError(w, http.StatusConflict, "project already exists")
+		return
+	}
+
+	// The change feed carries the payload the way a client sends it: as a JSON
+	// *string*, not a nested object. Update spells out why -- the client's DTO
+	// declares `payload` as a String, so an object here would fail the decode of
+	// the whole page on every client rather than be skipped.
+	encoded, err := json.Marshal(project)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not encode project")
+		return
+	}
+	payload, err := json.Marshal(string(encoded))
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not encode project")
+		return
+	}
+
+	actorID, _ := auth.UserFrom(r.Context())
+	result := h.engine.ApplyAdminProject(r.Context(), actorID, entities.PushChange{
+		Entity:    entities.OutboxEntityProject,
+		EntityID:  string(project.ID),
+		Operation: entities.OutboxOperationUpsert,
+		Payload:   payload,
+	})
+
+	switch result.Status {
+	case sync.StatusAccepted:
+	case sync.StatusRejected:
+		httpx.WriteError(w, http.StatusBadRequest, result.Message)
+		return
+	default:
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create project")
+		return
+	}
+
+	// Re-read rather than echo the request: the row now carries the stamps and
+	// the version the client holds before its first edit.
+	stored, err := h.projects.GetByID(r.Context(), project.ID)
+	if err != nil || stored == nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not reload project")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, stored)
+}
+
 // ── Update ──────────────────────────────────────────────────────────
 
 // Update applies an edit to a project the way the sync path does: the row and

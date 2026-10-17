@@ -876,6 +876,122 @@ func TestAdminProjectGetSeedsTheEditScreen(t *testing.T) {
 	}
 }
 
+// Creating through the admin route is the sync path's project create authorized
+// by the admin role rather than by membership, so it has to land the row and the
+// change-feed entry exactly as a push would: the members the body names learn
+// about the project from the feed and from nowhere else.
+func TestAdminProjectCreateLandsTheProjectAndReachesTheFeed(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+
+	type listedProject struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+
+	// The id is the client's, as it is on the push path: the create screen mints
+	// it, so a response lost in flight leaves a row the caller can name.
+	const createdID = "22222222-2222-2222-2222-222222222222"
+	rec := env.do(t, http.MethodPost, "/v1/admin/projects", admin.AccessToken, map[string]any{
+		"id":        createdID,
+		"keyPrefix": "NEW",
+		"name":      "New work",
+		"details":   "Started from the admin app",
+		"memberIds": []string{string(env.user.ID)},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create project = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	// The keys the client declares: the create answers with the same project the
+	// list, the seed and the PATCH do, because the client decodes all four into
+	// one DTO.
+	assertWireKeys(t, "the created project", rec.Body.Bytes(),
+		[]string{
+			"id", "keyPrefix", "name", "details", "memberIds", "isArchived",
+			"nextItemNumber", "createdAt", "updatedAt", "version",
+		}, nil)
+
+	var created map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode the created project: %v", err)
+	}
+	// The server owns what the body does not send: a new project is active, its
+	// first key is `-1`, and its version is what the first edit saves against.
+	for key, want := range map[string]string{
+		"id":             `"` + createdID + `"`,
+		"keyPrefix":      `"NEW"`,
+		"name":           `"New work"`,
+		"details":        `"Started from the admin app"`,
+		"memberIds":      `["` + string(env.user.ID) + `"]`,
+		"isArchived":     `false`,
+		"nextItemNumber": `1`,
+	} {
+		if got := string(created[key]); got != want {
+			t.Errorf("the created project's %s = %s, want %s", key, got, want)
+		}
+	}
+	if version := string(created["version"]); version == `""` || version == "" {
+		t.Errorf("the created project carries no version, so the first edit cannot save against it: %s", rec.Body.String())
+	}
+
+	active := decodeInto[[]listedProject](t, env.do(t, http.MethodGet, "/v1/admin/projects", admin.AccessToken, nil))
+	var found int
+	for _, p := range active {
+		if p.ID == createdID {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Errorf("the active list holds the created project %d times, want once: %+v", found, active)
+	}
+
+	// The feed is the only way the project's members learn about it.
+	page := decodeInto[clientChangesPage](t, env.do(t, http.MethodGet, "/v1/sync/changes/projects", admin.AccessToken, nil))
+	if len(page.Changes) != 1 {
+		t.Fatalf("the feed holds %d project changes, want the create: %s", len(page.Changes), rec.Body.String())
+	}
+	if !strings.Contains(page.Changes[0].Payload, `"name":"New work"`) {
+		t.Errorf("the created project did not reach the change feed: %s", page.Changes[0].Payload)
+	}
+
+	// A form with nothing in it is a client bug the server refuses, rather than a
+	// nameless project on the list.
+	for _, body := range []map[string]any{
+		{"keyPrefix": "NEW", "name": "   "},
+		{"keyPrefix": "  ", "name": "New work"},
+	} {
+		if rec := env.do(t, http.MethodPost, "/v1/admin/projects", admin.AccessToken, body); rec.Code != http.StatusBadRequest {
+			t.Errorf("creating with %v = %d, want 400 (body %s)", body, rec.Code, rec.Body.String())
+		}
+	}
+
+	// The same id twice is a request the client already made, not a replace:
+	// overwriting would write this body's nextItemNumber over a row that may have
+	// issued keys since, handing one number out to two work items.
+	again := env.do(t, http.MethodPost, "/v1/admin/projects", admin.AccessToken, map[string]any{
+		"id": createdID, "keyPrefix": "DUP", "name": "Duplicate", "details": "",
+	})
+	if again.Code != http.StatusConflict {
+		t.Errorf("re-creating an id the server holds = %d, want 409 (body %s)", again.Code, again.Body.String())
+	}
+
+	// And the refused create left the row alone.
+	after := decodeInto[[]listedProject](t, env.do(t, http.MethodGet, "/v1/admin/projects", admin.AccessToken, nil))
+	var named int
+	for _, p := range after {
+		if p.Name == "Duplicate" {
+			t.Errorf("the conflict wrote its body anyway: %+v", p)
+		}
+		if p.ID == createdID {
+			named++
+		}
+	}
+	if named != 1 {
+		t.Errorf("the active list holds the created project %d times after the conflict, want once", named)
+	}
+}
+
 // The projects screen has two buckets, and the default has to be the active one:
 // an admin opening the screen should be looking at live work, not the archive.
 func TestAdminProjectListSplitsActiveFromArchived(t *testing.T) {
