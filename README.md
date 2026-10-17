@@ -94,6 +94,11 @@ deployment shapes:
 | `postgres` | server + Postgres 16 | shared, multi-user, or you already run Postgres |
 | `sqlite` | server only | single-node, zero external dependencies |
 
+`make` with no target lists the same operations as targets: `make up` starts the
+`postgres` profile, `make up PROFILE=sqlite` starts the other one, `make down`
+stops and removes whichever is running, and `make rebuild` adds `--build`. Each
+one reads the same `.env` as the commands below.
+
 ### Quick start
 
 1. **Create a `.env` file** (Docker Compose reads it automatically):
