@@ -1073,3 +1073,21 @@ through the change feed).
 **Files:** `docs/API.md`, `docs/USER-MANAGEMENT.md`, `docs/ARCHITECTURE.md`,
 `docs/PLAN.md`.
 
+### T8.9 — `GET /v1/admin/projects/{id}` (open)
+
+The client seeds its project edit screen from `GET /v1/admin/projects/{id}`
+(`HttpAdminProjectsRemote.project()`; `HttpClientStatusExt.sendForStatus` exists
+for exactly this 200/404 split), but `mount` in `cmd/server/main.go` registers
+only `GET /v1/admin/projects` and `PATCH /v1/admin/projects/{id}` — the `GET` by
+id has no route and appears in neither `docs/API.md` nor
+`docs/ARCHITECTURE.md`. Either mount it under `adminMW` on `ProjectHandler`
+(`ProjectRepository.GetByID` already exists) and pin its key set in
+`cmd/server/contract_test.go`, or drop the client's endpoint; the two sides may
+not keep disagreeing. Recorded from the admin-management plan draft (its SRV-6),
+the one item T8.1–T8.8 did not cover.
+
+**Files:** `internal/admin/projects.go`, `cmd/server/main.go`, `docs/API.md`,
+`docs/ARCHITECTURE.md`.
+
+**Tests:** `cmd/server/contract_test.go` — 200 with the sync project payload's
+key set; unknown id → 404.
