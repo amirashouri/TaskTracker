@@ -275,6 +275,18 @@ rather than a deleted state:
 | `200` | array of project objects |
 | `400` | `{"error": "status must be 'active' or 'archived'"}` |
 
+### `GET /v1/admin/projects/{id}` — admin only
+
+One project, whether or not the caller is a member of it: the seed for the edit
+screen, which then saves through the `PATCH` below. It answers with the same
+object the list and the `PATCH` return, so the client decodes all three into one
+DTO.
+
+| Status | Body |
+| --- | --- |
+| `200` | the project object |
+| `404` | `{"error": "project not found"}` |
+
 ### `PATCH /v1/admin/projects/{id}` — admin only
 
 The body is the whole project, as the client holds it; the edit screen is seeded

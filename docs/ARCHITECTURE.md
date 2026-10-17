@@ -54,6 +54,7 @@ internal/db/migrations    versioned SQL, one file per driver
 | `/v1/admin/users` | POST, GET | + Auth + AdminOnly | admin creates users and lists them in the `active`/`deleted` buckets; no self-signup |
 | `/v1/admin/users/{id}` | PATCH, DELETE | + Auth + AdminOnly | admin updates, soft-deletes or reactivates a user |
 | `/v1/admin/projects` | GET | + Auth + AdminOnly | admin lists every project in the `active`/`archived` buckets |
+| `/v1/admin/projects/{id}` | GET | + Auth + AdminOnly | admin reads any project, to seed the edit screen for one they are not in |
 | `/v1/admin/projects/{id}` | PATCH | + Auth + AdminOnly | admin edits any project, applied through the sync engine |
 | `/v1/users/search` | GET | + Auth | directory search; any authenticated user |
 
@@ -285,8 +286,10 @@ Severity is about what blocks a working server.
   bound E3 accepts for refresh-token abuse.
 - **E7 — fixed.** An admin could not see or edit a project they were not a member
   of, because projects reach a client only through the sync feed, which is scoped
-  to membership. `GET/PATCH /v1/admin/projects` now expose the whole server to an
-  admin. The edit is applied through the sync engine rather than by writing the
+  to membership. `GET /v1/admin/projects`, `GET /v1/admin/projects/{id}` and
+  `PATCH /v1/admin/projects/{id}` now expose the whole server to an admin — the
+  list to find the row, the by-id read to seed the edit screen, the `PATCH` to
+  save it. The edit is applied through the sync engine rather than by writing the
   repository directly: the row and its `sync_log` entry commit in one
   transaction, so the project's members pull the edit as they would one of their
   own. `ApplyAdminProject` shares `apply`'s body and skips only the membership

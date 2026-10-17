@@ -835,6 +835,47 @@ func TestAdminProjectEditSavesTheProjectAndReachesTheFeed(t *testing.T) {
 	}
 }
 
+// The edit screen is seeded from this route and saved back through the PATCH above,
+// so the client decodes both into one DTO. Before T8.9 the route did not exist and
+// nothing answered the call the client already made.
+func TestAdminProjectGetSeedsTheEditScreen(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+
+	got := env.do(t, http.MethodGet, "/v1/admin/projects/"+string(env.project.ID), admin.AccessToken, nil)
+	if got.Code != http.StatusOK {
+		t.Fatalf("get project = %d, body = %s", got.Code, got.Body.String())
+	}
+
+	// The keys the client declares — the same set the list and the PATCH answer
+	// with. An extra key here is a decoding failure on every installed build, not
+	// a field it skips.
+	assertWireKeys(t, "the admin project", got.Body.Bytes(),
+		[]string{
+			"id", "keyPrefix", "name", "details", "memberIds", "isArchived",
+			"nextItemNumber", "createdAt", "updatedAt", "version",
+		}, nil)
+
+	var stored map[string]json.RawMessage
+	if err := json.Unmarshal(got.Body.Bytes(), &stored); err != nil {
+		t.Fatalf("decode the project: %v", err)
+	}
+	if name := string(stored["name"]); name != `"Demo"` {
+		t.Errorf("the project came back named %s, want %q", name, "Demo")
+	}
+	if id := string(stored["id"]); id != `"`+string(env.project.ID)+`"` {
+		t.Errorf("the project came back with id %s, want %q", id, env.project.ID)
+	}
+
+	// An id the server does not hold is a 404, which the client turns into `null`
+	// and shows as "not on the server". A 200 carrying a zero project would seed
+	// the editor with a phantom row instead.
+	missing := env.do(t, http.MethodGet, "/v1/admin/projects/00000000-0000-0000-0000-000000000000", admin.AccessToken, nil)
+	if missing.Code != http.StatusNotFound {
+		t.Errorf("getting an unknown project = %d, want 404 (body %s)", missing.Code, missing.Body.String())
+	}
+}
+
 // The projects screen has two buckets, and the default has to be the active one:
 // an admin opening the screen should be looking at live work, not the archive.
 func TestAdminProjectListSplitsActiveFromArchived(t *testing.T) {

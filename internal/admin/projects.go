@@ -63,6 +63,29 @@ func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
+// Get returns one project, member or not. It is the read half of the admin edit
+// screen and returns the identical shape List and Update do, because the client
+// decodes all three into one DTO: a seed that carried a different key set would
+// build a screen whose save Update then refuses.
+func (h *ProjectHandler) Get(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+
+	project, err := h.projects.GetByID(r.Context(), entities.ProjectID(id))
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	if project == nil {
+		httpx.WriteError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, project)
+}
+
 // ── Update ──────────────────────────────────────────────────────────
 
 // Update applies an edit to a project the way the sync path does: the row and
