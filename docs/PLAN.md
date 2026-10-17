@@ -36,7 +36,7 @@ are the way they are; this file is *what to do next*.
 | 5 — Observability and ops | T5.1–T5.5 done; T5.6 not started |
 | 6 — Testing | **Done** |
 | 7 — Client contract | **Done** |
-| 8 — Admin management | **Done** — T8.1–T8.8; T8.7 closed as unnecessary (the role is already on the JWT claim the client reads) |
+| 8 — Admin management | T8.1–T8.8 done; T8.7 closed as unnecessary (the role is already on the JWT claim the client reads); T8.9 open |
 
 ---
 
@@ -1075,16 +1075,29 @@ through the change feed).
 
 ### T8.9 — `GET /v1/admin/projects/{id}` (open)
 
-The client seeds its project edit screen from `GET /v1/admin/projects/{id}`
-(`HttpAdminProjectsRemote.project()`; `HttpClientStatusExt.sendForStatus` exists
-for exactly this 200/404 split), but `mount` in `cmd/server/main.go` registers
-only `GET /v1/admin/projects` and `PATCH /v1/admin/projects/{id}` — the `GET` by
-id has no route and appears in neither `docs/API.md` nor
-`docs/ARCHITECTURE.md`. Either mount it under `adminMW` on `ProjectHandler`
-(`ProjectRepository.GetByID` already exists) and pin its key set in
-`cmd/server/contract_test.go`, or drop the client's endpoint; the two sides may
-not keep disagreeing. Recorded from the admin-management plan draft (its SRV-6),
-the one item T8.1–T8.8 did not cover.
+T8.1–T8.8 left the two sides disagreeing about one path. `mount` in
+`cmd/server/main.go` registers `GET /v1/admin/projects` and
+`PATCH /v1/admin/projects/{id}`; the client also declares
+`GET /v1/admin/projects/{id}` — `AdminProjectsPort.project(id)`, implemented by
+`HttpAdminProjectsRemote.project()` with `HttpClientStatusExt.sendForStatus`
+existing for exactly that 200/404 split — and the path appears in neither
+`docs/API.md` nor `docs/ARCHITECTURE.md`.
+
+**Mount it; do not drop the client's end.** The client's admin project editor has
+to be port-backed (client plan `CLI-12`), because a project the admin is not a
+member of is absent from that admin's Room store and the sync push refuses a
+non-member — so the local editor cannot seed or save it. That editor needs this
+`GET` to seed from, which makes this task its prerequisite.
+
+The premise this task was first recorded with needs correcting: it said the client
+"seeds its project edit screen" from this path. As of 2026-10-17 that is intent,
+not behaviour — the client's destination ignores the selected project id and
+nothing in its UI reaches `project(id)`. `CLI-12` is where that gets wired, which
+is why the ordering is server-then-client here and not the reverse.
+
+Mount it under `adminMW` on `ProjectHandler` (`ProjectRepository.GetByID` already
+exists, and `Update` already 404s through it) and pin its key set in
+`cmd/server/contract_test.go`.
 
 **Files:** `internal/admin/projects.go`, `cmd/server/main.go`, `docs/API.md`,
 `docs/ARCHITECTURE.md`.
