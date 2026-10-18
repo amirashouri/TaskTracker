@@ -2,116 +2,98 @@
 
 Working agreement for `TaskTrackerServer`. Read this before changing anything.
 
-- `docs/PLAN.md` — the ordered, task-by-task implementation roadmap. Work from
-  this; one task, one branch, one MR.
+> **Cross-project rules:** if your task touches both repos, read `../AGENTS.md`
+> first — it governs wire format contracts, the dual-repo ACK protocol, and
+> build isolation boundaries. This file is the contract for Server-only work.
+
+- `docs/PLAN.md` — the ordered, task-by-task roadmap. One task, one branch, one MR.
 - `docs/API.md` — the HTTP wire contract. Read it before changing a request or
   response shape.
-- `docs/ARCHITECTURE.md` — the design record and review: what exists, what is
-  broken, and why.
+- `docs/ARCHITECTURE.md` — the design record: what exists, what is broken, and why.
 - `README.md` — how to configure and run the server.
 
 ## What this is
 
-The self-hosted backend for the `TaskTrackerKMP` client. One Go binary and one
-database, run by the customer on their own server. There are no microservices
-here on purpose: an operator should need a `DATABASE_URL`, a `JWT_SECRET`, and
-`./server`. Do not add a service, a message bus, or a second deployable without
-a reason that survives that constraint.
+The self-hosted backend for the `TaskTrackerKMP` client. One Go binary, one
+database, run by the customer on their own server. No microservices on purpose:
+an operator needs `DATABASE_URL`, `JWT_SECRET`, and `./server`. Do not add a
+service, message bus, or second deployable without a reason that survives that
+constraint.
 
 ## The wire format is a contract with a client you cannot update
 
-The client is an installed mobile app that syncs offline and cannot be updated on
-this server's schedule. **The installed client is the fixed point**: when the two
-disagree, the server changes. Four contract mismatches have already shipped and
-been found this way — `entityId` vs `entityID`, an undeclared `resyncRequired`,
-ISO-8601 timestamps against `int64` millis, and `token_type`/`expires_in` on the
-token pair — and the first two were invisible from the server side alone. The
-fourth was worse than invisible: `contract_test.go`'s `clientTokenPair` carried
-all seven keys, so the executable contract *required* the server to send two keys
-no client version has ever declared.
+The client is an installed mobile app that syncs offline and cannot be updated
+on this server's schedule. **The installed client is the fixed point**: when the
+two disagree, the server changes.
 
-Two rules follow, and the second is the one that gets missed.
+**Two rules — the second is the one that gets missed:**
 
-**A response may not gain a field.** The client leaves `ignoreUnknownKeys` off,
-deliberately: its `JSONCoding` says a field renamed on the server "has to fail
-loudly at the boundary" rather than silently decode as null on every device. The
-same setting makes an *added* key a decoding failure rather than a value it
-skips, so a new response field breaks every installed build exactly as a removed
-one does.
+1. **A response may not gain a field.** The client leaves `ignoreUnknownKeys`
+   off deliberately — an added key is a decoding failure, not a value it skips.
+   A new response field breaks every installed build exactly as a removed one does.
+2. **A response may not lose or rename a field the client declares without a
+   default.** Kotlin treats a property with a default as optional; without one,
+   required.
 
-**A response may not lose or rename a field the client declares without a
-default.** Kotlin treats a property with a default as optional and one without as
-required.
-
-The safe order for a new response field is therefore **client first**: ship a
-client that declares it with a default — which works against both the old and the
-new server — and only then start sending it. Anything that cannot follow that
-order is a new `/v1` version and a migration path.
+**Safe order for a new response field:** client first — ship a client that
+declares it with a default (works against old and new server), then start
+sending it. Anything else is a new `/v1` version and a migration path.
 
 `docs/API.md` is the written contract; `cmd/server/contract_test.go` is the
-executable one. It decodes responses into the client's own DTOs *and* compares the
-key names, because Go matches JSON keys case-insensitively and a decode-based
-check cannot see a case-only rename.
+executable one. It decodes responses into the client's DTOs **and** compares key
+names, because Go matches JSON keys case-insensitively and a decode-based check
+cannot see a case-only rename.
 
-**The contract test can drift too, and then it hides the mismatch instead of
-catching it.** A test that restates this server's own struct is a mirror, not a
-check — which is how the token pair's two extra keys survived: the test carried
-them, so it *required* the drift it existed to detect. When a response changes,
-pin the key set the **client** declares, and add that key-name assertion to every
-path that decodes one, not just the first. A path that decodes without pinning is
-a path nobody is checking.
+**The contract test can drift too.** A test that restates this server's own
+struct is a mirror, not a check. When a response changes, pin the key set the
+**client** declares, and add that key-name assertion to every path that decodes
+one — a path that decodes without pinning is a path nobody is checking.
 
 ## The command that decides whether you are done
 
 ```bash
-scripts/check.sh
+scripts/check.sh          # scopes: all (default), race, docs
 ```
 
-That script is the one place the command lives. It runs `gofmt` as a **gate** — a bare
-`gofmt -l . && …` cannot fail on formatting, because `gofmt -l` exits 0 even when it lists
-files, so the script exits non-zero on a non-empty list. Scopes: `all` (default), `race`, `docs`.
+All checks pass on `main`. Keep it that way: never make a check green by
+deleting code, stubbing a proof, or weakening an assertion.
 
-All four checks pass on `main`. Keep it that way: never make a check green by deleting
-code, stubbing a proof, or weakening an assertion.
-
-Run `scripts/check.sh race` before touching anything concurrent — the sync engine,
-the rate limiter and refresh-token rotation all are. CI runs it, so a plain local
-run is not the same check.
+Run `scripts/check.sh race` before touching anything concurrent — the sync
+engine, the rate limiter, and refresh-token rotation all are. CI runs it, so a
+plain local run is not the same check.
 
 ## Toolchain
 
 - **Go 1.27**, matching `go.mod`. Do not lower it.
-- After changing imports run `go mod tidy` and commit `go.mod` and `go.sum`
-  together.
-
-Build prerequisites (CGO, Postgres/SQLite): `README.md` → Requirements.
+- After changing imports: `go mod tidy`, then commit `go.mod` and `go.sum` together.
+- Build prerequisites (CGO, Postgres/SQLite): `README.md` → Requirements.
 
 ## Comments
 
 Brief and precise. A comment earns its place by explaining a non-obvious *why*;
-the code already states the *what*. No restatement of the line below, no
-decorative banners, no commented-out code.
+the code already states the *what*. No restatement, no decorative banners, no
+commented-out code.
 
 ## Configuration and secrets
 
 - **A secret never enters this repository.** `.env` is git-ignored; only
-  `.env.example` is tracked and it holds no real values.
+  `.env.example` is tracked and holds no real values.
 - Adding a variable means three places: `.env.example`, a read in
   `internal/config/config.go`, and a rule in `Config.validate` when a bad value
-  should stop startup. Details: `README.md` and the `go-config-and-secrets` skill.
+  should stop startup. See the `go-config-and-secrets` skill.
 
 ## Architecture boundaries
 
-`internal/` is the module boundary — Go enforces that nothing outside this
-module can import it, which is the whole point of keeping the server one module.
+`internal/` is the module boundary — Go enforces that nothing outside can import
+it, which is the whole point of keeping the server one module.
 
-- `cmd/server/main.go` is the composition root. Concrete types are constructed
-  and wired here and nowhere else; `mount` is the route table.
+- `cmd/server/main.go` is the composition root. Concrete types are wired here
+  and nowhere else; `mount` is the route table.
 - `internal/entities` owns models and repositories. A repository is the only
-  place that knows SQL, and `internal/entities/timestamp.go` is the only place
-  that knows the wire date format.
+  place that knows SQL; `internal/entities/timestamp.go` is the only place that
+  knows the wire date format.
 - `internal/auth`, `internal/middleware`, `internal/sync` own their concerns.
-- A handler does not reach into the database directly. It calls a repository or
+- A handler does not reach into the database directly — it calls a repository or
   the sync engine.
 
 Place new code in the closest existing package. Prefer a new file over growing a
@@ -119,75 +101,76 @@ Place new code in the closest existing package. Prefer a new file over growing a
 
 ## Database changes
 
-The schema is versioned SQL in `internal/db/migrations/`, one file per driver
+Schema is versioned SQL in `internal/db/migrations/`, one file per driver
 sharing a version number (`0001_initial.postgres.sql` and
-`0001_initial.sqlite.sql`), embedded in the binary and applied on startup by
-`internal/db/migrate.go`. Add a new version for **both** drivers: `go test
-./internal/db` fails if a version has only one dialect file. Statements stay
-`IF NOT EXISTS` so a database created before the runner existed is adopted the
-next time the binary starts.
+`0001_initial.sqlite.sql`), embedded and applied on startup by
+`internal/db/migrate.go`. Rules:
 
-Both drivers are supported and both are tested: the suite runs on SQLite by default
-and on Postgres when `TASKTRACKER_TEST_POSTGRES_URL` points at a throwaway
-server (`internal/dbtest`, and the CI `test-postgres` job). A schema change is
-verified only once it has passed on both — SQLite succeeding proves the SQLite
-path and nothing more.
+- Add a new version for **both** drivers — `go test ./internal/db` fails if a
+  version has only one dialect file.
+- Statements stay `IF NOT EXISTS` so a pre-runner database is adopted on next start.
+- Both drivers are tested: SQLite by default, Postgres when
+  `TASKTRACKER_TEST_POSTGRES_URL` points at a throwaway server. A schema change
+  is verified only once it passes on **both** — SQLite succeeding proves nothing
+  about Postgres.
+- Change the DDL and the repository in the same commit.
 
-Read the `go-migrations-and-repositories` skill before touching a table or a
-repository, and change the DDL and the repository in the same commit.
+See the `go-migrations-and-repositories` skill before touching a table.
 
 ## Tests
 
 - Ship a test with behaviour changes; put it next to the code it covers.
-- `internal/config/config_test.go` is the pattern for anything that reads the
-  environment: isolate the variable with `t.Setenv` (see its `isolate` helper)
-  rather than depending on the developer's real `.env`.
-- A test that has never failed is not yet evidence. Confirm it fails when the
+- `internal/config/config_test.go` is the pattern for env-reading tests: isolate
+  with `t.Setenv` (see its `isolate` helper), never depend on the developer's `.env`.
+- A test that has never failed is not yet evidence — confirm it fails when the
   behaviour it claims to protect is removed.
 
 ## Git workflow
 
-One task, one branch, one merge request to `main`. Never commit directly to
-`main`.
+One task, one branch, one MR to `main`. Never commit directly to `main`.
 
 ```bash
 git switch -c feat/<kebab-case-slug>
 # ... work ...
 ```
 
-**The review is the merge gate — do not wait for a human to approve it.** When
-the task is done, read your own diff as a stranger would and answer three
-questions:
+**The review is the merge gate.** When the task is done, read your own diff as a
+stranger and answer three questions:
 
-1. Is the validation command green? `scripts/check.sh`
-2. Does the diff change only what the task called for — no drive-by cleanup,
-   no bundled task?
+1. Is `scripts/check.sh` green?
+2. Does the diff change only what the task called for — no drive-by cleanup, no
+   bundled task?
 3. Does every behaviour change ship with a test that fails without it?
 
-All three yes → the review approves, so merge:
-
+All three yes → merge:
 ```bash
 git switch main
 git merge --ff-only feat/<kebab-case-slug>
 git branch -d feat/<kebab-case-slug>
 ```
 
-Any no → fix it on the same branch and review again. A red or unreviewed branch
-is never merged; a branch the review has approved is merged without asking
-again.
+Any no → fix on the same branch and review again. A red or unreviewed branch is
+never merged; a branch the review has approved is merged without asking again.
+Where a remote is configured, push and merge the MR instead — push needs its own
+authorisation.
 
-Where a remote is configured, push the branch and merge the MR instead. Push
-still needs its own authorisation — publishing to a remote is a separate action
-from merging.
+## Specs & cross-harness continuity
+
+A pending task's *how* lives in one spec, `specs/<plan-id>-<slug>.md` (copy
+`specs/_template.md`). This file is also the **portable handoff unit** when you
+switch agent providers: chat context does not transfer, but a committed spec
+does. End every session by appending a `## Handoff` section (done / pending /
+next step / gotchas) and committing it on the branch. On resume in a new harness,
+read this file, the latest spec, and `git diff main...HEAD`. See `../AGENTS.md` §6.
 
 ## Skills
 
-Repository skills live in `.opencode/skills/*/SKILL.md`. Read each skill whose
-description matches the task before starting.
+Skills live in `.opencode/skills/*/SKILL.md`. Read each skill whose description
+matches the task before starting.
 
-- `go-server-architecture` — where code belongs, how the composition root and
-  handlers are wired, and what not to break in the monolith.
-- `go-config-and-secrets` — adding configuration, reading it safely, and keeping
+- `go-server-architecture` — where code belongs, composition root and handler
+  wiring, what not to break in the monolith.
+- `go-config-and-secrets` — adding configuration, reading it safely, keeping
   secrets out of the repository.
 - `go-migrations-and-repositories` — schema changes, repository patterns,
-  optimistic locking, and the Postgres/SQLite differences.
+  optimistic locking, Postgres/SQLite differences.
