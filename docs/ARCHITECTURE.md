@@ -87,6 +87,18 @@ treats as opaque. The verdict vocabulary is `accepted`, `conflict`,
 `rejected` and `retry_later`; `conflict` and `retry_later` are the two the
 client is expected to act on.
 
+`rejected` is terminal on the client, so the server spends it only where a
+retry could never help: a write the row's own values cannot satisfy, which
+`entities.PermanentWriteError` recognises from the driver's code (Postgres
+SQLSTATE class `22` and `23502`/`23514`/`23P01`; SQLite `ErrConstraintCheck`
+and `ErrConstraintNotNull`). A foreign-key violation stays `retry_later`
+because it can be a child that arrived before its parent, and a unique
+violation because it can be a re-push after a lost response. A failure
+writing the `sync_log` row or committing keeps `retry_later` too even when
+the database error is permanent: that is the server's own fault, and
+dead-lettering client work over it is the failure mode `docs/API.md` warns
+against.
+
 ## Change feed retention
 
 The cursor is the numeric `sync_log.id`, which is monotonic. Rows are pruned

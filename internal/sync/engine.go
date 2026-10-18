@@ -175,7 +175,16 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 				result.Version = current
 			}
 		default:
-			result.Status = StatusRetryLater
+			// A write the row's own values cannot satisfy is refused for good, and
+			// saying so spares the client a retry budget it cannot spend. The
+			// log-row and commit failures below stay `retry_later` even on a
+			// permanent database error: a failure there is the server's own, and
+			// `rejected` would dead-letter client work over it.
+			if entities.PermanentWriteError(err) {
+				result.Status = StatusRejected
+			} else {
+				result.Status = StatusRetryLater
+			}
 			result.Message = err.Error()
 		}
 		return result

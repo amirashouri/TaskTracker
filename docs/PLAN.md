@@ -619,6 +619,38 @@ already pulling everything that survived.
 
 ---
 
+### T4.6 — Permanent push failures are refused (done)
+
+Done. A repository write that fails on the row's own values is now answered
+`rejected` rather than `retry_later`.
+
+`Engine.applyChange` had one `default:` arm that answered `retry_later` for
+every write error that was not a version conflict, so a payload the schema
+refuses — a `CHECK` violation on a value the column has no room for — was
+reported as transient. The client then spends a retry budget it cannot
+spend, and because it stops its push loop at the first retryable failure the
+refused change wedges everything queued behind it. Seen live: a work item
+pushed with `"priority":"Medium"` against a CHECK that allows only lowercase.
+
+`entities.PermanentWriteError` classifies by driver code — Postgres SQLSTATE
+class `22` and `23502`/`23514`/`23P01`, SQLite `ErrConstraintCheck` and
+`ErrConstraintNotNull` — and the engine answers `rejected` for those. The set
+is deliberately narrow, because `rejected` is terminal on the client: a
+foreign-key violation can be a child that arrived before its parent and a
+unique violation can be a re-push after a lost response, so both stay
+retryable. The `sync_log` and commit failures keep answering `retry_later`
+even on a permanent database error — a failure there is the server's own,
+and dead-lettering client work over it is the error `docs/API.md` warns of.
+
+**Files:** new `internal/entities/write_error.go`, `internal/sync/engine.go`,
+`docs/ARCHITECTURE.md`.
+
+**Tests:** `internal/entities/write_error_test.go` (the policy table, both
+drivers' codes) and `internal/sync/engine_test.go` →
+`TestPushRejectsAWorkItemTheDatabaseRefuses`.
+
+---
+
 ## Milestone 5 — Observability and operations
 
 ### T5.1 — Readiness probe (done)

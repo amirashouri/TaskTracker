@@ -190,6 +190,48 @@ func TestPushWorkItem(t *testing.T) {
 	}
 }
 
+// A payload the schema itself refuses is answered `rejected`, not `retry_later`.
+// Both drivers fail the work_items CHECK on a value the column has no room for,
+// and no retry can change the value — so the verdict spares the client a retry
+// budget it cannot spend, and stops the refused change wedging the push loop.
+// The real defect was the same shape: `"priority":"Medium"` against a CHECK that
+// allows only lowercase.
+func TestPushRejectsAWorkItemTheDatabaseRefuses(t *testing.T) {
+	engine, _, _, workItems, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "88888888-8888-8888-8888-888888888888")
+	pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, ""))
+
+	item := &entities.WorkItem{
+		ID:        entities.WorkItemID("99999999-9999-9999-9999-999999999999"),
+		ProjectID: project.ID,
+		Key:       "TT-1",
+		Title:     "Task",
+		Status:    entities.WorkItemStatus("nonsense"),
+		Priority:  entities.PriorityHigh,
+	}
+	payload, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal work item: %v", err)
+	}
+
+	result := pushOne(t, engine, userID, entities.PushChange{
+		ID:        "e2",
+		Entity:    entities.OutboxEntityWorkItem,
+		EntityID:  string(item.ID),
+		Operation: entities.OutboxOperationUpsert,
+		Payload:   payload,
+	})
+	if result.Status != StatusRejected {
+		t.Fatalf("status = %s (%s), want rejected", result.Status, result.Message)
+	}
+
+	if stored, err := workItems.GetByID(ctx, item.ID); err != nil || stored != nil {
+		t.Errorf("the refused work item was stored anyway (stored=%v, err=%v)", stored, err)
+	}
+}
+
 // A failure after the entity write but before its log row must leave neither:
 // the two writes share one transaction. An invalid operation value passes the
 // entity write (it is not a delete) and then violates the sync_log CHECK
