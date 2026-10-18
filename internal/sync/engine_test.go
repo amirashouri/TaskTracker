@@ -18,7 +18,7 @@ func newTestEngine(t *testing.T) (*Engine, *entities.UserRepository, *entities.P
 	users := entities.NewUserRepository(database.DB)
 	projects := entities.NewProjectRepository(database.DB)
 	workItems := entities.NewWorkItemRepository(database.DB)
-	engine := NewEngine(database.DB)
+	engine := NewEngine(database.DB, "")
 
 	user := &entities.User{Email: "sync@example.com", PasswordHash: "secret"}
 	if err := users.Create(context.Background(), user); err != nil {
@@ -440,7 +440,7 @@ func TestPushWithoutAVersionOverwrites(t *testing.T) {
 func TestPullAsksForAResyncWhenTheCursorIsTooOld(t *testing.T) {
 	database := dbtest.NewDatabase(t)
 	ctx := context.Background()
-	engine := NewEngine(database.DB)
+	engine := NewEngine(database.DB, "")
 	users := entities.NewUserRepository(database.DB)
 
 	user := &entities.User{Email: "retention@example.com", PasswordHash: "secret"}

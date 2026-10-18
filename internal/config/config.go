@@ -12,16 +12,18 @@ import (
 )
 
 type Config struct {
-	DatabaseURL       string
-	JWTSecret         string
-	JWTAccessTTL      time.Duration
-	JWTRefreshTTL     time.Duration
-	ServerPort        string
-	CORSOrigins       []string
-	LogLevel          string
-	SignInMaxAttempts int
-	SignInWindow      time.Duration
-	SyncLogRetention  time.Duration
+	DatabaseURL        string
+	JWTSecret          string
+	JWTAccessTTL       time.Duration
+	JWTRefreshTTL      time.Duration
+	ServerPort         string
+	CORSOrigins        []string
+	LogLevel           string
+	SignInMaxAttempts  int
+	SignInWindow       time.Duration
+	SyncLogRetention   time.Duration
+	AttachmentRoot     string
+	AttachmentMaxBytes int64
 }
 
 // Load reads configuration from the environment, seeded from the file named by
@@ -34,16 +36,18 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		DatabaseURL:       getEnv("DATABASE_URL", "sqlite:///data/tasktracker.db"),
-		JWTSecret:         os.Getenv("JWT_SECRET"),
-		JWTAccessTTL:      getDurationEnv("JWT_ACCESS_TTL", 1*time.Hour),
-		JWTRefreshTTL:     getDurationEnv("JWT_REFRESH_TTL", 720*time.Hour),
-		ServerPort:        getEnv("SERVER_PORT", "8080"),
-		CORSOrigins:       getCSVEnv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080"),
-		LogLevel:          getEnv("LOG_LEVEL", "info"),
-		SignInMaxAttempts: getIntEnv("SIGNIN_MAX_ATTEMPTS", 10),
-		SignInWindow:      getDurationEnv("SIGNIN_WINDOW", 15*time.Minute),
-		SyncLogRetention:  getDurationEnv("SYNC_LOG_RETENTION", 720*time.Hour),
+		DatabaseURL:        getEnv("DATABASE_URL", "sqlite:///data/tasktracker.db"),
+		JWTSecret:          os.Getenv("JWT_SECRET"),
+		JWTAccessTTL:       getDurationEnv("JWT_ACCESS_TTL", 1*time.Hour),
+		JWTRefreshTTL:      getDurationEnv("JWT_REFRESH_TTL", 720*time.Hour),
+		ServerPort:         getEnv("SERVER_PORT", "8080"),
+		CORSOrigins:        getCSVEnv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080"),
+		LogLevel:           getEnv("LOG_LEVEL", "info"),
+		SignInMaxAttempts:  getIntEnv("SIGNIN_MAX_ATTEMPTS", 10),
+		SignInWindow:       getDurationEnv("SIGNIN_WINDOW", 15*time.Minute),
+		SyncLogRetention:   getDurationEnv("SYNC_LOG_RETENTION", 720*time.Hour),
+		AttachmentRoot:     getEnv("ATTACHMENT_ROOT", "./data/blobstore"),
+		AttachmentMaxBytes: int64(getIntEnv("ATTACHMENT_MAX_BYTES", 25*1024*1024)),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -73,6 +77,12 @@ func (c *Config) validate() error {
 	}
 	if c.SyncLogRetention < 0 {
 		return errors.New("SYNC_LOG_RETENTION must not be negative; use 0 to keep the feed forever")
+	}
+	if c.AttachmentRoot == "" {
+		return errors.New("ATTACHMENT_ROOT is required; set it to a directory the server can write")
+	}
+	if c.AttachmentMaxBytes <= 0 {
+		return errors.New("ATTACHMENT_MAX_BYTES must be positive; it is the largest attachment the server accepts")
 	}
 	return nil
 }

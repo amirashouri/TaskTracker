@@ -59,6 +59,10 @@ func (h *Handler) PullWorkItem(w http.ResponseWriter, r *http.Request) {
 	h.pull(w, r, entities.OutboxEntityWorkItem)
 }
 
+func (h *Handler) PullAttachment(w http.ResponseWriter, r *http.Request) {
+	h.pull(w, r, entities.OutboxEntityAttachment)
+}
+
 func (h *Handler) pull(w http.ResponseWriter, r *http.Request, entity entities.OutboxEntity) {
 	userID, ok := auth.UserFrom(r.Context())
 	if !ok {

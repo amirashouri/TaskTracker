@@ -20,12 +20,14 @@ type ProjectID string
 type WorkItemID string
 type SprintID string
 type CommentID string
+type AttachmentID string
 
-func NewUserID() UserID         { return UserID(uuid.New().String()) }
-func NewProjectID() ProjectID   { return ProjectID(uuid.New().String()) }
-func NewWorkItemID() WorkItemID { return WorkItemID(uuid.New().String()) }
-func NewSprintID() SprintID     { return SprintID(uuid.New().String()) }
-func NewCommentID() CommentID   { return CommentID(uuid.New().String()) }
+func NewUserID() UserID             { return UserID(uuid.New().String()) }
+func NewProjectID() ProjectID       { return ProjectID(uuid.New().String()) }
+func NewWorkItemID() WorkItemID     { return WorkItemID(uuid.New().String()) }
+func NewSprintID() SprintID         { return SprintID(uuid.New().String()) }
+func NewCommentID() CommentID       { return CommentID(uuid.New().String()) }
+func NewAttachmentID() AttachmentID { return AttachmentID(uuid.New().String()) }
 
 // ============ User ============
 
@@ -218,15 +220,33 @@ type Comment struct {
 	Version    string     `json:"version"`
 }
 
+// Attachment is the synced index entry for one file on a work item. The bytes
+// are NOT here: they live in the blob store (AttachmentRoot on disk) and are
+// linked by BlobRef once uploaded. The row carries ProjectID denormalised so
+// the change feed and the file API can scope by membership without a join.
+type Attachment struct {
+	ID         AttachmentID `json:"id"`
+	WorkItemID WorkItemID   `json:"workItemId"`
+	ProjectID  ProjectID    `json:"projectId"`
+	FileName   string       `json:"fileName"`
+	MimeType   string       `json:"mimeType,omitempty"`
+	SizeBytes  int64        `json:"sizeBytes"`
+	BlobRef    string       `json:"blobRef,omitempty"`
+	CreatedBy  UserID       `json:"createdBy"`
+	CreatedAt  Timestamp    `json:"createdAt"`
+	Version    string       `json:"version"`
+}
+
 // ============ Sync Types ============
 
 type OutboxEntity string
 
 const (
-	OutboxEntityProject  OutboxEntity = "project"
-	OutboxEntityWorkItem OutboxEntity = "workItem"
-	OutboxEntitySprint   OutboxEntity = "sprint"
-	OutboxEntityComment  OutboxEntity = "comment"
+	OutboxEntityProject    OutboxEntity = "project"
+	OutboxEntityWorkItem   OutboxEntity = "workItem"
+	OutboxEntitySprint     OutboxEntity = "sprint"
+	OutboxEntityComment    OutboxEntity = "comment"
+	OutboxEntityAttachment OutboxEntity = "attachment"
 )
 
 type OutboxOperation string
@@ -294,6 +314,10 @@ func (c *Comment) ToJSON() ([]byte, error) {
 	return json.Marshal(c)
 }
 
+func (a *Attachment) ToJSON() ([]byte, error) {
+	return json.Marshal(a)
+}
+
 func (p *Project) ToJSON() ([]byte, error) {
 	return json.Marshal(p)
 }
@@ -347,6 +371,12 @@ func CommentFromJSON(data []byte) (*Comment, error) {
 	var c Comment
 	err := json.Unmarshal(payloadJSON(data), &c)
 	return &c, err
+}
+
+func AttachmentFromJSON(data []byte) (*Attachment, error) {
+	var a Attachment
+	err := json.Unmarshal(payloadJSON(data), &a)
+	return &a, err
 }
 
 func ProjectFromJSON(data []byte) (*Project, error) {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/amirashouri/tasktracker-server/internal/admin"
+	"github.com/amirashouri/tasktracker-server/internal/attachments"
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/config"
 	"github.com/amirashouri/tasktracker-server/internal/db"
@@ -71,7 +72,7 @@ func runServer() {
 	userRepo := entities.NewUserRepository(database.DB)
 
 	// Initialize sync engine
-	syncEngine := sync.NewEngine(database.DB)
+	syncEngine := sync.NewEngine(database.DB, cfg.AttachmentRoot)
 
 	// Initialize auth handler with token store
 	tokenStore := auth.NewTokenStore(database.DB)
@@ -89,7 +90,7 @@ func runServer() {
 	projectHandler := admin.NewProjectHandler(entities.NewProjectRepository(database.DB), syncEngine)
 
 	// Setup HTTP handlers
-	mux := mount(authHandler, adminHandler, projectHandler, syncHandler, jwtManager, database.DB)
+	mux := mount(authHandler, adminHandler, projectHandler, syncHandler, jwtManager, database.DB, syncEngine, cfg.AttachmentRoot, cfg.AttachmentMaxBytes)
 
 	// Apply middleware chain
 	handler := middleware.Chain(
@@ -158,6 +159,9 @@ func mount(
 	syncHandler *sync.Handler,
 	jwtManager *auth.JWTManager,
 	database *sql.DB,
+	syncEngine *sync.Engine,
+	attachmentRoot string,
+	attachmentMaxBytes int64,
 ) *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -188,6 +192,13 @@ func mount(
 	mux.Handle("GET /v1/sync/changes/project", pullProjects)
 	mux.Handle("GET /v1/sync/changes/workItem", pullWorkItems)
 
+	// Attachment metadata rides the same change feed as the other entities, so it
+	// gets its own pull scope. Both spellings are registered so either client
+	// build resolves.
+	pullAttachments := middleware.Auth(jwtManager)(http.HandlerFunc(syncHandler.PullAttachment))
+	mux.Handle("GET /v1/sync/changes/attachments", pullAttachments)
+	mux.Handle("GET /v1/sync/changes/attachment", pullAttachments)
+
 	// Admin routes (admin only)
 	adminMW := func(handler http.HandlerFunc) http.Handler {
 		return middleware.Chain(handler, middleware.Auth(jwtManager), middleware.AdminOnly())
@@ -206,6 +217,15 @@ func mount(
 
 	// Directory search (any authenticated user)
 	mux.Handle("GET /v1/users/search", middleware.Auth(jwtManager)(http.HandlerFunc(adminHandler.Search)))
+
+	// Attachment blobs. Metadata rides the sync feed; the bytes come here, scoped
+	// to the same project membership. The blob store is keyed under attachmentRoot.
+	blobStore := &attachments.BlobStore{Root: attachmentRoot}
+	attachmentBlobs := attachments.NewHandler(syncEngine, database, blobStore, attachmentMaxBytes)
+	mux.Handle("POST /v1/projects/{projectId}/work-items/{workItemId}/attachments/{attachmentId}/blob",
+		middleware.Auth(jwtManager)(http.HandlerFunc(attachmentBlobs.Upload)))
+	mux.Handle("GET /v1/projects/{projectId}/work-items/{workItemId}/attachments/{attachmentId}/blob",
+		middleware.Auth(jwtManager)(http.HandlerFunc(attachmentBlobs.Download)))
 
 	return mux
 }

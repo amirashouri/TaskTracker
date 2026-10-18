@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -28,11 +30,15 @@ const (
 )
 
 type Engine struct {
-	db *sql.DB
+	db             *sql.DB
+	attachmentRoot string
 }
 
-func NewEngine(db *sql.DB) *Engine {
-	return &Engine{db: db}
+// NewEngine builds the sync engine. attachmentRoot is where uploaded blobs are
+// stored (see internal/attachments); it is threaded here so an attachment delete
+// can remove its bytes in the same transaction as the row.
+func NewEngine(db *sql.DB, attachmentRoot string) *Engine {
+	return &Engine{db: db, attachmentRoot: attachmentRoot}
 }
 
 // versionConflict reports that the row moved on since the client read it.
@@ -93,7 +99,7 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 	}
 	switch change.Entity {
 	case entities.OutboxEntityProject, entities.OutboxEntityWorkItem,
-		entities.OutboxEntitySprint, entities.OutboxEntityComment:
+		entities.OutboxEntitySprint, entities.OutboxEntityComment, entities.OutboxEntityAttachment:
 	default:
 		result.Status = StatusRejected
 		result.Message = fmt.Sprintf("unknown entity %q", change.Entity)
@@ -149,6 +155,8 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 		version, err = applySprint(ctx, entities.NewSprintRepository(tx), change)
 	case entities.OutboxEntityComment:
 		version, err = applyComment(ctx, entities.NewCommentRepository(tx), change)
+	case entities.OutboxEntityAttachment:
+		version, err = applyAttachment(ctx, e.attachmentRoot, entities.NewAttachmentRepository(tx), change)
 	}
 
 	if err != nil {
@@ -242,6 +250,31 @@ func resolveProject(ctx context.Context, q entities.Querier, change entities.Pus
 			return "", nil
 		}
 		return projectOfWorkItem(ctx, q, workItemID)
+
+	case entities.OutboxEntityAttachment:
+		// An attachment names a work item, not a project; the work item names the
+		// project. On a delete the row must be read before it is removed.
+		var workItemID string
+		if change.Operation == entities.OutboxOperationDelete {
+			att, err := entities.NewAttachmentRepository(q).GetByID(ctx, entities.AttachmentID(change.EntityID))
+			if err != nil {
+				return "", err
+			}
+			if att == nil {
+				return "", nil
+			}
+			workItemID = string(att.WorkItemID)
+		} else {
+			att, err := entities.AttachmentFromJSON(change.Payload)
+			if err != nil {
+				return "", fmt.Errorf("decode attachment: %w", err)
+			}
+			workItemID = string(att.WorkItemID)
+		}
+		if workItemID == "" {
+			return "", nil
+		}
+		return projectOfWorkItem(ctx, q, workItemID)
 	}
 	return "", fmt.Errorf("unknown entity %q", change.Entity)
 }
@@ -299,6 +332,13 @@ func isMember(ctx context.Context, q entities.Querier, userID, projectID string)
 	return count > 0, err
 }
 
+// IsMember reports whether userID belongs to projectID. It is exported so the
+// attachment file API can scope blob access to the same membership the change
+// feed enforces — one query, so the two checks cannot diverge.
+func (e *Engine) IsMember(ctx context.Context, userID, projectID string) (bool, error) {
+	return isMember(ctx, e.db, userID, projectID)
+}
+
 func containsUser(ids []entities.UserID, userID string) bool {
 	for _, id := range ids {
 		if string(id) == userID {
@@ -332,6 +372,12 @@ func currentVersion(ctx context.Context, q entities.Querier, change entities.Pus
 		return row.Version, nil
 	case entities.OutboxEntityComment:
 		row, err := entities.NewCommentRepository(q).GetByID(ctx, entities.CommentID(change.EntityID))
+		if err != nil || row == nil {
+			return "", err
+		}
+		return row.Version, nil
+	case entities.OutboxEntityAttachment:
+		row, err := entities.NewAttachmentRepository(q).GetByID(ctx, entities.AttachmentID(change.EntityID))
 		if err != nil || row == nil {
 			return "", err
 		}
@@ -468,6 +514,52 @@ func applyComment(ctx context.Context, comments *entities.CommentRepository, cha
 		return "", err
 	}
 	return comment.Version, nil
+}
+
+// applyAttachment mirrors applyComment. On a delete it also removes the on-disk
+// blob, because the row's removal is the only signal the blob store gets — a
+// failed file delete is best-effort and must not fail the metadata delete.
+func applyAttachment(ctx context.Context, attachmentRoot string, attachments *entities.AttachmentRepository, change entities.PushChange) (string, error) {
+	if change.Operation == entities.OutboxOperationDelete {
+		removeAttachmentBlob(attachmentRoot, change.EntityID)
+		return "", attachments.Delete(ctx, entities.AttachmentID(change.EntityID))
+	}
+
+	attachment, err := entities.AttachmentFromJSON(change.Payload)
+	if err != nil {
+		return "", fmt.Errorf("decode attachment: %w", err)
+	}
+	existing, err := attachments.GetByID(ctx, entities.AttachmentID(change.EntityID))
+	if err != nil {
+		return "", err
+	}
+	if existing == nil {
+		attachment.ID = entities.AttachmentID(change.EntityID)
+		if err := attachments.Create(ctx, attachment); err != nil {
+			return "", err
+		}
+		return attachment.Version, nil
+	}
+	if change.Version != "" && existing.Version != change.Version {
+		return "", &versionConflict{current: existing.Version}
+	}
+	attachment.ID = existing.ID
+	attachment.CreatedAt = existing.CreatedAt
+	attachment.Version = existing.Version
+	if err := attachments.Update(ctx, attachment); err != nil {
+		return "", err
+	}
+	return attachment.Version, nil
+}
+
+// removeAttachmentBlob deletes an attachment's on-disk bytes, best-effort. The
+// blob store is keyed flat by attachment id under attachmentRoot; a missing file
+// (already removed, or never uploaded) is not worth failing the metadata delete.
+func removeAttachmentBlob(root, attachmentID string) {
+	if root == "" {
+		return
+	}
+	_ = os.Remove(filepath.Join(root, attachmentID+".blob"))
 }
 
 // Pull returns the changes for one entity after the cursor, oldest first,
