@@ -1,6 +1,6 @@
 # Agent documentation — organize harness-neutral guidance
 
-- **status:** in-progress
+- **status:** done
 - **priority:** P2
 - **plan:** none — standalone documentation maintenance.
 
@@ -43,10 +43,8 @@ Correct only stale paths to the skills.
 - **Done:** Reorganized agent workflow guidance, moved the Go skills to the
   portable skill directory, clarified task-spec lifecycle and handoffs, and
   updated the affected roadmap reference. `scripts/check.sh docs` passed.
-- **Pending:** Review and merge this branch through the repository's normal
-  process.
-- **Next step:** Review the diff, then follow the branch and merge-request
-  workflow.
+- **Pending:** Nothing.
+- **Next step:** None; the task has been merged to `main`.
 - **Gotchas:** `.agents/skills/` is also discovered by the configured local
   adapter, so no harness-specific skill copy is needed. The existing tool
   adapter remains unchanged and still points to root `AGENTS.md`.
