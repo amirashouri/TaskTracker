@@ -2,7 +2,7 @@
 
 - **status:** done
 - **priority:** P1
-- **plan:** [`docs/PLAN.md`](../docs/PLAN.md) §Milestone 4 — Sync engine, entry `T4.6` — the
+- **plan:** [`docs/PLAN-ARCHIVE.md`](../docs/PLAN-ARCHIVE.md) §Milestone 4 — Sync engine, entry `T4.6` — the
   *what* and the rationale live there; this file is the *how*.
 
 ## Scope

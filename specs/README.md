@@ -4,26 +4,31 @@ One file per unit of work. Read the selected task's spec, not the whole folder.
 
 ## Why this exists
 
-`docs/PLAN.md` is the roadmap and finished log: a task spec avoids rereading
-that history to understand one task. It is also the **portable handoff unit**:
-task state survives a change of agent, tool, or session.
+`docs/PLAN.md` is the concise index of active roadmap work.
+`docs/PLAN-ARCHIVE.md` preserves completed-work history and detailed notes for
+pending tasks that do not yet have specs. A task spec is the **portable handoff
+unit**: it records one task's execution contract and state so another agent,
+tool, or session can resume it without loading the whole roadmap.
 
 ## The documents, and what each one is authoritative for
 
 | Document | Holds | Authoritative for |
 | --- | --- | --- |
-| `docs/PLAN.md` | roadmap tasks and their status, in landing order | *what* the planned work is and its priority |
+| `docs/PLAN.md` | active roadmap index, task state, and dependencies | *what* to work on next and in what order |
+| `docs/PLAN-ARCHIVE.md` | completed history and details for un-spec'd tasks | historical context and task detail until moved to a spec |
 | `specs/<id>-<slug>.md` | one task's scope, contract, validation, and handoff | *how that task is done, checked, and resumed* |
 | `docs/API.md`, `docs/ARCHITECTURE.md`, `README.md`, and other `docs/` guides | system contracts, design, setup, and operations | *the system*, not any one task |
 
 A spec does **not** restate a roadmap entry — it links to it and adds the
-checkable scope, acceptance criteria, validation, and `## Handoff`. Some
-standalone or cross-repository work may have no server roadmap entry; record
-that context in the spec rather than inventing a roadmap link.
+checkable scope, acceptance criteria, validation, and `## Handoff`. When a task
+has no spec yet, consult only its section in the archive and then create one.
+Some standalone or cross-repository work may have no server roadmap entry;
+record that context in the spec rather than inventing a roadmap link.
 
 ## Lifecycle
 
-1. For roadmap work, select the task from `docs/PLAN.md`. For approved
+1. For roadmap work, select the task from `docs/PLAN.md`. If no spec exists,
+   read only its detailed section in `docs/PLAN-ARCHIVE.md`. For approved
    standalone work, capture its context in the spec.
 2. Copy `_template.md` to `<task-id>-<slug>.md` (or `<slug>.md` when there is
    no task ID) and fill it in. Set `status: pending`.
@@ -40,5 +45,6 @@ that context in the spec rather than inventing a roadmap link.
 
 When choosing roadmap work, read `AGENTS.md` and `docs/PLAN.md`. When working on
 task *X*, read `AGENTS.md`, the spec for *X*, and the source/docs that spec names.
-Do not read unrelated specs; consult the PLAN only when choosing or updating a
-roadmap task.
+If no spec exists, read only task *X*'s section in `docs/PLAN-ARCHIVE.md` and
+create a spec before implementation. Do not read unrelated specs or archive
+sections.

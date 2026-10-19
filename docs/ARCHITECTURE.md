@@ -163,9 +163,9 @@ case-insensitive decode cannot see a case-only rename.
 | server on SQLite | boots; signs in; push/pull round-trips every entity type |
 | server on Postgres | covered by the CI `test-postgres` job |
 
-The blockers below were fixed in Milestone 0 and the runtime gaps in Milestone 1
-of `docs/PLAN.md`; they are kept here as the record of what was wrong. C1 and C2
-in particular are worth reading before writing new SQL.
+The blockers below were fixed in Milestones 0 and 1 of
+[`docs/PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md); they are kept here as the record of
+what was wrong. C1 and C2 in particular are worth reading before writing new SQL.
 
 ## Findings
 
@@ -323,6 +323,6 @@ Severity is about what blocks a working server.
 6. **B2** — implement `auth`, `middleware` and `sync`.
 7. **E2/E3/E4** — readiness probe, refresh-token rotation, deploy artifacts.
 
-Steps 1–3 are the blocking Milestone 1 of `docs/PLAN.md`. The build is green
+Steps 1–3 are the blocking Milestone 1 of `docs/PLAN-ARCHIVE.md`. The build is green
 today, so a red CI run is a real regression; the runtime failures Milestone 1
 tracks are known and are not build failures.

@@ -11,11 +11,11 @@ Working agreement for `TaskTrackerServer`. Read this before changing anything.
 Follow this sequence for each task. Keep one task on one feature branch and in
 one merge request.
 
-1. **Orient.** Read this file first. When selecting roadmap work, use
-   `docs/PLAN.md` to choose the task, then read only its matching spec in
-   `specs/`. For an existing task, read its spec and the relevant source/docs;
-   do not load unrelated specs. For cross-repository work, read the other
-   repository's `AGENTS.md` before planning.
+1. **Orient.** Read this file first. Use `docs/PLAN.md` as the concise task
+   index. Read the selected task's spec in `specs/`; if none exists, consult
+   only that task's section in `docs/PLAN-ARCHIVE.md` and create a spec before
+   implementation. For cross-repository work, read the other repository's
+   `AGENTS.md` before planning.
 2. **Plan the scope.** Identify the files, observable contract, and validation
    before editing. A roadmap task's spec records these. If the change needs
    files or behavior outside that scope, stop and re-plan before expanding it.
@@ -32,8 +32,9 @@ one merge request.
 
 ## Project documentation
 
-- `docs/PLAN.md` — ordered implementation roadmap; authoritative for what is
-  next and why.
+- `docs/PLAN.md` — concise active roadmap and task index.
+- `docs/PLAN-ARCHIVE.md` — completed-work history and detailed planning notes
+  for tasks not yet captured in specs; read only the selected task section.
 - `specs/<task>.md` — one task's scope, acceptance contract, validation, and
   handoff; authoritative for how that task is done and resumed.
 - `docs/API.md` — HTTP wire contract. Read it before changing a request or

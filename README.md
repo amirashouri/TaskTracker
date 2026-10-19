@@ -14,9 +14,9 @@ refresh-token rotation and sign-in throttling, admin-managed user provisioning,
 middleware (security headers, request IDs, structured logging), and the sync
 engine are all wired in.
 
-Milestones 0–6 of `docs/PLAN.md` are done, except T5.6 (trusted-proxy client
-address). Milestone 7 (freezing the client contract) has not started. See
-`docs/PLAN.md` for the full roadmap.
+Milestones 0–8 are complete. Milestone 9 tracks customer installation and
+exposure work; see [`docs/PLAN.md`](docs/PLAN.md) for the active roadmap and
+[`docs/PLAN-ARCHIVE.md`](docs/PLAN-ARCHIVE.md) for detailed plans and history.
 
 Verified: `gofmt`, `go build ./...`, `go vet ./...` and `go test ./...` all pass,
 and an end-to-end run signs in, pushes a project and a work item, pulls them back
@@ -285,7 +285,9 @@ test are green, so a red run is a real regression.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture and code review.
 - [`docs/API.md`](docs/API.md) — the HTTP contract: auth, users, and the sync endpoints, checked against the client's own DTOs.
-- [`docs/PLAN.md`](docs/PLAN.md) — the ordered, task-by-task implementation plan.
+- [`docs/PLAN.md`](docs/PLAN.md) — concise active roadmap and task index.
+- [`docs/PLAN-ARCHIVE.md`](docs/PLAN-ARCHIVE.md) — completed-work history and
+  detailed plans for pending tasks without specs.
 - [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) — the bare-metal/systemd deployment path, without Docker.
 - [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) — roles, CLI bootstrap, token lifecycle, and how a user gets provisioned.
 - [`AGENTS.md`](AGENTS.md) — working agreement for this repository, including the wire-compatibility policy.

@@ -249,7 +249,9 @@ global limit while the per-account limit keeps working. On a small
 single-organisation install that is usually acceptable — raise
 `SIGNIN_MAX_ATTEMPTS` if legitimate users trip it. Trusting the header without
 knowing which proxies are yours would let anyone forge their address, which is
-worse; see T5.6 in `docs/PLAN.md`.
+worse; the trusted-proxy fix is tracked as T9.1 in
+[`PLAN.md`](PLAN.md), with its original rationale in
+[`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md).
 
 ## 9. Backups and restore
 
