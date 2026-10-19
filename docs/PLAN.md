@@ -37,7 +37,7 @@ are the way they are; this file is *what to do next*.
 | 6 — Testing | **Done** |
 | 7 — Client contract | **Done** |
 | 8 — Admin management | **Done** — T8.1–T8.10; T8.7 closed as unnecessary (the role is already on the JWT claim the client reads) |
-| 9 — Customer install and exposure | T9.1–T9.3 not started; T9.4–T9.11 not started |
+| 9 — Customer install and exposure | T9.1–T9.3 not started; T9.4–T9.13 not started |
 
 ---
 
@@ -1340,7 +1340,9 @@ admin, then print the URL and the next step.
 **Steps:**
 
 1. Preflight: Docker present and the daemon reachable, port free, directory writable,
-   enough disk. Each failure names the fix, not the symptom.
+   enough disk. Each failure names the fix, not the symptom. When Docker is absent the
+   fix is the offer in T9.12; this task ships with the instructions and declining is a
+   supported answer, so the two can land in either order.
 2. Profile choice, defaulting to `sqlite`; `postgres` offered for a multi-user install.
 3. Admin bootstrap through the existing `server user-create` subcommand, not a new path.
 4. End on a URL and a QR code — see T9.7.
@@ -1468,10 +1470,83 @@ cheap even if this never ships.
 
 **Depends on:** T9.1–T9.3 (if it is ever picked up).
 
+### T9.12 — Guided Docker bootstrap in `tt install`
+
+A customer's first failure is `docker: command not found` on a host they cannot
+administer, and the instructions T9.5 prints assume a command line they may not use. This
+task turns that dead end into a question. It is the only place in the CLI that changes the
+host's software, so the consent rules *are* the task:
+
+1. **Never automatic, never default-yes.** The prompt defaults to `No`; a bare Enter
+   declines. `--dry-run` prints the command and executes nothing. A non-interactive
+   `tt install --yes` **fails closed** — an unattended root package install is the one
+   thing this CLI must never do.
+2. **No `curl | sh`.** Never pipe a remote script into a shell, Docker's convenience
+   script included. Use the distribution's package manager, from the distribution's own
+   repositories. Where the convenience script is the practical answer, the CLI *prints*
+   it for the customer to run; it does not run it.
+3. **Three distributions, then stop.** Debian/Ubuntu, Fedora/RHEL family, Arch. Anything
+   else: print the official URL and exit rather than guess a package manager.
+4. **Privilege is stated, not assumed.** The customer sees the exact command and the
+   `sudo` it needs before it runs. If `sudo` is missing or wants a password the CLI cannot
+   supply, print the command and stop. Joining the `docker` group is root-equivalent on
+   the host, so it is a separate explicit yes/no — never a side effect of the install.
+5. **Verify, then hand back.** Start the daemon, wait for `docker info`, and only then
+   resume T9.5's preflight. A failed install relays the package manager's own output and
+   rolls nothing back; the CLI does not uninstall a package the customer's OS owns.
+
+**Files:** `cmd/tt/install.go`, `internal/install/docker.go` (detection and command
+selection — a pure function of `os-release`, `docker` presence, and `sudo` availability),
+`internal/install/exec.go` (the executor interface over `os/exec`).
+
+**Tests:** the selector is table-tested per distribution with no process spawned; the
+executor is faked. One test asserts the non-interactive path fails closed, one asserts a
+declined prompt runs nothing.
+
+**Depends on:** T9.4, T9.5.
+
+### T9.13 — Customer install and onboarding documentation
+
+**Deliberately the last task in the milestone.** Every command in it must already exist
+and have been run once for real, because a doc written against stubs is the artifact that
+ages silently: it describes a CLI nobody has, in a voice that reads as verified.
+
+The repo README stays developer-facing (configuration, Docker, migrations, CI) *and* is
+the scope table `scripts/check.sh` reads, so it keeps that job and gains a short
+"Installing for a team" section pointing at the new doc. `docs/SELF-HOSTING.md` is
+T9.11's and is left alone.
+
+**`docs/INSTALL.md` covers, in order:**
+
+- What the customer needs: a host, Docker (or T9.12's offer), and which provider wants
+  which account — `lan` wants none.
+- Install `tt`, then `tt install`, copied from a real terminal on a clean host.
+- What the QR and the `tasktracker://connect` link do — carry the server URL (T9.7) — and
+  what they do not: carry a password.
+- The `lan` limitation stated plainly: the Android client blocks cleartext HTTP except
+  `localhost`/`10.0.2.2`, so a phone needs `tailscale` or `cloudflare`.
+- Day 2: `tt status`, `tt doctor`, `tt upgrade`, backup and restore (the SQLite file, a
+  Postgres dump), and uninstall.
+- A troubleshooting table where each row is the **actual** message → cause → fix,
+  including `docker: command not found` (→ T9.12) and the Android cleartext refusal.
+- The constraint, restated once so no customer expects otherwise: the project owns no
+  domain, no relay, and no hosted service, and `tt` never phones home.
+
+**Files:** `docs/INSTALL.md` (new), `README.md` (a pointer section only).
+
+**Validation:** every command run on a clean host or container with its transcript in the
+MR; the documented output matches `tt --help`; the README section is a pointer and not a
+second copy; nothing appears in the doc that is not in `cmd/tt`.
+
+**Depends on:** T9.5, T9.7 (client half), T9.8–T9.12.
+
 ### Milestone 9 ordering
 
 `T9.3` → `T9.4` → `T9.5` → `T9.8` gives a working, honest, free install for a
-single-office customer. `T9.7` is the client-side unlock and can land in parallel with
-any of them, but nothing remote is *usable* until it does. `T9.1` and `T9.2` are
-prerequisites for the remote providers only, and both are cheap. `T9.9` before `T9.10`
-because it needs no domain and therefore no support call. `T9.11` stays unstarted.
+single-office customer. `T9.12` turns the first failure they hit — `docker: command not
+found` — from instructions into an offer, and is additive: `T9.5` ships without it. `T9.7`
+is the client-side unlock and can land in parallel with any of them, but nothing remote is
+*usable* until it does. `T9.1` and `T9.2` are prerequisites for the remote providers only,
+and both are cheap. `T9.9` before `T9.10` because it needs no domain and therefore no
+support call. `T9.13` is last by construction: it documents commands that must already
+exist. `T9.11` stays unstarted.
