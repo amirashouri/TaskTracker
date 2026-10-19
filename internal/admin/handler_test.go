@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -71,5 +72,44 @@ func TestDeleteRevokesTheTargetsLiveTokens(t *testing.T) {
 	}
 	if after.Status != entities.StatusDeleted {
 		t.Errorf("target status = %q, want %q", after.Status, entities.StatusDeleted)
+	}
+}
+
+// The member picker's first load has no query text, so an empty q has to be
+// the directory rather than a 400. It also has to be the *live* directory: a
+// soft-deleted account is still a real row, but it is not somebody a new
+// project should be able to add.
+func TestSearchWithNoQueryListsTheLiveDirectory(t *testing.T) {
+	database := dbtest.NewDatabase(t)
+	users := entities.NewUserRepository(database.DB)
+	handler := NewHandler(users, auth.NewTokenStore(database.DB))
+	ctx := context.Background()
+
+	live := &entities.User{Email: "live@example.com", PasswordHash: "x", Role: entities.RoleMember}
+	gone := &entities.User{Email: "gone@example.com", PasswordHash: "x", Role: entities.RoleMember}
+	for _, u := range []*entities.User{live, gone} {
+		if err := users.Create(ctx, u); err != nil {
+			t.Fatalf("create %s: %v", u.Email, err)
+		}
+	}
+	if err := users.SetStatus(ctx, gone.ID, entities.StatusDeleted); err != nil {
+		t.Fatalf("delete %s: %v", gone.Email, err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/users/search", nil)
+	rec := httptest.NewRecorder()
+
+	handler.Search(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("search = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	var resp []userResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode directory: %v", err)
+	}
+	if len(resp) != 1 || resp[0].ID != string(live.ID) {
+		t.Errorf("directory = %+v, want only the live member %s", resp, live.ID)
 	}
 }

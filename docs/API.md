@@ -226,14 +226,17 @@ role claim, because a claim can outlive the role it names.
 
 ### `GET /v1/users/search?q=` — any authenticated user
 
-Case-insensitive substring match on `email` and `display_name`, limited to 50
-results, newest first. `200` with an array of user objects. `400` when `q` is
-missing or empty.
+The collaborator directory. With a query, a case-insensitive substring match on
+`email` and `display_name`, limited to 50 results, newest first. An absent or
+blank `q` lists every non-deleted account, newest first — the member picker
+opens with no text and needs somebody to offer before the user types. `200`
+with an array of user objects.
 
-`search` does **not** exclude deleted members; it is the directory a member picks
-a collaborator from, and a deleted account is still the author of the work it
-left behind. The members list, which is about managing accounts, uses
-`?status=` and does exclude them.
+A **non-empty** query deliberately does not exclude deleted members: a deleted
+account is still the author of the work it left behind. The blank listing is the
+live directory, because that is the set a new project can add as a collaborator.
+The members list, which is about managing accounts, uses `?status=` and is the
+admin-only view of both.
 
 ## Projects (admin)
 

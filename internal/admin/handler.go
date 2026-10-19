@@ -243,14 +243,22 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 
 // ── Directory search (any authenticated user) ───────────────────────
 
+// Search is the collaborator directory. An empty query is not an error: the
+// member picker opens with no text and expects the live directory so it can
+// offer somebody before the user types. Non-empty queries keep the substring
+// match; the empty form lists every non-deleted account.
 func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	if q == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "query parameter 'q' is required")
-		return
-	}
 
-	users, err := h.users.Search(r.Context(), q)
+	var (
+		users []*entities.User
+		err   error
+	)
+	if q == "" {
+		users, err = h.users.List(r.Context())
+	} else {
+		users, err = h.users.Search(r.Context(), q)
+	}
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "search failed")
 		return
