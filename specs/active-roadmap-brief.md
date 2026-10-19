@@ -1,6 +1,6 @@
 # Active roadmap — separate current work from archived detail
 
-- **status:** in-progress
+- **status:** done
 - **priority:** P2
 - **plan:** none — standalone documentation maintenance.
 
@@ -44,8 +44,8 @@ API, or roadmap decisions change.
 - **Done:** Split the roadmap index from the preserved detailed archive, kept
   all Milestone 9 task information available, added task states/dependencies,
   and updated agent, README, architecture, self-hosting, and spec guidance.
-- **Pending:** Final review and merge.
-- **Next step:** Review the diff and land the documentation change.
+- **Pending:** Nothing.
+- **Next step:** Merge the reviewed branch to `main`.
 - **Gotchas:** Pending Milestone 9 details for tasks without specs remain in
   `docs/PLAN-ARCHIVE.md`; consult only the selected task's section. Existing
   specs remain authoritative for T9.3 and T9.4.

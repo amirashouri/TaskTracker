@@ -1,6 +1,6 @@
 # <Task ID or slug> — <imperative title>
 
-- **status:** pending | in-progress | done
+- **status:** pending | in-progress | done (`done` means validated, reviewed, and ready to merge)
 - **priority:** P0 | P1 | P2 | P3
 - **plan:** [`docs/PLAN.md`](../docs/PLAN.md) §<section>, entry `<id>`, or
   `none` for standalone work — the *what* and rationale live there when

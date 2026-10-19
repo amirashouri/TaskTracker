@@ -25,10 +25,13 @@ one merge request.
    diff for scope, correctness, and tests. `scripts/check.sh` is the completion
    check; use `scripts/check.sh race` for concurrent code and
    `scripts/check.sh docs` for documentation-only changes.
-5. **Hand off.** For a task with a spec, update it with verified progress,
-   remaining work, the next concrete step, and gotchas. For standalone work,
-   create a spec rather than an untracked handoff note. Commit the handoff on
-   the task branch. Do not push without authorization.
+5. **Update status and hand off.** Keep the spec `in-progress` while work or
+   validation remains. Once its contract and checks pass and the diff review is
+   approved, set it to `done` as the final task-branch update before merging.
+   Update `## Handoff` with verified progress, remaining work, the next step,
+   and gotchas; if nothing remains, say so. For standalone work, create a spec
+   rather than an untracked handoff note. Commit the status and handoff on the
+   task branch. Do not push without authorization.
 
 ## Project documentation
 

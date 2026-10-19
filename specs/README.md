@@ -38,8 +38,11 @@ record that context in the spec rather than inventing a roadmap link.
 4. Implement and run the checks in **Validation**.
 5. At the end of each session, update `## Handoff` with verified progress and
    the next step; commit it on the task branch.
-6. When the work lands, set `status: done` and update the PLAN entry when there
-   is one. Keep the spec as the record of how the task was verified.
+6. Keep `status: in-progress` while implementation, validation, or review
+   remains. After the contract and checks pass and the diff review is approved,
+   set `status: done` in the final task-branch commit before merge. Update the
+   active PLAN entry when there is one. Keep the spec as the record of how the
+   task was verified.
 
 ## Reading budget
 
