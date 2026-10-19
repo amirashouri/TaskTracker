@@ -6,11 +6,42 @@ Working agreement for `TaskTrackerServer`. Read this before changing anything.
 > first — it governs wire format contracts, the dual-repo ACK protocol, and
 > build isolation boundaries. This file is the contract for Server-only work.
 
-- `docs/PLAN.md` — the ordered, task-by-task roadmap. One task, one branch, one MR.
-- `docs/API.md` — the HTTP wire contract. Read it before changing a request or
+## Agent workflow
+
+Follow this sequence for each task. Keep one task on one feature branch and in
+one merge request.
+
+1. **Orient.** Read this file first. When selecting roadmap work, use
+   `docs/PLAN.md` to choose the task, then read only its matching spec in
+   `specs/`. For an existing task, read its spec and the relevant source/docs;
+   do not load unrelated specs. For cross-repository work, read the other
+   repository's `AGENTS.md` before planning.
+2. **Plan the scope.** Identify the files, observable contract, and validation
+   before editing. A roadmap task's spec records these. If the change needs
+   files or behavior outside that scope, stop and re-plan before expanding it.
+3. **Implement.** Read any applicable skill in `.agents/skills/`. Follow the
+   architecture and compatibility rules below; add tests with behavior changes.
+4. **Verify and review.** Run the check that covers the change, then review the
+   diff for scope, correctness, and tests. `scripts/check.sh` is the completion
+   check; use `scripts/check.sh race` for concurrent code and
+   `scripts/check.sh docs` for documentation-only changes.
+5. **Hand off.** For a task with a spec, update it with verified progress,
+   remaining work, the next concrete step, and gotchas. For standalone work,
+   create a spec rather than an untracked handoff note. Commit the handoff on
+   the task branch. Do not push without authorization.
+
+## Project documentation
+
+- `docs/PLAN.md` — ordered implementation roadmap; authoritative for what is
+  next and why.
+- `specs/<task>.md` — one task's scope, acceptance contract, validation, and
+  handoff; authoritative for how that task is done and resumed.
+- `docs/API.md` — HTTP wire contract. Read it before changing a request or
   response shape.
-- `docs/ARCHITECTURE.md` — the design record: what exists, what is broken, and why.
-- `README.md` — how to configure and run the server.
+- `docs/ARCHITECTURE.md` — architecture decisions, boundaries, and known gaps.
+- `README.md` — build, configuration, and run instructions.
+- `docs/SELF-HOSTING.md` and `docs/USER-MANAGEMENT.md` — operator and user
+  management guidance.
 
 ## What this is
 
@@ -154,19 +185,21 @@ never merged; a branch the review has approved is merged without asking again.
 Where a remote is configured, push and merge the MR instead — push needs its own
 authorisation.
 
-## Specs & cross-harness continuity
+## Specs & continuity
 
-A pending task's *how* lives in one spec, `specs/<plan-id>-<slug>.md` (copy
-`specs/_template.md`). This file is also the **portable handoff unit** when you
-switch agent providers: chat context does not transfer, but a committed spec
-does. End every session by appending a `## Handoff` section (done / pending /
-next step / gotchas) and committing it on the branch. On resume in a new harness,
-read this file, the latest spec, and `git diff main...HEAD`. See `../AGENTS.md` §6.
+A task's *how* lives in one spec under `specs/` (copy `specs/_template.md`);
+roadmap tasks use their plan ID in the filename, while standalone tasks may use
+a descriptive slug. The spec is the **portable handoff unit**: it preserves
+task state when the agent, tool, or session changes. End each session by
+updating its `## Handoff` section (done / pending / next step / gotchas) and
+committing it on the branch. When resuming, read the task's spec and
+`git diff main...HEAD`; do not load unrelated specs. Cross-repository handoffs
+also follow `../AGENTS.md` §6.
 
 ## Skills
 
-Skills live in `.opencode/skills/*/SKILL.md`. Read each skill whose description
-matches the task before starting.
+Portable, on-demand skills live in `.agents/skills/<name>/SKILL.md`. Read a
+skill when its description matches the task; do not load unrelated skills.
 
 - `go-server-architecture` — where code belongs, composition root and handler
   wiring, what not to break in the monolith.

@@ -1,9 +1,10 @@
-# <PLAN-id> — <imperative title>
+# <Task ID or slug> — <imperative title>
 
 - **status:** pending | in-progress | done
 - **priority:** P0 | P1 | P2 | P3
-- **plan:** [`docs/PLAN.md`](../docs/PLAN.md) §<section>, entry `<id>` — the *what* and the
-  rationale live there; this file is the *how*.
+- **plan:** [`docs/PLAN.md`](../docs/PLAN.md) §<section>, entry `<id>`, or
+  `none` for standalone work — the *what* and rationale live there when
+  applicable; this file is the *how*.
 
 ## Scope
 
@@ -12,7 +13,7 @@ change, that is the drift case in `AGENTS.md` — abort, re-plan, get a review.
 
 ## Files
 
-Filled in at Phase 1 (the plan). Until then: `to confirm at Phase 1`.
+Confirm this list before implementation. Until then: `to confirm`.
 
 - `path/to/file.go` — what changes and why.
 
@@ -26,17 +27,18 @@ check-script result proves it, not good intentions.
 
 ## Validation
 
-- Run: `scripts/check.sh` (scopes: `all`, `race`, `docs`). For any concurrent
-  code — sync engine, rate limiter, refresh-token rotation — run
-  `scripts/check.sh race`.
+- Run `scripts/check.sh` for the full suite, or the narrowest applicable scope:
+  `scripts/check.sh docs` for documentation-only changes and
+  `scripts/check.sh race` for concurrent code — sync engine, rate limiter, or
+  refresh-token rotation.
 - Never make a check green by deleting code, stubbing a proof, or weakening an
-  assertion. All four checks pass on `main`; keep it that way.
+  assertion. Keep the checks green.
 - Tests added go next to the code they cover and ship with the behaviour change.
 
 ## Handoff
 
-Filled at end of each session. Carries state across agent providers (OpenCode →
-FreeBuf → WorkBuddy) — chat context dies on a switch, a committed spec does not.
+Filled at the end of each session. Carries state across agents, tools, and
+sessions; a committed spec does not depend on chat context.
 
 - **Done:** <what is finished and verified>
 - **Pending:** <what remains>
