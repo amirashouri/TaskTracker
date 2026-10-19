@@ -33,10 +33,11 @@ are the way they are; this file is *what to do next*.
 | 2 — Versioned migrations | **Done** |
 | 3 — Auth and security | **Done** |
 | 4 — Sync engine | **Done** |
-| 5 — Observability and ops | T5.1–T5.5 done; T5.6 not started |
+| 5 — Observability and ops | T5.1–T5.5 done; T5.6 **promoted to T9.1** |
 | 6 — Testing | **Done** |
 | 7 — Client contract | **Done** |
 | 8 — Admin management | **Done** — T8.1–T8.10; T8.7 closed as unnecessary (the role is already on the JWT claim the client reads) |
+| 9 — Customer install and exposure | T9.1–T9.3 not started; T9.4–T9.11 not started |
 
 ---
 
@@ -758,6 +759,10 @@ See [Self-Hosting](SELF-HOSTING.md), linked from the README.
 
 ### T5.6 — Trusted-proxy aware client address
 
+> **Promoted to T9.1.** The text below is unchanged and remains authoritative; the task
+> moved to Milestone 9 because a proxy is now a supported deployment shape rather than a
+> hypothetical, which makes this a prerequisite instead of a follow-up. Work it there.
+
 **Context:** the sign-in rate limiter keys on `r.RemoteAddr`. Behind the
 reverse proxy that T5.5 recommends, every request carries the proxy's address,
 so the per-address limit degrades into a single global limit. The per-account
@@ -1169,3 +1174,304 @@ response re-reads.
 server-owned defaults (`isArchived` false, `nextItemNumber` 1, a live `version`),
 the row on the active list and the change on the feed; blank name or prefix →
 `400`; the same id twice → `409` with the row untouched.
+
+---
+
+## Milestone 9 — Customer install and exposure
+
+The server has always been runnable — `docker compose up`, or the systemd unit — but
+"runnable by the person who wrote it" is not the same as "installable by a customer".
+This milestone is the gap between the two: one command that sets the stack up, and a
+supported answer to "how do my colleagues reach this from outside the office".
+
+### The constraint that shapes every task here
+
+**The project must own no infrastructure and cost the customer nothing.** There is no
+wildcard domain owned by this project, no provisioning endpoint, no hosted relay, and
+the CLI never phones home. A customer's exposure is a provider *they* hold an account
+with, or nothing at all. That rules out the two obvious designs — a vendor-owned
+`*.tasktracker.app` wildcard (recurring cost, and every customer's ingress flows through
+one account the project cannot support) and a hosted relay (a service to run).
+
+It also rules out a static IP as the answer. A static IP solves *addressing* and nothing
+else: a name, a certificate, and a routable path are three separate problems, and most
+home and small-office connections are behind CGNAT, where a forwarded port cannot work
+at all. Recorded here so the option is not re-proposed: **no static IP, no port
+forwarding, no DDNS.**
+
+### The providers, and why `lan` is the default
+
+| Provider | Customer pays | Account needed | Stable HTTPS URL | Ships in |
+| --- | --- | --- | --- | --- |
+| `lan` | $0 | none | no (plain HTTP on the LAN) | **T9.8 — default** |
+| `tailscale` | $0 | free Tailscale account | yes, `<host>.<tailnet>.ts.net` | T9.9 |
+| `cloudflare` | $0 if they already own a domain | Cloudflare (free) | yes, their own hostname | T9.10 |
+| VPS + Caddy | $5–10/month | — | yes | **documented only — T9.11** |
+
+`lan` is the default because it is the only shape that needs **no account, no third
+party, and no beta dependency**. A single-office team is productive with `tt install`
+and nothing else, and "is this really free?" has a one-word answer. The two remote
+providers are additive, behind one flag, so a customer is never locked into the choice
+this project made for them.
+
+`lan` has one honest limitation: the Android client blocks cleartext HTTP except for
+`localhost` and `10.0.2.2` (`androidApp/src/main/res/xml/network_security_config.xml`),
+so a phone reaches a LAN server only over HTTPS — which means `lan` serves the desktop
+and iOS clients, and a phone needs a remote provider. That is a documentation fact, not
+a defect to work around; adding a LAN host to the cleartext allow-list at build time
+would put every customer's subnet in the shipped app.
+
+`tailscale` is not free of caveats and the docs must say so: Funnel is still beta, its
+bandwidth is capped at an unpublished number, and Tailscale describes the Personal plan
+as non-commercial use. It is the right default *remote* answer for a hobby-scale install
+and the wrong answer for a business that needs a commercial-safe path — which is what
+`cloudflare` is for.
+
+### T9.1 — Trusted-proxy aware client address
+
+Promoted from **T5.6**, whose text is unchanged and still authoritative; it is
+renumbered here because it stops being a follow-up and becomes a prerequisite. The
+sign-in rate limiter keys on `r.RemoteAddr`, so behind *any* of the providers above
+every request carries one address and the per-address budget (10 attempts / 15 min)
+collapses into a single global budget for the whole team. The per-account limit keeps
+working, which is why this was never a blocker before — but a customer whose five
+colleagues trip a global sign-in limit on a Monday morning is a support ticket, not a
+theoretical weakness.
+
+The provider topology makes this cheaper than T5.6 assumed: with `cloudflared` or
+`tailscale funnel` in front, the peer is a single address on the loopback or the compose
+network, so `TRUSTED_PROXIES` is that one prefix and header spoofing is impossible —
+nothing else can reach the bound port. No Cloudflare range list to maintain.
+
+**Depends on:** T3.2. See T5.6 for the steps and tests.
+
+### T9.2 — Per-route deadlines for attachment transfers
+
+`cmd/server/main.go` sets `ReadTimeout` and `WriteTimeout` to 15 s globally, while
+`ATTACHMENT_MAX_BYTES` defaults to 25 MiB. On a LAN that is invisible; over a home
+uplink a 25 MiB upload cannot complete in 15 s, so the failure appears only once the
+server leaves the building — exactly when a customer first tries it.
+
+**Steps:**
+
+1. Keep the 15 s global timeouts for ordinary requests; they are the right shape for a
+   JSON API and they are what bounds a slowloris.
+2. Give the two blob routes (`POST`/`GET .../attachments/{id}/blob`) their own deadlines
+   through `http.ResponseController` — a read/write deadline sized from
+   `ATTACHMENT_MAX_BYTES` and a conservative floor bandwidth, not an unbounded body.
+3. Test with a body that arrives slower than 15 s but within the route's budget: the
+   upload succeeds, and the same delay on a JSON route still fails. Both halves, or the
+   test only proves the timeout was removed.
+
+**Files:** `cmd/server/main.go`, `internal/attachments/handler.go`, `internal/config/config.go`.
+
+**Depends on:** none.
+
+### T9.3 — `SERVER_BIND`, and stop publishing `8080` on every interface
+
+The server binds `":" + cfg.ServerPort`, i.e. every interface, and both compose
+services publish `8080:8080` on the host's LAN address. For a tunnelled install the
+proxy target is `http://127.0.0.1:8080` and the plain-HTTP port must not be reachable
+from the network at all.
+
+**Steps:**
+
+1. Add `SERVER_BIND` (default `127.0.0.1`) to `internal/config`, validated as an IP
+   literal; `0.0.0.0` is the explicit opt-in that `lan` mode sets. Default-loopback is
+   the safe choice: an install that forgets the variable is unreachable rather than
+   exposed.
+2. Change the compose publish to `127.0.0.1:${SERVER_PORT:-8080}:8080`, and add an
+   `expose` profile whose server service is not published at all (the sidecar reaches
+   `http://server-pg:8080` over the compose network).
+3. Document the variable in `.env.example` and in `docs/SELF-HOSTING.md`.
+
+**Files:** `internal/config/config.go`, `cmd/server/main.go`, `docker-compose.yml`,
+`.env.example`, `docs/SELF-HOSTING.md`.
+
+**Tests:** `internal/config/config_test.go` — default is loopback, `0.0.0.0` accepted,
+a hostname or empty value rejected.
+
+**Depends on:** none.
+
+### T9.4 — `tt` CLI: skeleton, state file, and idempotence
+
+A second binary in the same module, `cmd/tt`, shipped as static builds for
+darwin/linux/windows × amd64/arm64. Static because a customer installing a runtime first
+is where the funnel dies; same module because the CLI and the server version must never
+drift.
+
+The CLI embeds the compose file, the systemd unit, and a `Caddyfile` with `go:embed`,
+and pins the server image tag to its own build version — so `tt upgrade` cannot pull a
+server newer than the CLI that is driving it.
+
+**Commands (this task):** `install`, `status`, `doctor`, `logs`, `uninstall`.
+
+**Rules that matter more than the command list:**
+
+1. **Idempotent and resumable.** A state file (`/etc/tasktracker/install.json` on Linux,
+   `~/.config/tasktracker/` elsewhere) records mode, provider, paths, and the image tag.
+   Every step checks before acting; re-running `install` on an existing instance offers
+   *repair*, never re-init.
+2. **Wait on `/readyz`, not on compose.** `docker compose up -d` returns long before the
+   healthcheck passes, and a CLI that prints "ready" early is the one bug every customer
+   hits.
+3. **Never recreate the JWT secret or the data volume.** Generated once with
+   `crypto/rand`, written `0600`, printed once. `uninstall` requires the instance name
+   typed back.
+4. **`--dry-run` prints the rendered compose**, so a technical customer can audit what
+   the wizard would do before it does it.
+
+**Files:** new `cmd/tt/`, `internal/tt/…` (or `internal/install/…` if the state machine
+is testable there), `go.mod` if a TUI/prompt dependency is taken, `Makefile`,
+`.gitlab-ci.yml` (release job).
+
+**Tests:** the state machine is a pure function of (state, command) and is tested
+without Docker; the Docker-touching layer is a thin adapter over an interface.
+
+**Depends on:** T9.3.
+
+### T9.5 — `tt install`: the wizard
+
+Wraps T9.4's state machine in the interactive path a non-technical customer follows:
+pick a profile (sqlite by default — zero external dependencies), confirm the data
+directory, generate the secret, start the stack, wait for `/readyz`, create the first
+admin, then print the URL and the next step.
+
+**Steps:**
+
+1. Preflight: Docker present and the daemon reachable, port free, directory writable,
+   enough disk. Each failure names the fix, not the symptom.
+2. Profile choice, defaulting to `sqlite`; `postgres` offered for a multi-user install.
+3. Admin bootstrap through the existing `server user-create` subcommand, not a new path.
+4. End on a URL and a QR code — see T9.7.
+5. If the chosen mode is `lan`, print the detected LAN address and warn when the host is
+   on battery, Wi-Fi, or has a lid that closes: a laptop that sleeps is a server that is
+   down, and it is the single most common failure for this deployment shape.
+
+**Files:** `cmd/tt/`, `internal/install/…`.
+
+**Depends on:** T9.4.
+
+### T9.6 — `tt doctor` and `tt status`
+
+`status` reports the facts an operator needs in one screen: container state, `/readyz`,
+the bound address, the provider and its health, certificate/DNS expiry where applicable,
+database size, and the age of the last backup. `doctor` is the same checks plus the
+ones that only matter when something is wrong: DNS resolution of the public hostname,
+TLS handshake, a request through the provider from outside, attachment-size versus the
+provider's cap, and clock skew.
+
+Both read from the same check functions, so a green `status` and a green `doctor` cannot
+disagree.
+
+**Files:** `cmd/tt/`, `internal/install/checks.go`.
+
+**Depends on:** T9.5.
+
+### T9.7 — Runtime server URL and `tasktracker://connect` pairing *(cross-repo)*
+
+**This is the task that makes the rest usable, and the only one that touches both
+repos.** Today the client's API root is build-time only — an Android Gradle property
+into the manifest, an `Info.plist` key on iOS, `TASKTRACKER_API_URL` on the JVM. A
+customer cannot rebuild the app, so every URL the CLI can print is one the app has no way
+to accept. Until this lands, no provider is installable by a non-technical user.
+
+**The client half is specified in the other repo**, not restated here:
+`TaskTrackerKMP/docs/PLAN.md` §6, entries `6.1`–`6.4` (runtime override, Settings field,
+validation, and the `connect` link). Its specs are
+`TaskTrackerKMP/specs/6.1-runtime-api-root.md` and
+`TaskTrackerKMP/specs/6.4-connect-deep-link.md`. Work those; do not re-derive them.
+
+**The server half is small:** `tt install` renders
+`tasktracker://connect?url=<the URL it just verified>` and a QR code of it. There is no
+wire-format change — no response gains a field — so this is not a DTO contract change,
+but it is still a dual-repo ACK because the link grammar is shared.
+
+**Ordering:** client first (`6.1`–`6.4`), then the CLI renders the link. This is the
+dual-engine "client is the fixed point" rule applied to a *configuration* surface rather
+than a DTO. The client half has no server dependency, so it can land before T9.4 exists.
+
+**Files:** `TaskTrackerServer` — `cmd/tt/`. The client files are listed in §6's specs.
+
+**Depends on:** T9.5 (for the CLI side only).
+
+### T9.8 — `tt expose --provider=lan` (default)
+
+Finishes today's behaviour rather than adding a feature: set `SERVER_BIND=0.0.0.0`,
+publish the port, detect and print the LAN address, and verify reachability from the
+host's own LAN address (not loopback — the loopback check passes even when the bind is
+wrong, which is the mistake this task exists to catch).
+
+**Files:** `cmd/tt/`, `docker-compose.yml`, `docs/SELF-HOSTING.md`.
+
+**Depends on:** T9.3, T9.5.
+
+### T9.9 — `tt expose --provider=tailscale`
+
+The $0 remote path: no domain, no port forwarding, no CGNAT problem, a valid certificate,
+and TLS terminated on the customer's own machine — Tailscale's relay only carries
+ciphertext, which makes it the cleanest of the remote options architecturally.
+
+**Steps:**
+
+1. Detect `tailscale` on the host; if absent, print the install command for the platform
+   rather than installing it silently.
+2. Require an authenticated tailnet and HTTPS enabled; guide through the two dashboard
+   steps that cannot be automated without an API token, and do not pretend otherwise.
+3. `tailscale funnel --bg 443 http://127.0.0.1:8080` (or `tailscale serve` when the
+   customer wants tailnet-only access instead of public).
+4. Verify with an HTTPS request to the `ts.net` name, then print it and a QR for T9.7.
+5. Set `TRUSTED_PROXIES` to the loopback prefix, because Funnel connects to the target
+   from `127.0.0.1`.
+
+**Files:** `cmd/tt/`, `docs/SELF-HOSTING.md`.
+
+**Depends on:** T9.1, T9.7, T9.8.
+
+### T9.10 — `tt expose --provider=cloudflare`
+
+For a customer who already owns a domain: `tt expose --provider=cloudflare
+--domain tasks.theirco.com` adds a `cloudflared` sidecar, walks through creating a
+tunnel and an API token, and verifies the public hostname end to end. Nothing is
+provisioned by this project; the tunnel lives in the customer's own account, so the
+project holds no credential and no shared failure domain.
+
+**Steps:**
+
+1. Refuse a hostname whose zone is not on Cloudflare, and say what to change at the
+   registrar — this is the one step that cannot be automated and the docs must be
+   honest that it takes minutes to hours to propagate.
+2. `cloudflared tunnel` create/route through the customer's API token, token stored in
+   the OS keychain or a `0600` file, never in the compose file.
+3. Set `TRUSTED_PROXIES` to the compose subnet the sidecar sits on.
+4. Validate `ATTACHMENT_MAX_BYTES` against Cloudflare's 100 MB request-body cap and
+   refuse a larger value at startup with a message naming the provider — otherwise the
+   customer gets a proxy 413 that never reaches this server's logs.
+
+**Files:** `cmd/tt/`, `docker-compose.yml`, `internal/config/config.go`,
+`docs/SELF-HOSTING.md`.
+
+**Depends on:** T9.1, T9.7, T9.8.
+
+### T9.11 — VPS + Caddy: documented, not implemented
+
+The always-on option for a customer who does not want to run hardware. **Deferred on
+purpose** — recorded so the shape is not re-derived later and so nobody half-builds it.
+
+What it would be: the same compose stack on a VPS, Caddy in front with automatic ACME,
+`80`/`443` open, `SERVER_BIND=127.0.0.1`, and `TRUSTED_PROXIES` set to the Caddy
+container's address. The CLI addition is `tt install --vps` plus a cloud-init path; the
+server-side prerequisites are all in T9.1–T9.3, which is why doing those first is
+cheap even if this never ships.
+
+**Files:** `docs/SELF-HOSTING.md` only, when written. No code in this milestone.
+
+**Depends on:** T9.1–T9.3 (if it is ever picked up).
+
+### Milestone 9 ordering
+
+`T9.3` → `T9.4` → `T9.5` → `T9.8` gives a working, honest, free install for a
+single-office customer. `T9.7` is the client-side unlock and can land in parallel with
+any of them, but nothing remote is *usable* until it does. `T9.1` and `T9.2` are
+prerequisites for the remote providers only, and both are cheap. `T9.9` before `T9.10`
+because it needs no domain and therefore no support call. `T9.11` stays unstarted.
