@@ -1,9 +1,6 @@
 ---
 name: go-config-and-secrets
 description: Use when adding or reading a configuration value, a .env variable, an environment variable, or a secret such as JWT_SECRET in TaskTrackerServer. Covers the config loader, validation, and the rule that secrets never enter the repository.
-related:
-  - go-server-architecture
-  - go-migrations-and-repositories
 ---
 
 # Configuration and secrets

@@ -1,16 +1,13 @@
 ---
 name: go-migrations-and-repositories
 description: Use when changing a table, a migration, a repository, or an entity field in TaskTrackerServer. Covers the versioned per-driver migrations in internal/db/migrations, Postgres vs SQLite differences, optimistic locking, and time representation.
-related:
-  - go-server-architecture
-  - go-config-and-secrets
 ---
 
 # Migrations and repositories
 
-Read `docs/ARCHITECTURE.md` first: it is the review this code grew from, and it
-records which defects are already fixed. Change the DDL and the repository
-mapping **in the same commit**; a column added to one and not the other is the
+Read `docs/ARCHITECTURE.md` for the design context, then verify current
+repository and migration behavior in code. Change the DDL and repository
+mapping **in the same commit**; a column added to one and not the other is a
 recurring failure mode.
 
 ## Where the schema lives

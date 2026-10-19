@@ -93,7 +93,7 @@ What does **not** change:
 
 ## Handoff
 
-Filled at end of each session (cross-provider resume).
+Filled at the end of each session so work can resume in another agent or tool.
 
 - **Done:** T1–T4 implemented. Migration `0005_attachments` (both dialects). `Attachment`
   entity + `attachment_repository.go`. Engine: `OutboxEntityAttachment`, `applyAttachment`,

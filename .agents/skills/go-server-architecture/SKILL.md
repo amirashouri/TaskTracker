@@ -1,17 +1,14 @@
 ---
 name: go-server-architecture
 description: Use when adding or changing a package, an HTTP endpoint, wiring in cmd/server, or middleware in TaskTrackerServer. Covers this repository's single-binary monolith boundaries, the composition root, and handler/middleware conventions.
-related:
-  - go-config-and-secrets
-  - go-migrations-and-repositories
 ---
 
 # Server architecture
 
 `TaskTrackerServer` is one Go module, self-hosted as one binary against one
-database. The architecture is a monolith with `internal/` package boundaries, not
-a set of services. Read `docs/ARCHITECTURE.md` for the current state; several
-packages are still empty.
+database. The architecture is a monolith with `internal/` package boundaries,
+not a set of services. Read `docs/ARCHITECTURE.md` for design decisions, then
+confirm current behavior in the code.
 
 ## Boundaries
 
@@ -40,8 +37,7 @@ config.Load → db.New → db.Migrate → repositories → sync engine → mux �
 - Construct a dependency once, here, and pass it down. Do not build a repository
   inside a handler or a global.
 - Repository constructors take `*sql.DB`; `db.New` returns `*db.DB`, so pass
-  `database.DB`, not `database` (the scaffold currently gets this wrong — B4 in
-  `docs/ARCHITECTURE.md`).
+  `database.DB`, not `database`.
 - Startup failures are fatal and explicit (`log.Fatalf` with the cause). Never
   continue with a half-built graph.
 
@@ -50,7 +46,7 @@ config.Load → db.New → db.Migrate → repositories → sync engine → mux �
 Routes are registered on a `http.ServeMux` with method patterns:
 
 ```go
-mux.HandleFunc("POST /v1/auth/signin", authHandler.SignIn)
+mux.HandleFunc("POST /v1/auth/login", authHandler.SignIn)
 mux.Handle("POST /v1/sync/push", middleware.Auth(jwtManager)(http.HandlerFunc(syncHandler.Push)))
 ```
 
@@ -76,8 +72,9 @@ without a new `/v`-prefixed route.
 ## Before you finish
 
 ```bash
-gofmt -l . && go build ./... && go vet ./...
+scripts/check.sh
 ```
 
-`go build` is red until the empty packages exist. Fix what your change touches;
-do not delete code or stub checks to make the tree green.
+Use `scripts/check.sh race` for concurrent code and `scripts/check.sh docs` for
+documentation-only changes. Do not delete code or stub checks to make the tree
+green.

@@ -174,7 +174,7 @@ field.
 **Why it is broken:** each `Update` assigns the new version and then filters
 `WHERE id = $1 AND version = <same new version>`. The stored row holds the old
 version, so the predicate never matches and *every* update fails. Follow the
-correct pattern in `.opencode/skills/go-migrations-and-repositories/SKILL.md`:
+correct pattern in `.agents/skills/go-migrations-and-repositories/SKILL.md`:
 capture the caller's version, write a new one, compare against the captured one,
 and return a typed conflict error when `RowsAffected() == 0`.
 
