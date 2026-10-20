@@ -56,7 +56,7 @@ need a remote HTTPS provider rather than plain LAN access.
 | T9.10 | Complete | `tt expose --provider=cloudflare` | T9.1, T9.7, T9.8 | [`t9.10-cloudflare-expose.md`](../specs/t9.10-cloudflare-expose.md) |
 | T9.11 | Deferred | VPS + Caddy deployment guide (documented, not implemented) | T9.1–T9.3, if picked up | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.11 |
 | T9.12 | Complete | Guided Docker bootstrap in `tt install` | T9.4, T9.5 | [`t9.12-docker-bootstrap.md`](../specs/t9.12-docker-bootstrap.md) |
-| T9.13 | Pending | Customer installation and onboarding docs | T9.5, T9.7–T9.12 | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.13 |
+| T9.13 | Complete | Customer installation and onboarding docs | T9.5, T9.7–T9.12 | [`t9.13-install-docs.md`](../specs/t9.13-install-docs.md) |
 
 ### Milestone ordering
 
