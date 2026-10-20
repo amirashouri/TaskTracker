@@ -2,6 +2,7 @@ package config
 
 import (
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,6 +191,128 @@ func TestLoadRejectsNonLiteralServerBind(t *testing.T) {
 				t.Errorf("error %q does not name SERVER_BIND", err)
 			}
 		})
+	}
+}
+
+// The resolver compares request addresses against these prefixes, so they must
+// be parsed and normalized once at startup.
+func TestLoadReadsTrustedProxies(t *testing.T) {
+	isolate(t, testKeyJWT)
+	isolate(t, "TRUSTED_PROXIES")
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+	t.Setenv(testKeyJWT, strings.Repeat("a", 32))
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1/32, 10.0.0.0/8, 2001:db8::/32")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"127.0.0.1/32", "10.0.0.0/8", "2001:db8::/32"}
+	if len(cfg.TrustedProxies) != len(want) {
+		t.Fatalf("TrustedProxies = %v, want %v", cfg.TrustedProxies, want)
+	}
+	for i, prefix := range cfg.TrustedProxies {
+		if got := prefix.String(); got != want[i] {
+			t.Errorf("TrustedProxies[%d] = %q, want %q", i, got, want[i])
+		}
+	}
+	if !cfg.TrustedProxies[0].Contains(netip.MustParseAddr("127.0.0.1")) {
+		t.Error("127.0.0.1/32 does not contain 127.0.0.1")
+	}
+	if cfg.TrustedProxies[0].Contains(netip.MustParseAddr("10.0.0.1")) {
+		t.Error("127.0.0.1/32 contains an unrelated address")
+	}
+	if !cfg.TrustedProxies[2].Contains(netip.MustParseAddr("2001:db8::5")) {
+		t.Error("2001:db8::/32 does not contain a member address")
+	}
+}
+
+// The zero value is the safe default: an install that never configures a proxy
+// must keep using RemoteAddr.
+func TestLoadLeavesTrustedProxiesEmptyByDefault(t *testing.T) {
+	isolate(t, testKeyJWT)
+	isolate(t, "TRUSTED_PROXIES")
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+	t.Setenv(testKeyJWT, strings.Repeat("a", 32))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.TrustedProxies) != 0 {
+		t.Errorf("TrustedProxies = %v, want none", cfg.TrustedProxies)
+	}
+}
+
+func TestLoadRejectsInvalidTrustedProxies(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"bare address", "127.0.0.1"},
+		{"hostname", "proxy.internal/32"},
+		{"garbage", "not-a-cidr"},
+		{"trusts every IPv4 address", "0.0.0.0/0"},
+		{"trusts every IPv6 address", "::/0"},
+		{"mapped everything", "::ffff:0:0/96"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t, testKeyJWT)
+			isolate(t, "TRUSTED_PROXIES")
+			t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+			t.Setenv(testKeyJWT, strings.Repeat("a", 32))
+			t.Setenv("TRUSTED_PROXIES", tc.value)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("Load with TRUSTED_PROXIES=%q succeeded, want an error", tc.value)
+			}
+			if !strings.Contains(err.Error(), "TRUSTED_PROXIES") {
+				t.Errorf("error %q does not name TRUSTED_PROXIES", err)
+			}
+		})
+	}
+}
+
+// A single-host CIDR is easy to mistype as a bare address. The error has to say
+// what to write instead, because a startup failure with no next step is a
+// support ticket.
+func TestLoadExplainsTheSingleHostCIDR(t *testing.T) {
+	isolate(t, testKeyJWT)
+	isolate(t, "TRUSTED_PROXIES")
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+	t.Setenv(testKeyJWT, strings.Repeat("a", 32))
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load accepted a bare address")
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1/32") {
+		t.Errorf("error %q does not show the single-host CIDR", err)
+	}
+}
+
+func TestLoadNormalizesTrustedProxyPrefixes(t *testing.T) {
+	isolate(t, testKeyJWT)
+	isolate(t, "TRUSTED_PROXIES")
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+	t.Setenv(testKeyJWT, strings.Repeat("a", 32))
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.9/8, ::ffff:192.0.2.99/120")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"127.0.0.0/8", "192.0.2.0/24"}
+	if len(cfg.TrustedProxies) != len(want) {
+		t.Fatalf("TrustedProxies = %v, want %v", cfg.TrustedProxies, want)
+	}
+	for i, prefix := range cfg.TrustedProxies {
+		if got := prefix.String(); got != want[i] {
+			t.Errorf("TrustedProxies[%d] = %q, want %q", i, got, want[i])
+		}
 	}
 }
 

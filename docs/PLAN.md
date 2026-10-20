@@ -44,7 +44,7 @@ need a remote HTTPS provider rather than plain LAN access.
 
 | Task | State | Intent | Depends on | Execution details |
 | --- | --- | --- | --- | --- |
-| T9.1 | Pending | Trusted-proxy-aware client address | T3.2 | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.1 (promoted from T5.6) |
+| T9.1 | Complete | Trusted-proxy-aware client address | T3.2 | [`t9.1-trusted-proxies.md`](../specs/t9.1-trusted-proxies.md) |
 | T9.2 | Pending | Per-route attachment-transfer deadlines | None | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.2 |
 | T9.3 | Complete | Bind and publish the server safely | None | [`t9.3-server-bind.md`](../specs/t9.3-server-bind.md) |
 | T9.4 | Complete | `tt` CLI skeleton, state file, and idempotence | T9.3 | [`t9.4-tt-cli-skeleton.md`](../specs/t9.4-tt-cli-skeleton.md) |

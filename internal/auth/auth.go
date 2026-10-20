@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -137,14 +137,29 @@ func RoleFrom(ctx context.Context) (string, bool) {
 }
 
 type Handler struct {
-	jwt     *JWTManager
-	users   *entities.UserRepository
-	tokens  *TokenStore
-	limiter *ratelimit.Limiter
+	jwt            *JWTManager
+	users          *entities.UserRepository
+	tokens         *TokenStore
+	limiter        *ratelimit.Limiter
+	trustedProxies []netip.Prefix
 }
 
-func NewHandler(jwt *JWTManager, users *entities.UserRepository, tokens *TokenStore, limiter *ratelimit.Limiter) *Handler {
-	return &Handler{jwt: jwt, users: users, tokens: tokens, limiter: limiter}
+// NewHandler takes the trusted proxy prefixes once, at startup, so the request
+// path only compares an address against them instead of parsing CIDRs.
+func NewHandler(
+	jwt *JWTManager,
+	users *entities.UserRepository,
+	tokens *TokenStore,
+	limiter *ratelimit.Limiter,
+	trustedProxies []netip.Prefix,
+) *Handler {
+	return &Handler{
+		jwt:            jwt,
+		users:          users,
+		tokens:         tokens,
+		limiter:        limiter,
+		trustedProxies: trustedProxies,
+	}
 }
 
 type signInRequest struct {
@@ -231,23 +246,13 @@ func (h *Handler) allowSignIn(r *http.Request, email string) (time.Duration, boo
 	if h.limiter == nil {
 		return 0, true
 	}
-	if allowed, retryAfter := h.limiter.Allow("ip:" + clientIP(r)); !allowed {
+	if allowed, retryAfter := h.limiter.Allow("ip:" + clientIP(r, h.trustedProxies)); !allowed {
 		return retryAfter, false
 	}
 	if allowed, retryAfter := h.limiter.Allow("email:" + email); !allowed {
 		return retryAfter, false
 	}
 	return 0, true
-}
-
-// clientIP is the peer address. A deployment behind a proxy must be trusted to
-// rewrite it; X-Forwarded-For is deliberately not read here.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 // retryAfterSeconds rounds up, so the header never tells a client to retry

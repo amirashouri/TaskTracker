@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 
 	return &testEnv{
-		handler: NewHandler(jwt, users, NewTokenStore(database.DB), nil),
+		handler: NewHandler(jwt, users, NewTokenStore(database.DB), nil, nil),
 		users:   users,
 		store:   NewTokenStore(database.DB),
 		jwt:     jwt,
@@ -105,12 +106,22 @@ func postRaw(t *testing.T, handler http.HandlerFunc, body string) *httptest.Resp
 // varying the account.
 func postSignIn(t *testing.T, handler http.HandlerFunc, remoteAddr, email, password string) *httptest.ResponseRecorder {
 	t.Helper()
+	return postSignInForwarded(t, handler, remoteAddr, "", email, password)
+}
+
+// postSignInForwarded also sets the forwarded client, so a test can prove which
+// address the limiter used behind a proxy.
+func postSignInForwarded(t *testing.T, handler http.HandlerFunc, remoteAddr, forwardedFor, email, password string) *httptest.ResponseRecorder {
+	t.Helper()
 	payload, err := json.Marshal(map[string]string{"email": email, "password": password})
 	if err != nil {
 		t.Fatalf("marshal body: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(payload))
 	req.RemoteAddr = remoteAddr
+	if forwardedFor != "" {
+		req.Header.Set("X-Forwarded-For", forwardedFor)
+	}
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 	return rec
@@ -494,6 +505,55 @@ func TestSignInThrottlesPerAddress(t *testing.T) {
 	}
 	if rec.Header().Get("Retry-After") == "" {
 		t.Error("a 429 response has no Retry-After header")
+	}
+}
+
+// Behind a trusted proxy, the forwarded client is the address that must be
+// limited. Two clients sharing the proxy each get their own budget; otherwise
+// the proxy's single address would throttle the whole team.
+func TestSignInThrottlesPerForwardedClientBehindATrustedProxy(t *testing.T) {
+	env := newTestEnv(t)
+	env.handler.limiter = ratelimit.New(2, time.Minute)
+	env.handler.trustedProxies = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+
+	// Different accounts, one forwarded client: only the client counter can
+	// stop the third attempt.
+	for i, email := range []string{"a@example.com", "b@example.com"} {
+		rec := postSignInForwarded(t, env.handler.SignIn, "10.0.0.5:1", "203.0.113.1", email, "wrong")
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401", i+1, rec.Code)
+		}
+	}
+
+	rec := postSignInForwarded(t, env.handler.SignIn, "10.0.0.5:1", "203.0.113.1", "c@example.com", "wrong")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("third attempt from one forwarded client = %d, want 429", rec.Code)
+	}
+
+	// A second client through the same proxy is still within its own budget.
+	rec = postSignInForwarded(t, env.handler.SignIn, "10.0.0.5:1", "203.0.113.2", "d@example.com", "wrong")
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("a different forwarded client = %d, want 401; the proxy address is being used as the key", rec.Code)
+	}
+}
+
+// The forgery case: an untrusted peer must not be able to evade the limiter by
+// changing X-Forwarded-For on every request.
+func TestSignInIgnoresForwardedForFromAnUntrustedPeer(t *testing.T) {
+	env := newTestEnv(t)
+	env.handler.limiter = ratelimit.New(2, time.Minute)
+	env.handler.trustedProxies = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+
+	for i, forwarded := range []string{"203.0.113.1", "203.0.113.2"} {
+		rec := postSignInForwarded(t, env.handler.SignIn, "192.0.2.10:1", forwarded, []string{"a@example.com", "b@example.com"}[i], "wrong")
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d = %d, want 401", i+1, rec.Code)
+		}
+	}
+
+	rec := postSignInForwarded(t, env.handler.SignIn, "192.0.2.10:1", "203.0.113.3", "c@example.com", "wrong")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("third forged attempt from one untrusted peer = %d, want 429; the header was trusted", rec.Code)
 	}
 }
 

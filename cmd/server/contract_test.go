@@ -141,7 +141,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 
 	return &contractEnv{
 		mux: mount(
-			auth.NewHandler(jwtManager, users, tokens, ratelimit.New(100, time.Minute)),
+			auth.NewHandler(jwtManager, users, tokens, ratelimit.New(100, time.Minute), nil),
 			admin.NewHandler(users, tokens),
 			admin.NewProjectHandler(entities.NewProjectRepository(database.DB), sync.NewEngine(database.DB, "")),
 			sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),

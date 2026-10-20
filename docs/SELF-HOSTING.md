@@ -247,6 +247,15 @@ let the proxy be the only path in. Setting `SERVER_BIND=0.0.0.0` exposes the
 server directly — do that only if you restrict the port with a firewall to the
 addresses that should reach it.
 
+When a proxy is in front, set `TRUSTED_PROXIES` to the proxy's own CIDR so the
+sign-in limiter sees the client address rather than the proxy address. For the
+nginx or Caddy example above, which runs on the same host, that is
+`TRUSTED_PROXIES=127.0.0.1/32`. The variable takes a comma-separated list of
+IPv4 or IPv6 CIDRs. Empty (the default) trusts no proxy and ignores forwarded
+headers entirely. Write a single host as `127.0.0.1/32`; a bare address is
+rejected, and so are `0.0.0.0/0` and `::/0`, because trusting every peer makes
+the header forgeable.
+
 ### Plain-HTTP LAN exposure (Docker and `tt`)
 
 The `tt` Docker install starts with a loopback-only publish. To let devices on
@@ -278,18 +287,24 @@ Use a TLS provider (T9.9/T9.10) for Android. The bare-metal path is the same
 trade-off: set `SERVER_BIND=0.0.0.0` (§4) and restrict the port with a
 firewall, but the traffic is still plain HTTP.
 
-### A caveat behind a proxy
+### Behind a reverse proxy
 
-The sign-in rate limiter keys on the peer address it sees, and the server does
-**not** read `X-Forwarded-For`. Behind a reverse proxy every request therefore
-appears to come from the proxy, so the per-address limit becomes a single
-global limit while the per-account limit keeps working. On a small
-single-organisation install that is usually acceptable — raise
-`SIGNIN_MAX_ATTEMPTS` if legitimate users trip it. Trusting the header without
-knowing which proxies are yours would let anyone forge their address, which is
-worse; the trusted-proxy fix is tracked as T9.1 in
-[`PLAN.md`](PLAN.md), with its original rationale in
-[`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md).
+Set `TRUSTED_PROXIES` to the proxy's CIDR. The server then reads
+`X-Forwarded-For` (or `Forwarded` when the former is absent) only from a peer
+inside one of those prefixes, walking the list from right to left and stopping
+at the first address that is not another trusted proxy. That is the client
+address the sign-in limiter keys on.
+
+With the variable empty — the default — forwarded headers are ignored and every
+request is limited by its peer address. That is the safe behaviour for a direct
+install, but behind a proxy it collapses the per-address budget into one global
+budget while the per-account limit keeps working. Raise `SIGNIN_MAX_ATTEMPTS` if
+legitimate users trip it.
+
+Trust only the proxy's own range: a peer outside it cannot forge its address,
+and a forwarding header with an unparsable or oversized hop is discarded in
+favour of the peer address. The limiter is in-process and per-instance; several
+replicas multiply the effective limit.
 
 ## 9. Backups and restore
 
