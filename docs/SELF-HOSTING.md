@@ -203,7 +203,9 @@ After that, the admin creates everyone else through the API — see
 ## 8. TLS termination
 
 The server speaks plain HTTP and has no TLS options. **Do not expose port 8080
-to the network.** Terminate TLS at a reverse proxy on the same host.
+to the public internet.** For a trusted home or office LAN, `tt expose
+--provider=lan` publishes it deliberately (see below); otherwise terminate TLS
+at a reverse proxy on the same host.
 
 nginx:
 
@@ -244,6 +246,37 @@ host's loopback interface; `SERVER_PORT` sets the port. Leave both alone and
 let the proxy be the only path in. Setting `SERVER_BIND=0.0.0.0` exposes the
 server directly — do that only if you restrict the port with a firewall to the
 addresses that should reach it.
+
+### Plain-HTTP LAN exposure (Docker and `tt`)
+
+The `tt` Docker install starts with a loopback-only publish. To let devices on
+the same network reach the server:
+
+```bash
+tt expose --provider=lan
+```
+
+The command detects the host's LAN IPv4 address, rewrites the generated compose
+file to publish `0.0.0.0:<port>:8080`, recreates the stack, and requests
+`http://<lan-address>:<port>/readyz` **from that address**. The loopback check
+is not enough: it passes even when the publish is wrong. Only after that request
+succeeds does it print the server URL and the `tasktracker://connect` pairing
+link and QR code.
+
+This is plain HTTP, with no certificate. Run it only on a network you trust,
+and never forward the port from the internet. Use the Tailscale or Cloudflare
+provider (T9.9/T9.10) for remote access with TLS.
+
+`tt expose` writes the LAN publish into the rendered compose file, not into
+`install.json`. `tt install` (including a repair) rewrites the compose file to
+loopback; re-run `tt expose` after a repair.
+
+**Android caveat.** The Android client does not accept cleartext HTTP to an
+arbitrary LAN address; its network security configuration is deliberately not
+widened. A plain-HTTP LAN install therefore does not serve the Android client.
+Use a TLS provider (T9.9/T9.10) for Android. The bare-metal path is the same
+trade-off: set `SERVER_BIND=0.0.0.0` (§4) and restrict the port with a
+firewall, but the traffic is still plain HTTP.
 
 ### A caveat behind a proxy
 

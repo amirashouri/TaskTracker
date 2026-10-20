@@ -127,20 +127,18 @@ func redactAdminArgs(args []string) []string {
 	return redacted
 }
 
-// waitReady polls the health endpoint, not compose. `docker compose up -d`
-// returns long before the healthcheck passes, and a CLI that prints "ready"
-// early is the failure every customer hits.
-func (r ExecRunner) waitReady(ctx context.Context, state State) error {
-	timeout := r.WaitTimeout
+// WaitReady polls address until it answers 200 or the timeout expires. The
+// install runner uses it for loopback; `tt expose` uses it for the host's LAN
+// address, which is the check that catches a publish that is not really
+// reachable from the network.
+func WaitReady(ctx context.Context, address string, timeout, poll time.Duration) error {
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
 	}
-	poll := r.PollInterval
 	if poll <= 0 {
 		poll = time.Second
 	}
 
-	address := fmt.Sprintf("http://127.0.0.1:%d/readyz", state.ServerPort)
 	client := &http.Client{Timeout: 3 * time.Second}
 	deadline := time.Now().Add(timeout)
 
@@ -166,4 +164,12 @@ func (r ExecRunner) waitReady(ctx context.Context, state State) error {
 		case <-time.After(poll):
 		}
 	}
+}
+
+// waitReady polls the health endpoint, not compose. `docker compose up -d`
+// returns long before the healthcheck passes, and a CLI that prints "ready"
+// early is the failure every customer hits.
+func (r ExecRunner) waitReady(ctx context.Context, state State) error {
+	address := fmt.Sprintf("http://127.0.0.1:%d/readyz", state.ServerPort)
+	return WaitReady(ctx, address, r.WaitTimeout, r.PollInterval)
 }

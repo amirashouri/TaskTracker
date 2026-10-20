@@ -20,6 +20,7 @@ var composeTemplate = template.Must(template.ParseFS(assets, composeTemplatePath
 type composeData struct {
 	ImageTag         string
 	ServerPort       int
+	PublishHost      string
 	DatabaseURL      string
 	JWTSecret        string
 	DatabasePassword string
@@ -27,10 +28,22 @@ type composeData struct {
 	Sqlite           bool
 }
 
-// RenderCompose produces the compose file for one state. The image tag, the
-// secret, and the database URL are all injected here so the runner never has
-// to edit a file it just wrote.
+// RenderCompose produces the loopback-only compose file for one state. The
+// image tag, the secret, and the database URL are all injected here so the
+// runner never has to edit a file it just wrote.
 func RenderCompose(state State) (string, error) {
+	return renderCompose(state, "127.0.0.1")
+}
+
+// RenderExposedCompose publishes the server on every host interface. It is the
+// only other publish `tt` renders: the root developer compose and a normal
+// install stay on loopback. `tt expose` verifies the result from the host's
+// LAN address before printing a pairing link.
+func RenderExposedCompose(state State) (string, error) {
+	return renderCompose(state, "0.0.0.0")
+}
+
+func renderCompose(state State, publishHost string) (string, error) {
 	if err := state.Validate(); err != nil {
 		return "", err
 	}
@@ -38,6 +51,7 @@ func RenderCompose(state State) (string, error) {
 	data := composeData{
 		ImageTag:         state.ImageTag,
 		ServerPort:       state.ServerPort,
+		PublishHost:      publishHost,
 		DatabaseURL:      databaseURL(state),
 		JWTSecret:        state.JWTSecret,
 		DatabasePassword: state.DatabasePassword,

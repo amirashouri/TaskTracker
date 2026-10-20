@@ -224,9 +224,10 @@ func TestAddressCheck(t *testing.T) {
 		want    CheckStatus
 		summary string
 	}{
-		{"loopback", "127.0.0.1:8080\n", nil, CheckOK, "published at 127.0.0.1:8080"},
-		{"all interfaces", "0.0.0.0:8080\n", nil, CheckFail, "expected 127.0.0.1:8080"},
-		{"ipv6 wildcard", "[::]:8080\n", nil, CheckFail, "expected 127.0.0.1:8080"},
+		{"loopback", "127.0.0.1:8080\n", nil, CheckOK, "published at 127.0.0.1:8080 (this host only)"},
+		{"all interfaces", "0.0.0.0:8080\n", nil, CheckOK, "published at 0.0.0.0:8080 (LAN)"},
+		{"ipv6 wildcard", "[::]:8080\n", nil, CheckFail, "expected 127.0.0.1:8080 or 0.0.0.0:8080"},
+		{"different host", "192.168.1.5:8080\n", nil, CheckFail, "expected 127.0.0.1:8080 or 0.0.0.0:8080"},
 		{"no publish", "", nil, CheckFail, "publishes no host port"},
 		{"compose error", "", errors.New("no such service"), CheckFail, "cannot read the published address"},
 	}
@@ -345,6 +346,19 @@ func TestProviderCheckIsNeverGreen(t *testing.T) {
 	}
 	if !strings.Contains(check.Fix, "tt expose") {
 		t.Errorf("fix = %q, want a pointer to tt expose", check.Fix)
+	}
+}
+
+func TestProviderCheckForANonLANProviderNamesTheLaterTask(t *testing.T) {
+	state := testState(t)
+	state.Provider = ProviderTailscale
+
+	check := checkProvider(state)
+	if check.Status != CheckSkip {
+		t.Errorf("status = %q, want skip", check.Status)
+	}
+	if !strings.Contains(check.Fix, "T9.9/T9.10") {
+		t.Errorf("fix = %q, want the later-provider task", check.Fix)
 	}
 }
 

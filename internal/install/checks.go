@@ -228,6 +228,11 @@ func checkReady(ctx context.Context, env checkEnv, state State) Check {
 	return newCheck("readyz", CheckOK, "the server answered 200", "")
 }
 
+// checkAddress accepts the two publishes tt renders: loopback for a normal
+// install, and all interfaces after `tt expose --provider=lan`. The mode is
+// named in the summary so an operator can tell which one is running. Any other
+// host is still a failure: a publish the customer did not ask for is the
+// accident this check exists to catch.
 func checkAddress(ctx context.Context, env checkEnv, state State) Check {
 	published, err := env.Compose(ctx, state, "port", "server", "8080")
 	if err != nil {
@@ -235,11 +240,15 @@ func checkAddress(ctx context.Context, env checkEnv, state State) Check {
 			"run `tt install` to repair the container")
 	}
 
-	expected := fmt.Sprintf("127.0.0.1:%d", state.ServerPort)
+	loopback := fmt.Sprintf("127.0.0.1:%d", state.ServerPort)
+	lan := fmt.Sprintf("0.0.0.0:%d", state.ServerPort)
 	addresses := strings.Fields(published)
 	for _, address := range addresses {
-		if address == expected {
-			return newCheck("address", CheckOK, "published at "+expected, "")
+		switch address {
+		case loopback:
+			return newCheck("address", CheckOK, "published at "+loopback+" (this host only)", "")
+		case lan:
+			return newCheck("address", CheckOK, "published at "+lan+" (LAN)", "")
 		}
 	}
 	if len(addresses) == 0 {
@@ -247,8 +256,8 @@ func checkAddress(ctx context.Context, env checkEnv, state State) Check {
 			"run `tt install` to restore the loopback publish")
 	}
 	return newCheck("address", CheckFail,
-		"published at "+strings.Join(addresses, ", ")+", expected "+expected,
-		"run `tt install` to restore the loopback publish")
+		"published at "+strings.Join(addresses, ", ")+", expected "+loopback+" or "+lan,
+		"run `tt install` to restore a known publish")
 }
 
 func checkDatabase(ctx context.Context, env checkEnv, state State) Check {
@@ -320,7 +329,11 @@ func checkClock(ctx context.Context, env checkEnv, state State) Check {
 }
 
 func checkProvider(state State) Check {
+	fix := "run `tt expose --provider=lan` to verify LAN reachability; public DNS, TLS, and the attachment cap arrive with T9.9–T9.10"
+	if state.Provider != ProviderLAN {
+		fix = fmt.Sprintf("%s verification arrives with T9.9/T9.10; this build does not check it", state.Provider)
+	}
 	return newCheck("provider", CheckSkip,
 		fmt.Sprintf("%s: provider health is not checked yet", state.Provider),
-		"DNS, TLS, the external request, and the attachment cap arrive with `tt expose` (T9.8–T9.10)")
+		fix)
 }
