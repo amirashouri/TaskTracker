@@ -19,6 +19,7 @@ type installOptions struct {
 	dataDir  string
 	name     string
 	port     int
+	platform string // for testing: override runtime.GOOS
 
 	dryRun bool
 	yes    bool
@@ -37,6 +38,8 @@ type installDeps struct {
 	buildVersion   string
 	runner         install.Runner
 	preflight      func(context.Context, install.PreflightOptions) error
+	ensureDocker   func(context.Context, install.Executor, install.Prompter, install.PreflightOptions) error
+	executor       install.Executor
 	prompter       prompter
 	lanAddress     func() string
 	interactive    bool
@@ -68,6 +71,8 @@ func runInstall(
 		buildVersion: buildVersion,
 		runner:       runner,
 		preflight:    install.Preflight,
+		ensureDocker: install.EnsureDocker,
+		executor:     install.RealExecutor{},
 		prompter:     newPrompter(stdin, stdout),
 		lanAddress:   install.LANAddress,
 	})
@@ -190,12 +195,31 @@ func repairInstall(ctx context.Context, opts installOptions, state install.State
 		}
 	}
 
+	platform := opts.platform
+	if platform == "" {
+		platform = runtime.GOOS
+	}
+
+	// Ensure Docker is installed and running before proceeding with preflight
+	if deps.ensureDocker != nil {
+		if err := deps.ensureDocker(ctx, deps.executor, deps.prompter, install.PreflightOptions{
+			DataDir:  state.DataDir,
+			Mode:     state.Mode,
+			Port:     state.ServerPort,
+			Repair:   true,
+			Platform: platform,
+		}); err != nil {
+			fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
+			return 1
+		}
+	}
+
 	if err := deps.preflight(ctx, install.PreflightOptions{
 		DataDir:  state.DataDir,
 		Mode:     state.Mode,
 		Port:     state.ServerPort,
 		Repair:   true,
-		Platform: runtime.GOOS,
+		Platform: platform,
 	}); err != nil {
 		fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
 		return 1
@@ -266,11 +290,29 @@ func freshInstall(ctx context.Context, opts installOptions, deps installDeps) in
 		}
 	}
 
+	platform := opts.platform
+	if platform == "" {
+		platform = runtime.GOOS
+	}
+
+	// Ensure Docker is installed and running before proceeding with preflight
+	if deps.ensureDocker != nil {
+		if err := deps.ensureDocker(ctx, deps.executor, deps.prompter, install.PreflightOptions{
+			DataDir:  opts.dataDir,
+			Mode:     install.Mode(opts.mode),
+			Port:     opts.port,
+			Platform: platform,
+		}); err != nil {
+			fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
+			return 1
+		}
+	}
+
 	if err := deps.preflight(ctx, install.PreflightOptions{
 		DataDir:  opts.dataDir,
 		Mode:     install.Mode(opts.mode),
 		Port:     opts.port,
-		Platform: runtime.GOOS,
+		Platform: platform,
 	}); err != nil {
 		fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
 		return 1

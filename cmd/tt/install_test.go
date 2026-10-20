@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -95,6 +96,10 @@ func runInstallFlow(
 			preflightCalls = append(preflightCalls, call)
 			return preflightErr
 		},
+		ensureDocker: func(_ context.Context, _ install.Executor, _ install.Prompter, _ install.PreflightOptions) error {
+			return nil
+		},
+		executor:    install.RealExecutor{},
 		prompter:    p,
 		lanAddress:  lanAddress,
 		interactive: interactive,
@@ -506,5 +511,168 @@ func TestAskAdminRetriesOnMismatch(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Passwords do not match") {
 		t.Errorf("output = %q, want a mismatch message", out.String())
+	}
+}
+
+type fakeExecutorForInstall struct {
+	install.Executor
+	lookPathFunc       func(string) (string, error)
+	runFunc            func(context.Context, *exec.Cmd) error
+	runWithOutputFunc  func(context.Context, *exec.Cmd) (string, string, error)
+	commandContextFunc func(context.Context, string, ...string) *exec.Cmd
+	calls              []execCall
+}
+
+type execCall struct {
+	name string
+	args []string
+}
+
+func (f *fakeExecutorForInstall) LookPath(name string) (string, error) {
+	if f.lookPathFunc != nil {
+		return f.lookPathFunc(name)
+	}
+	return "", exec.ErrNotFound
+}
+
+func (f *fakeExecutorForInstall) Run(ctx context.Context, cmd *exec.Cmd) error {
+	f.calls = append(f.calls, execCall{name: cmd.Path, args: cmd.Args})
+	if f.runFunc != nil {
+		return f.runFunc(ctx, cmd)
+	}
+	return nil
+}
+
+func (f *fakeExecutorForInstall) RunWithOutput(ctx context.Context, cmd *exec.Cmd) (string, string, error) {
+	f.calls = append(f.calls, execCall{name: cmd.Path, args: cmd.Args})
+	if f.runWithOutputFunc != nil {
+		return f.runWithOutputFunc(ctx, cmd)
+	}
+	return "", "", nil
+}
+
+func (f *fakeExecutorForInstall) CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+	if f.commandContextFunc != nil {
+		return f.commandContextFunc(ctx, name, args...)
+	}
+	return exec.CommandContext(ctx, name, args...)
+}
+
+func TestInstallNonInteractiveFailsClosedWhenDockerMissing(t *testing.T) {
+	dir := t.TempDir()
+	runner := &recordingRunner{}
+	opts := defaultInstallOptions()
+	opts.dataDir = dir
+	opts.yes = true
+	opts.adminEmail = "admin@example.com"
+	opts.adminPassword = "password123"
+	opts.platform = "linux" // force Linux for testing
+
+	// Override distro detection to return Debian for testing
+	originalDetectFunc := install.DetectLinuxDistroFunc
+	install.DetectLinuxDistroFunc = func() (install.Distro, error) {
+		return install.DistroDebian, nil
+	}
+	defer func() { install.DetectLinuxDistroFunc = originalDetectFunc }()
+
+	fakeExec := &fakeExecutorForInstall{
+		lookPathFunc: func(name string) (string, error) {
+			if name == "docker" {
+				return "", exec.ErrNotFound
+			}
+			if name == "sudo" {
+				return "/usr/bin/sudo", nil
+			}
+			return "", exec.ErrNotFound
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	deps := installDeps{
+		stdout:       &stdout,
+		stderr:       &stderr,
+		statePath:    filepath.Join(dir, "install.json"),
+		buildVersion: "v1.2.3",
+		runner:       runner,
+		preflight:    install.Preflight,
+		ensureDocker: install.EnsureDocker,
+		executor:     fakeExec,
+		prompter:     nil, // non-interactive
+		lanAddress:   func() string { return "192.168.1.50" },
+		interactive:  false,
+	}
+
+	code := installWith(context.Background(), opts, deps)
+
+	if code == 0 {
+		t.Fatal("expected non-zero exit when Docker missing in non-interactive mode")
+	}
+	if !strings.Contains(stderr.String(), "not allowed") || !strings.Contains(stderr.String(), "docker") {
+		t.Errorf("stderr = %q, want fail-closed message about Docker install not allowed", stderr.String())
+	}
+	if len(runner.steps) != 0 {
+		t.Errorf("ran %d steps despite Docker missing, want none", len(runner.steps))
+	}
+}
+
+func TestInstallInteractiveDeclinesDockerInstall(t *testing.T) {
+	dir := t.TempDir()
+	runner := &recordingRunner{}
+	opts := defaultInstallOptions()
+	opts.dataDir = dir
+	opts.platform = "linux" // force Linux for testing
+
+	// Override distro detection to return Debian for testing
+	originalDetectFunc := install.DetectLinuxDistroFunc
+	install.DetectLinuxDistroFunc = func() (install.Distro, error) {
+		return install.DistroDebian, nil
+	}
+	defer func() { install.DetectLinuxDistroFunc = originalDetectFunc }()
+
+	// Prompter that declines the Docker install
+	p := &scriptedPrompter{
+		confirms: []bool{false}, // decline Docker install
+		asks:     []string{"sqlite", dir, "Admin"},
+		required: []string{"admin@example.com"},
+		secrets:  []string{"password123", "password123"},
+	}
+
+	fakeExec := &fakeExecutorForInstall{
+		lookPathFunc: func(name string) (string, error) {
+			if name == "docker" {
+				return "", exec.ErrNotFound
+			}
+			if name == "sudo" {
+				return "/usr/bin/sudo", nil
+			}
+			return "", exec.ErrNotFound
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	deps := installDeps{
+		stdout:       &stdout,
+		stderr:       &stderr,
+		statePath:    filepath.Join(dir, "install.json"),
+		buildVersion: "v1.2.3",
+		runner:       runner,
+		preflight:    install.Preflight,
+		ensureDocker: install.EnsureDocker,
+		executor:     fakeExec,
+		prompter:     p,
+		lanAddress:   func() string { return "192.168.1.50" },
+		interactive:  true,
+	}
+
+	code := installWith(context.Background(), opts, deps)
+
+	if code == 0 {
+		t.Fatal("expected non-zero exit when Docker install declined")
+	}
+	if !strings.Contains(stderr.String(), "declined") || !strings.Contains(stderr.String(), "Docker") {
+		t.Errorf("stderr = %q, want Docker install declined message", stderr.String())
+	}
+	if len(runner.steps) != 0 {
+		t.Errorf("ran %d steps despite Docker install declined, want none", len(runner.steps))
 	}
 }

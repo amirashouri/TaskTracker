@@ -192,3 +192,132 @@ func humanBytes(bytes uint64) string {
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
+
+// Prompter is the interface for interactive prompts. The CLI provides a real
+// implementation; tests provide a fake.
+type Prompter interface {
+	Confirm(prompt string, defaultYes bool) (bool, error)
+}
+
+// EnsureDocker checks if Docker is installed and running. If not, it offers
+// to install it via the distribution's package manager (Linux) or prints
+// the manual install URL (macOS/Windows). It requires explicit confirmation
+// for each step and fails closed in non-interactive mode.
+// The prompter is called for each confirmation; if nil, the function behaves
+// as non-interactive (fails closed).
+func EnsureDocker(ctx context.Context, exec Executor, prompter Prompter, opts PreflightOptions) error {
+	plan, err := DetectDockerInstallPlan(ctx, exec, opts.Platform)
+	if err != nil {
+		return fmt.Errorf("detect Docker install plan: %w", err)
+	}
+
+	// If Docker is already present and daemon is reachable, we're good
+	if plan.DockerPresent {
+		// Quick check that daemon is reachable
+		cmd := exec.CommandContext(ctx, "docker", "info")
+		if err := exec.Run(ctx, cmd); err == nil {
+			return nil
+		}
+		// Docker binary exists but daemon not running - try to start it
+		if plan.StartCommand != "" {
+			return startDockerDaemon(ctx, exec, prompter, plan, opts)
+		}
+		return fmt.Errorf("Docker is installed but daemon is not reachable. %s", dockerStartHint(opts.platform()))
+	}
+
+	// Docker not installed
+	if !plan.CanAutoInstall {
+		return fmt.Errorf("Docker is not installed. %s", plan.OfficialURL)
+	}
+
+	// Non-interactive mode fails closed
+	if prompter == nil {
+		return fmt.Errorf("Docker is not installed and --yes was specified. Automatic Docker install is not allowed. Please install Docker manually: %s", plan.OfficialURL)
+	}
+
+	// Interactive mode: offer to install
+	fmt.Fprintf(os.Stderr, "Docker is not installed. This install can set it up for you.\n")
+	fmt.Fprintf(os.Stderr, "Distribution detected: %s\n", plan.Distro)
+	fmt.Fprintf(os.Stderr, "The following command will be run:\n  %s\n", plan.InstallCommand)
+	fmt.Fprintf(os.Stderr, "This requires sudo. You will be prompted for your password.\n")
+
+	confirmInstall, err := prompter.Confirm("Install Docker now?", false)
+	if err != nil {
+		return fmt.Errorf("prompt failed: %w", err)
+	}
+	if !confirmInstall {
+		return fmt.Errorf("Docker install declined. Please install Docker manually: %s", plan.OfficialURL)
+	}
+
+	fmt.Fprintf(os.Stderr, "The Docker daemon will be started and enabled:\n  %s\n", plan.StartCommand)
+	confirmStart, err := prompter.Confirm("Start Docker daemon now?", false)
+	if err != nil {
+		return fmt.Errorf("prompt failed: %w", err)
+	}
+	if !confirmStart {
+		return fmt.Errorf("Docker daemon start declined. Please start Docker manually.")
+	}
+
+	fmt.Fprintf(os.Stderr, "Adding your user to the 'docker' group allows running Docker without sudo.\n")
+	fmt.Fprintf(os.Stderr, "This is root-equivalent on the host and requires a separate consent.\n")
+	fmt.Fprintf(os.Stderr, "Command: %s\n", plan.GroupCommand)
+	confirmGroup, err := prompter.Confirm("Add your user to the docker group?", false)
+	if err != nil {
+		return fmt.Errorf("prompt failed: %w", err)
+	}
+
+	// Run the installation
+	output, err := RunDockerInstall(ctx, exec, plan, confirmInstall, confirmStart, confirmGroup)
+	if err != nil {
+		if output != "" {
+			fmt.Fprintf(os.Stderr, "%s\n", output)
+		}
+		return fmt.Errorf("Docker bootstrap failed: %w", err)
+	}
+
+	if output != "" {
+		fmt.Fprintf(os.Stderr, "%s\n", output)
+	}
+
+	fmt.Fprintf(os.Stderr, "Docker is now installed and running.\n")
+	if confirmGroup {
+		fmt.Fprintf(os.Stderr, "You may need to log out and back in for the docker group change to take effect.\n")
+	}
+	return nil
+}
+
+func startDockerDaemon(ctx context.Context, executor Executor, prompter Prompter, plan DockerInstallPlan, opts PreflightOptions) error {
+	fmt.Fprintf(os.Stderr, "Docker is installed but its daemon is not running.\n")
+	fmt.Fprintf(os.Stderr, "The following command will start and enable it:\n  %s\n", plan.StartCommand)
+
+	if prompter == nil {
+		return fmt.Errorf("Docker daemon not running and --yes was specified. Please start Docker manually: %s", dockerStartHint(opts.platform()))
+	}
+
+	confirmStart, err := prompter.Confirm("Start Docker daemon now?", false)
+	if err != nil {
+		return fmt.Errorf("prompt failed: %w", err)
+	}
+	if !confirmStart {
+		return fmt.Errorf("Docker daemon start declined. Please start Docker manually.")
+	}
+
+	cmd := executor.CommandContext(ctx, "bash", "-c", plan.StartCommand)
+	stdout, stderr, err := executor.RunWithOutput(ctx, cmd)
+	if err != nil {
+		if stdout != "" {
+			fmt.Fprintf(os.Stderr, "%s\n", stdout)
+		}
+		if stderr != "" {
+			fmt.Fprintf(os.Stderr, "%s\n", stderr)
+		}
+		return fmt.Errorf("Docker daemon start failed: %w", err)
+	}
+
+	if err := waitForDocker(ctx, executor); err != nil {
+		return fmt.Errorf("Docker daemon not ready after start: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Docker daemon is now running.\n")
+	return nil
+}
