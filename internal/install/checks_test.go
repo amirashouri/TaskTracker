@@ -349,16 +349,27 @@ func TestProviderCheckIsNeverGreen(t *testing.T) {
 	}
 }
 
-func TestProviderCheckForANonLANProviderNamesTheLaterTask(t *testing.T) {
-	state := testState(t)
-	state.Provider = ProviderTailscale
-
-	check := checkProvider(state)
-	if check.Status != CheckSkip {
-		t.Errorf("status = %q, want skip", check.Status)
+func TestProviderCheckNamesTheProviderSpecificNextStep(t *testing.T) {
+	cases := []struct {
+		provider Provider
+		want     string
+	}{
+		{ProviderTailscale, "tt expose --provider=tailscale"},
+		{ProviderCloudflare, "T9.10"},
 	}
-	if !strings.Contains(check.Fix, "T9.9/T9.10") {
-		t.Errorf("fix = %q, want the later-provider task", check.Fix)
+	for _, tc := range cases {
+		t.Run(string(tc.provider), func(t *testing.T) {
+			state := testState(t)
+			state.Provider = tc.provider
+
+			check := checkProvider(state)
+			if check.Status != CheckSkip {
+				t.Errorf("status = %q, want skip", check.Status)
+			}
+			if !strings.Contains(check.Fix, tc.want) {
+				t.Errorf("fix = %q, want %q", check.Fix, tc.want)
+			}
+		})
 	}
 }
 

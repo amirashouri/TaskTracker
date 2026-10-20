@@ -123,25 +123,21 @@ func TestExposeRequiresAnInstall(t *testing.T) {
 	}
 }
 
-func TestExposeRefusesAnUnimplementedProvider(t *testing.T) {
-	for _, provider := range []string{"tailscale", "cloudflare"} {
-		t.Run(provider, func(t *testing.T) {
-			statePath := filepath.Join(t.TempDir(), "install.json")
-			seedState(t, statePath)
-			runner := &recordingRunner{}
+func TestExposeRefusesCloudflareUntilT910(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "install.json")
+	seedState(t, statePath)
+	runner := &recordingRunner{}
 
-			code, _, stderr := runExposeForTest(t, statePath, runner, "192.168.1.20", nil, "--provider="+provider)
+	code, _, stderr := runExposeForTest(t, statePath, runner, "192.168.1.20", nil, "--provider=cloudflare")
 
-			if code != 1 {
-				t.Errorf("exit = %d, want 1", code)
-			}
-			if !strings.Contains(stderr, "not implemented") || !strings.Contains(stderr, "T9.9/T9.10") {
-				t.Errorf("stderr = %q, want the later-provider message", stderr)
-			}
-			if len(runner.steps) != 0 {
-				t.Errorf("%s ran %d steps, want none", provider, len(runner.steps))
-			}
-		})
+	if code != 1 {
+		t.Errorf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "not implemented") || !strings.Contains(stderr, "T9.10") {
+		t.Errorf("stderr = %q, want the later-provider message", stderr)
+	}
+	if len(runner.steps) != 0 {
+		t.Errorf("cloudflare ran %d steps, want none", len(runner.steps))
 	}
 }
 

@@ -365,7 +365,7 @@ func TestWizardRepairDeclinedChangesNothing(t *testing.T) {
 	}
 }
 
-func TestWizardNonLANProviderIsHonest(t *testing.T) {
+func TestWizardTailscaleProviderPointsAtExpose(t *testing.T) {
 	dir := t.TempDir()
 	runner := &recordingRunner{}
 	opts := defaultInstallOptions()
@@ -381,8 +381,8 @@ func TestWizardNonLANProviderIsHonest(t *testing.T) {
 	if result.code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", result.code, result.stderr)
 	}
-	if !strings.Contains(result.stdout, "not implemented") {
-		t.Errorf("stdout = %q, want an unavailable-provider note", result.stdout)
+	if !strings.Contains(result.stdout, "tt expose --provider=tailscale") {
+		t.Errorf("stdout = %q, want the Tailscale next step", result.stdout)
 	}
 	if strings.Contains(result.stdout, "LAN address:") {
 		t.Errorf("non-LAN install printed a LAN address:\n%s", result.stdout)

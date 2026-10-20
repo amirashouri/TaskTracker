@@ -23,6 +23,7 @@ type composeData struct {
 	PublishHost      string
 	DatabaseURL      string
 	JWTSecret        string
+	TrustedProxies   string
 	DatabasePassword string
 	Postgres         bool
 	Sqlite           bool
@@ -54,6 +55,7 @@ func renderCompose(state State, publishHost string) (string, error) {
 		PublishHost:      publishHost,
 		DatabaseURL:      databaseURL(state),
 		JWTSecret:        state.JWTSecret,
+		TrustedProxies:   trustedProxiesFor(state),
 		DatabasePassword: state.DatabasePassword,
 		Postgres:         state.Mode == ModePostgres,
 		Sqlite:           state.Mode == ModeSQLite,
@@ -64,6 +66,16 @@ func renderCompose(state State, publishHost string) (string, error) {
 		return "", fmt.Errorf("render compose: %w", err)
 	}
 	return rendered.String(), nil
+}
+
+// trustedProxiesFor is the peer Tailscale's proxy connects from. Funnel and
+// Serve target the published loopback port, so the server sees 127.0.0.1.
+// LAN has no proxy; Cloudflare supplies its compose subnet in T9.10.
+func trustedProxiesFor(state State) string {
+	if state.Provider == ProviderTailscale {
+		return "127.0.0.1/32"
+	}
+	return ""
 }
 
 func databaseURL(state State) string {

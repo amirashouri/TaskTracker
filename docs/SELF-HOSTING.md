@@ -274,7 +274,7 @@ link and QR code.
 
 This is plain HTTP, with no certificate. Run it only on a network you trust,
 and never forward the port from the internet. Use the Tailscale or Cloudflare
-provider (T9.9/T9.10) for remote access with TLS.
+provider for remote access with TLS.
 
 `tt expose` writes the LAN publish into the rendered compose file, not into
 `install.json`. `tt install` (including a repair) rewrites the compose file to
@@ -283,9 +283,73 @@ loopback; re-run `tt expose` after a repair.
 **Android caveat.** The Android client does not accept cleartext HTTP to an
 arbitrary LAN address; its network security configuration is deliberately not
 widened. A plain-HTTP LAN install therefore does not serve the Android client.
-Use a TLS provider (T9.9/T9.10) for Android. The bare-metal path is the same
-trade-off: set `SERVER_BIND=0.0.0.0` (§4) and restrict the port with a
-firewall, but the traffic is still plain HTTP.
+Use a TLS provider (Tailscale or Cloudflare) for Android. The bare-metal path
+is the same trade-off: set `SERVER_BIND=0.0.0.0` (§4) and restrict the port
+with a firewall, but the traffic is still plain HTTP.
+
+### Tailscale exposure (Docker and `tt`)
+
+The $0 remote path: no domain, no port forwarding, no CGNAT problem, a valid
+certificate, and TLS terminated on the customer's own machine — Tailscale's
+relay only carries ciphertext.
+
+```bash
+tt expose --provider=tailscale
+```
+
+To restrict access to the tailnet only (no public internet):
+
+```bash
+tt expose --provider=tailscale --tailnet-only
+```
+
+What the command does:
+
+1. Detects `tailscale` on `PATH`. If absent, prints the platform install
+   command and exits without changing anything.
+2. Runs `tailscale status --json` and requires `BackendState=Running` — if the
+   tailnet is not signed in, it prints `tailscale up` guidance and exits.
+3. Requires HTTPS certificates to be enabled in the Tailscale admin console
+   (DNS → MagicDNS and HTTPS certificates). This cannot be automated without an
+   API token, so the command prints the two dashboard steps and exits if they
+   are not done.
+4. Derives the node's HTTPS name from `Self.DNSName` (trimmed of its trailing
+   dot) or the first `CertDomains` entry.
+5. Rewrites the Docker Compose file to publish on `127.0.0.1:<port>:8080` and
+   adds `TRUSTED_PROXIES: "127.0.0.1/32"` so the server sees the correct client
+   address through Funnel/Serve. The server never publishes `0.0.0.0`.
+6. Runs `tailscale funnel --bg 443 http://127.0.0.1:<port>` (or `tailscale
+   serve` for `--tailnet-only`).
+7. Requests `https://<ts.net-name>/readyz` with certificate verification. Only
+   on success does it print the public or tailnet-only URL and the
+   `tasktracker://connect` pairing link and QR.
+
+**Caveats:**
+
+- Funnel is beta, has an unpublished bandwidth cap, and the Personal plan is
+  described as non-commercial. `--tailnet-only` (Serve) avoids Funnel and is
+  reachable only within the tailnet.
+- Funnel may be disabled by the tailnet's ACLs. The command surfaces the CLI
+  error and names the admin-console step; it cannot grant the attribute.
+- The install state does not persist the exposed name. `tt doctor` therefore
+  cannot re-check the URL without re-running `tt expose`; it stays honest as a
+  `skip`.
+- If a Docker setup presents the bridge gateway as the peer rather than
+  `127.0.0.1`, the rate-limiter key will still be the gateway. That is a Docker
+  networking limitation, not a reason to trust a wider range.
+
+**To stop exposing:**
+
+```bash
+# For Funnel (public)
+tailscale funnel reset
+
+# For Serve (tailnet-only)
+tailscale serve reset
+```
+
+The command never resets an existing Funnel/Serve configuration automatically;
+it prints the reset command and keeps the customer in control.
 
 ### Behind a reverse proxy
 

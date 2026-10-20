@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -17,12 +19,19 @@ import (
 
 const exposeReadyTimeout = 2 * time.Minute
 
+func waitReady(ctx context.Context, address string) error {
+	return install.WaitReady(ctx, address, exposeReadyTimeout, time.Second)
+}
+
 type exposeDeps struct {
 	stdout, stderr io.Writer
 	statePath      string
 	runner         install.Runner
 	lanAddress     func() string
 	verify         func(context.Context, string) error
+	lookTailscale  func() (string, error)
+	runTailscale   func(context.Context, ...string) (string, error)
+	goos           string
 }
 
 func runExpose(
@@ -33,14 +42,15 @@ func runExpose(
 	runner install.Runner,
 ) int {
 	return runExposeWithDeps(ctx, args, exposeDeps{
-		stdout:     stdout,
-		stderr:     stderr,
-		statePath:  statePath,
-		runner:     runner,
-		lanAddress: install.LANAddress,
-		verify: func(ctx context.Context, address string) error {
-			return install.WaitReady(ctx, address, exposeReadyTimeout, time.Second)
-		},
+		stdout:        stdout,
+		stderr:        stderr,
+		statePath:     statePath,
+		runner:        runner,
+		lanAddress:    install.LANAddress,
+		verify:        waitReady,
+		lookTailscale: func() (string, error) { return exec.LookPath("tailscale") },
+		runTailscale:  runTailscaleCommand,
+		goos:          runtime.GOOS,
 	})
 }
 
@@ -49,24 +59,25 @@ func runExpose(
 // depending on the developer's network or a Docker daemon.
 func runExposeWithDeps(ctx context.Context, args []string, deps exposeDeps) int {
 	opts := struct {
-		provider string
+		provider    string
+		tailnetOnly bool
 	}{provider: string(install.ProviderLAN)}
 
 	fs := flag.NewFlagSet("expose", flag.ContinueOnError)
 	fs.SetOutput(deps.stderr)
-	fs.StringVar(&opts.provider, "provider", opts.provider, "exposure provider: lan (default); tailscale and cloudflare arrive later")
+	fs.StringVar(&opts.provider, "provider", opts.provider, "exposure provider: lan (default) or tailscale; cloudflare arrives in T9.10")
+	fs.BoolVar(&opts.tailnetOnly, "tailnet-only", false, "use Tailscale Serve (tailnet only) instead of public Funnel")
 	if code, done := parseFlags(fs, args, deps.stderr); done {
 		return code
 	}
 
 	provider := install.Provider(opts.provider)
 	switch provider {
-	case install.ProviderLAN:
-	case install.ProviderTailscale, install.ProviderCloudflare:
-		fmt.Fprintf(
+	case install.ProviderLAN, install.ProviderTailscale:
+	case install.ProviderCloudflare:
+		fmt.Fprintln(
 			deps.stderr,
-			"tt expose: provider %s is not implemented in this build; use --provider=lan (tailscale and cloudflare arrive in T9.9/T9.10).\n",
-			provider,
+			"tt expose: provider cloudflare is not implemented in this build; it arrives in T9.10. Use --provider=lan or --provider=tailscale.",
 		)
 		return 1
 	default:
@@ -78,9 +89,16 @@ func runExposeWithDeps(ctx context.Context, args []string, deps exposeDeps) int 
 		deps.lanAddress = install.LANAddress
 	}
 	if deps.verify == nil {
-		deps.verify = func(ctx context.Context, address string) error {
-			return install.WaitReady(ctx, address, exposeReadyTimeout, time.Second)
-		}
+		deps.verify = waitReady
+	}
+	if deps.lookTailscale == nil {
+		deps.lookTailscale = func() (string, error) { return exec.LookPath("tailscale") }
+	}
+	if deps.runTailscale == nil {
+		deps.runTailscale = runTailscaleCommand
+	}
+	if deps.goos == "" {
+		deps.goos = runtime.GOOS
 	}
 
 	state, err := loadState(deps.statePath)
@@ -93,15 +111,18 @@ func runExposeWithDeps(ctx context.Context, args []string, deps exposeDeps) int 
 		return 1
 	}
 	// `tt install` refuses to change an instance's provider; `tt expose` must
-	// not quietly do it either. A tailscale/cloudflare install stays local
-	// until those providers have an implementation.
+	// not quietly do it either. The state is the instance's provider choice.
 	if state.Provider != provider {
 		fmt.Fprintf(
 			deps.stderr,
-			"tt expose: this install is configured for provider %s; refusing to publish it with provider %s. Provider %s exposure arrives in T9.9/T9.10.\n",
-			state.Provider, provider, state.Provider,
+			"tt expose: this install is configured for provider %s; refusing to publish it with provider %s. Run `tt expose --provider=%s` instead, or reinstall with --provider=%s (tt install cannot change a provider in place).\n",
+			state.Provider, provider, state.Provider, provider,
 		)
 		return 1
+	}
+
+	if provider == install.ProviderTailscale {
+		return exposeTailscale(ctx, deps, state, opts.tailnetOnly)
 	}
 
 	ip := strings.TrimSpace(deps.lanAddress())
@@ -148,6 +169,99 @@ func runExposeWithDeps(ctx context.Context, args []string, deps exposeDeps) int 
 	fmt.Fprintln(deps.stdout, "Plain HTTP on your local network: trust this network, and do not forward this port from the internet.")
 	fmt.Fprintln(deps.stdout, "`tt install` rewrites the compose file to loopback; re-run `tt expose` after a repair.")
 	printPairing(deps.stdout, provider, serverURL)
+	return 0
+}
+
+// exposeTailscale keeps the server on its loopback publish and lets Tailscale
+// terminate TLS in front of it. Nothing is printed as a pairing target until
+// the HTTPS name has answered /readyz.
+func exposeTailscale(ctx context.Context, deps exposeDeps, state install.State, tailnetOnly bool) int {
+	if _, err := deps.lookTailscale(); err != nil {
+		fmt.Fprintf(deps.stderr, "tt expose: Tailscale is not installed or not on PATH. %s\n", tailscaleInstallHint(deps.goos))
+		return 1
+	}
+
+	statusOutput, err := deps.runTailscale(ctx, "status", "--json")
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "tt expose: cannot read Tailscale status: %v\n", err)
+		return 1
+	}
+	status, err := parseTailscaleStatus(statusOutput)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "tt expose: %v\n", err)
+		return 1
+	}
+	if status.BackendState != "Running" {
+		fmt.Fprintf(
+			deps.stderr,
+			"tt expose: Tailscale is not connected to a tailnet (state %q). Run `tailscale up` and finish sign-in, then re-run.\n",
+			status.BackendState,
+		)
+		return 1
+	}
+	if len(status.CertDomains) == 0 {
+		fmt.Fprintln(
+			deps.stderr,
+			"tt expose: Tailscale HTTPS is not enabled for this tailnet. In the Tailscale admin console, open DNS and enable MagicDNS and HTTPS certificates; these two dashboard steps cannot be automated without an API token. Then re-run.",
+		)
+		return 1
+	}
+	name := status.httpsName()
+	if name == "" {
+		fmt.Fprintln(
+			deps.stderr,
+			"tt expose: Tailscale returned no usable HTTPS name. Enable MagicDNS and HTTPS certificates for this node in the Tailscale admin console, then re-run.",
+		)
+		return 1
+	}
+
+	compose, err := install.RenderCompose(state)
+	if err != nil {
+		fmt.Fprintf(deps.stderr, "tt expose: %v\n", err)
+		return 1
+	}
+
+	// The compose still publishes on loopback. Keep the previous bytes so a
+	// failed recreate cannot leave the stack half-applied.
+	previous, err := os.ReadFile(state.ComposePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(deps.stderr, "tt expose: read %s: %v\n", state.ComposePath, err)
+		return 1
+	}
+	if err := applyCompose(ctx, deps, state, compose, "Apply the Tailscale trusted-proxy setting"); err != nil {
+		reportRestore(ctx, deps, state, previous, err)
+		return 1
+	}
+
+	args := tailscaleExposeArgs(tailnetOnly, state.ServerPort)
+	if _, err := deps.runTailscale(ctx, args...); err != nil {
+		fmt.Fprintf(deps.stderr, "tt expose: `tailscale %s` failed: %v\n", strings.Join(args, " "), err)
+		if !tailnetOnly {
+			fmt.Fprintln(deps.stderr, "Funnel must be enabled for this node in the Tailscale admin console; enable it and re-run.")
+		}
+		return 1
+	}
+
+	serverURL := "https://" + name
+	readyURL := serverURL + "/readyz"
+	if err := deps.verify(ctx, readyURL); err != nil {
+		fmt.Fprintf(deps.stderr, "tt expose: no response from %s: %v\n", readyURL, err)
+		fmt.Fprintf(
+			deps.stderr,
+			"The Tailscale %s configuration is still active; run `%s` to remove it and try again.\n",
+			tailscaleModeName(tailnetOnly), tailscaleResetCommand(tailnetOnly),
+		)
+		return 1
+	}
+
+	if tailnetOnly {
+		fmt.Fprintf(deps.stdout, "Exposed to your tailnet with Tailscale Serve: %s\n", serverURL)
+	} else {
+		fmt.Fprintf(deps.stdout, "Exposed with Tailscale Funnel: %s\n", serverURL)
+	}
+	fmt.Fprintln(deps.stdout, "The server stays bound to loopback; Tailscale reaches it from 127.0.0.1 over HTTPS.")
+	fmt.Fprintf(deps.stdout, "To stop exposing: %s\n", tailscaleResetCommand(tailnetOnly))
+	printPairing(deps.stdout, install.ProviderTailscale, serverURL)
 	return 0
 }
 

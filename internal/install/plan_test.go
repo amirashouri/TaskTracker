@@ -289,6 +289,35 @@ func TestRenderComposePublishesLoopbackByDefault(t *testing.T) {
 	}
 }
 
+func TestRenderComposeTrustsTheTailscaleLoopbackProxy(t *testing.T) {
+	state := testState(t)
+	state.Provider = ProviderTailscale
+
+	compose, err := RenderCompose(state)
+	if err != nil {
+		t.Fatalf("RenderCompose: %v", err)
+	}
+	if !strings.Contains(compose, `TRUSTED_PROXIES: "127.0.0.1/32"`) {
+		t.Errorf("tailscale compose does not trust the loopback proxy:\n%s", compose)
+	}
+	if !strings.Contains(compose, `"127.0.0.1:8080:8080"`) {
+		t.Errorf("tailscale compose does not publish on loopback:\n%s", compose)
+	}
+	if strings.Contains(compose, `"0.0.0.0:8080:8080"`) {
+		t.Errorf("tailscale compose publishes on every interface:\n%s", compose)
+	}
+}
+
+func TestRenderComposeHasNoTrustedProxyForLAN(t *testing.T) {
+	compose, err := RenderCompose(testState(t))
+	if err != nil {
+		t.Fatalf("RenderCompose: %v", err)
+	}
+	if strings.Contains(compose, "TRUSTED_PROXIES") {
+		t.Errorf("LAN compose trusts a proxy it does not have:\n%s", compose)
+	}
+}
+
 func TestRenderExposedComposePublishesOnEveryInterface(t *testing.T) {
 	state := testState(t)
 

@@ -144,7 +144,14 @@ func validEmail(email string) bool {
 
 func printLAN(w io.Writer, state install.State, lanAddress func() string) {
 	if state.Provider != install.ProviderLAN {
-		fmt.Fprintf(w, "Provider %s is not implemented in this build; the server is reachable locally only.\n", state.Provider)
+		switch state.Provider {
+		case install.ProviderTailscale:
+			fmt.Fprintln(w, "Provider tailscale is configured; run `tt expose --provider=tailscale` to publish it.")
+		case install.ProviderCloudflare:
+			fmt.Fprintln(w, "Provider cloudflare exposure arrives in T9.10; the server is reachable locally only.")
+		default:
+			fmt.Fprintf(w, "Provider %s is not implemented in this build; the server is reachable locally only.\n", state.Provider)
+		}
 		return
 	}
 

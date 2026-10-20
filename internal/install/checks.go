@@ -329,9 +329,12 @@ func checkClock(ctx context.Context, env checkEnv, state State) Check {
 }
 
 func checkProvider(state State) Check {
-	fix := "run `tt expose --provider=lan` to verify LAN reachability; public DNS, TLS, and the attachment cap arrive with T9.9–T9.10"
-	if state.Provider != ProviderLAN {
-		fix = fmt.Sprintf("%s verification arrives with T9.9/T9.10; this build does not check it", state.Provider)
+	fix := "run `tt expose --provider=lan` to verify LAN reachability; public DNS, TLS, and the attachment cap are not checked here"
+	switch state.Provider {
+	case ProviderTailscale:
+		fix = "run `tt expose --provider=tailscale` to verify the ts.net URL; doctor does not retain the exposed name"
+	case ProviderCloudflare:
+		fix = "cloudflare verification arrives with T9.10; this build does not check it"
 	}
 	return newCheck("provider", CheckSkip,
 		fmt.Sprintf("%s: provider health is not checked yet", state.Provider),
