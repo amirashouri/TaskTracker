@@ -1,0 +1,45 @@
+[Unit]
+Description=TaskTracker server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tasktracker
+Group=tasktracker
+WorkingDirectory=/opt/tasktracker
+ExecStart=/opt/tasktracker/server serve
+
+# Secrets live here: mode 0640, owned by root and group-readable by the
+# service. See docs/SELF-HOSTING.md — never commit this file.
+EnvironmentFile=/etc/tasktracker/secrets.env
+
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+
+# systemd creates and owns /var/lib/tasktracker. Point DATABASE_URL at a SQLite
+# file inside it, e.g. sqlite:///var/lib/tasktracker/tasktracker.db
+StateDirectory=tasktracker
+
+# The service needs no privileges and no writable path outside its state
+# directory. ProtectSystem=strict makes the rest of the filesystem read-only.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
