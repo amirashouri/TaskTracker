@@ -220,6 +220,10 @@ func repairInstall(ctx context.Context, opts installOptions, state install.State
 
 	final := install.StateFromSteps(steps)
 	fmt.Fprintf(deps.stdout, "Repaired %q. Server: http://127.0.0.1:%d\n", final.InstanceName, final.ServerPort)
+	// No provider has verified a URL in this task, so this prints the
+	// `tt expose` hint rather than a link to an address a phone cannot reach.
+	// T9.8+ pass the URL they verified here.
+	printPairing(deps.stdout, final.Provider, "")
 	return 0
 }
 
@@ -318,6 +322,11 @@ func freshInstall(ctx context.Context, opts installOptions, deps installDeps) in
 	fmt.Fprintf(deps.stdout, "Admin: %s\n", admin.Email)
 	printLAN(deps.stdout, final, deps.lanAddress)
 	fmt.Fprintf(deps.stdout, "Next: open http://127.0.0.1:%d on this host and sign in as %s.\n", final.ServerPort, admin.Email)
+	// No provider has verified a URL in this task, so this prints the
+	// `tt expose` hint rather than a link to a loopback address a phone cannot
+	// reach. T9.8+ pass the URL they verified here; the pairing step is last
+	// because it is the one that makes the server reachable from the phone.
+	printPairing(deps.stdout, final.Provider, "")
 	return 0
 }
 
