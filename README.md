@@ -1,5 +1,8 @@
 # TaskTrackerServer
 
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Amirreza%20Ashouri-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/amirreza-ashouri-229019156)
+[![Gmail](https://img.shields.io/badge/Gmail-amirashouri72%40gmail.com-EA4335?logo=gmail&logoColor=white)](mailto:amirashouri72@gmail.com)
+
 Self-hosted backend for the [`TaskTrackerKMP`](../TaskTrackerKMP) client.
 
 One Go binary, one database. Companies run their own copy on their own server,
