@@ -1,16 +1,19 @@
 package attachments
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/dbtest"
@@ -25,6 +28,31 @@ import (
 // ever reference.
 
 const testMaxBytes = 25 << 20
+const testDeadline = 30 * time.Second
+
+// testResponseWriter wraps httptest.ResponseRecorder and implements the
+// optional interfaces needed by http.ResponseController for deadline support.
+// It uses a net.Pipe to provide a connection that supports deadlines.
+type testResponseWriter struct {
+	*httptest.ResponseRecorder
+	conn net.Conn
+}
+
+func newTestResponseWriter() *testResponseWriter {
+	serverConn, _ := net.Pipe()
+	return &testResponseWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		conn:             serverConn,
+	}
+}
+
+func (w *testResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.conn, bufio.NewReadWriter(bufio.NewReader(w.conn), bufio.NewWriter(w.conn)), nil
+}
+
+func (w *testResponseWriter) Flush() {
+	// No-op for testing
+}
 
 type fixture struct {
 	db           *sql.DB
@@ -84,7 +112,7 @@ func newFixture(t *testing.T, maxBytes int64) *fixture {
 
 	root := t.TempDir()
 	store := &BlobStore{Root: root}
-	handler := NewHandler(sync.NewEngine(database.DB, root), database.DB, store, maxBytes)
+	handler := NewHandler(sync.NewEngine(database.DB, root), database.DB, store, maxBytes, testDeadline)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/projects/{projectId}/work-items/{workItemId}/attachments/{attachmentId}/blob", handler.Upload)
@@ -129,9 +157,10 @@ func (f *fixture) do(t *testing.T, method, userID, workItemID, attachmentID stri
 		f.projectID, workItemID, attachmentID)
 	request := httptest.NewRequest(method, path, bytes.NewReader(body))
 	request = request.WithContext(auth.WithUser(request.Context(), userID, "member"))
-	recorder := httptest.NewRecorder()
-	f.mux.ServeHTTP(recorder, request)
-	return recorder
+	w := newTestResponseWriter()
+	f.mux.ServeHTTP(w, request)
+	w.conn.Close()
+	return w.ResponseRecorder
 }
 
 func (f *fixture) upload(t *testing.T, userID, attachmentID string, body []byte) *httptest.ResponseRecorder {
