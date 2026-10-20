@@ -80,7 +80,64 @@ The TaskTracker client runs on your phone or desktop and connects to your server
 |----------|----------|
 | **Android** | [GitHub Releases → `tasktracker-android-*.apk`](https://github.com/amirashouri/TaskTracker/releases/latest) |
 | **iOS** | [TestFlight](https://testflight.apple.com/join/...) (or build from source via Xcode) |
-| **Desktop (Linux/macOS/Windows)** | [GitHub Releases → `tasktracker-desktop-*.tar.gz` / `.dmg` / `.msi`](https://github.com/amirashouri/TaskTracker/releases/latest) |
+| **Desktop (Linux/macOS/Windows)** | [GitHub Releases → `desktop-dist.tar.gz` / `desktop-dist.zip`](https://github.com/amirashouri/TaskTracker/releases/latest) |
+
+### Installing the Desktop App
+
+The desktop app is distributed as a portable archive containing a Java JAR and launcher scripts. No system installation is required — just extract and run.
+
+#### Linux / macOS
+
+```bash
+# Download the latest release (adjust version as needed)
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/desktop-dist.tar.gz -o desktop-dist.tar.gz
+
+# Extract
+tar -xzf desktop-dist.tar.gz
+
+# Run
+./run.sh
+```
+
+> **Tip:** Create a desktop entry (Linux) or add to Applications (macOS) for easier access. See below.
+
+#### Windows
+
+```powershell
+# Download the latest release
+iwr -useb https://github.com/amirashouri/TaskTracker/releases/latest/download/desktop-dist.zip -outfile desktop-dist.zip
+
+# Extract
+Expand-Archive -Path desktop-dist.zip -DestinationPath .
+
+# Run
+.\run.bat
+```
+
+> **Tip:** Pin `run.bat` to Start menu or create a shortcut for easier access.
+
+#### Creating a Desktop Shortcut (Linux)
+
+```bash
+# Example: create a .desktop file
+cat > ~/.local/share/applications/tasktracker.desktop << 'EOF'
+[Desktop Entry]
+Name=TaskTracker
+Comment=TaskTracker Desktop Client
+Exec=/path/to/extracted/run.sh
+Icon=/path/to/extracted/icon.png
+Terminal=false
+Type=Application
+Categories=Office;
+EOF
+```
+
+#### Creating a Shortcut (macOS)
+
+```bash
+# Create an app bundle or use Automator to create a .app from run.sh
+# Or simply run from Terminal: ./run.sh
+```
 
 > **Note:** The iOS app requires a TestFlight invite or building from source (see the [KMP client repo](../TaskTrackerKMP) for build instructions). The Android APK and Desktop binaries are published to GitHub Releases on every tag.
 
