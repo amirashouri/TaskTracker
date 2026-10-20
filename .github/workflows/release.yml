@@ -1,0 +1,73 @@
+name: release
+
+# Runs only on tag push (v*) or manual dispatch — not on every push to main.
+# Creates a GitHub Release for the server with the changelog and binary.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to create (e.g., v1.0.0)'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            echo "changelog=Initial release" >> "$GITHUB_OUTPUT"
+          else
+            CHANGELOG=$(git log --pretty=format:"- %s" $PREV_TAG..HEAD)
+            echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$CHANGELOG" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: TaskTracker Server ${{ github.ref_name }}
+          body: |
+            ## TaskTracker Server ${{ github.ref_name }}
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ### Installation
+
+            See [docs/INSTALL.md](https://github.com/amirashouri/TaskTrackerServer/blob/main/docs/INSTALL.md) for installation instructions.
+
+            ### Server Binary
+
+            The server is distributed as a Docker image:
+            ```bash
+            docker pull ghcr.io/amirashouri/tasktracker-server:${{ github.ref_name }}
+            ```
+
+            ### Client Compatibility
+
+            Works with TaskTracker client at the same version tag.
+            See [TaskTracker client releases](https://github.com/amirashouri/TaskTracker/releases/tag/${{ github.ref_name }}).
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
