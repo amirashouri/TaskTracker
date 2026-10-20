@@ -1,4 +1,4 @@
-# Simple CI pipeline: lint (format + vet), build, test.
+# Simple CI pipeline: lint (format + vet), build, test, and a tagged CLI release.
 #
 # The tree is green on main, so a red pipeline is a real regression. Known
 # runtime gaps (which still build and pass) are tracked in docs/PLAN.md.
@@ -7,6 +7,7 @@ stages:
   - lint
   - build
   - test
+  - release
 
 default:
   image: golang:1.27
@@ -68,3 +69,17 @@ test-postgres:
     TASKTRACKER_TEST_POSTGRES_URL: "postgres://postgres:postgres@postgres:5432/tasktracker_test?sslmode=disable"
   script:
     - go test ./...
+
+# The CLI is the install funnel. Build it on tags for every platform the
+# customer might download it on, with the release tag baked into the image
+# tag it pins.
+release:
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - make release VERSION="$CI_COMMIT_TAG"
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 week

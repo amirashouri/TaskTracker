@@ -1,0 +1,5 @@
+# Embedded for the deferred VPS + Caddy path (T9.11). tt renders the
+# customer's hostname over the placeholder when that path ships.
+{$TASKTRACKER_HOSTNAME} {
+    reverse_proxy 127.0.0.1:8080
+}
