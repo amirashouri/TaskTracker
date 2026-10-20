@@ -11,6 +11,9 @@
 #   Expose (no host publish, for a tunnelling sidecar):
 #     docker compose --profile expose up -d
 #
+#   Cloudflare Tunnel (requires cloudflared sidecar, configured by `tt expose`):
+#     See `tt expose --provider=cloudflare --domain <your-domain>`
+#
 # The server binds 0.0.0.0 *inside* the container; the published side is
 # loopback, so plain HTTP is not reachable from the network. A reverse proxy on
 # the host reaches it at 127.0.0.1:${SERVER_PORT}.
@@ -21,6 +24,7 @@
 # Pass it via environment variable or a .env file next to this compose file:
 #   JWT_SECRET=<your-secret>
 #   POSTGRES_PASSWORD=<change-me>   # only for the postgres profile
+#   CLOUDFLARE_TUNNEL_TOKEN=<token>  # only for cloudflare tunnel
 
 x-postgres: &postgres
   image: postgres:16-alpine
@@ -48,6 +52,7 @@ x-server-pg: &server-pg
     JWT_REFRESH_TTL: "${JWT_REFRESH_TTL:-720h}"
     CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}"
     LOG_LEVEL: "${LOG_LEVEL:-info}"
+    TRUSTED_PROXIES: "${TRUSTED_PROXIES:-}"
   depends_on:
     postgres:
       condition: service_healthy
@@ -58,6 +63,18 @@ x-server-pg: &server-pg
     retries: 3
     start_period: 5s
   restart: unless-stopped
+
+# Cloudflare Tunnel sidecar (configured by `tt expose --provider=cloudflare`).
+# This is a reference; `tt` generates the full compose with the tunnel token.
+x-cloudflared: &cloudflared
+  image: cloudflare/cloudflared:latest
+  command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+  environment:
+    TUNNEL_TOKEN: "${CLOUDFLARE_TUNNEL_TOKEN}"
+  depends_on:
+    - server-pg
+  restart: unless-stopped
+  profiles: ["cloudflare"]
 
 services:
   # ── Postgres profile ──────────────────────────────────────────────
@@ -112,6 +129,7 @@ services:
       JWT_REFRESH_TTL: "${JWT_REFRESH_TTL:-720h}"
       CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
+      TRUSTED_PROXIES: "${TRUSTED_PROXIES:-}"
     ports:
       - "127.0.0.1:${SERVER_PORT:-8080}:8080"
     volumes:
@@ -123,6 +141,34 @@ services:
       retries: 3
       start_period: 5s
     restart: unless-stopped
+
+  # ── Cloudflare Tunnel profile ────────────────────────────────────────
+  # Configured by `tt expose --provider=cloudflare --domain <your-domain>`.
+  # The tunnel token is passed via CLOUDFLARE_TUNNEL_TOKEN.
+  cloudflare-postgres:
+    <<: *postgres
+    profiles: ["cloudflare"]
+    networks:
+      default:
+        aliases:
+          - postgres
+
+  server-pg-cloudflare:
+    <<: *server-pg
+    profiles: ["cloudflare"]
+    depends_on:
+      cloudflare-postgres:
+        condition: service_healthy
+    expose:
+      - "8080"
+    networks:
+      default:
+        aliases:
+          - server-pg
+
+  cloudflared:
+    <<: *cloudflared
+    profiles: ["cloudflare"]
 
 volumes:
   pg-data:

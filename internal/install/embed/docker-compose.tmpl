@@ -46,6 +46,16 @@ services:
       retries: 3
       start_period: 5s
     restart: unless-stopped
+{{ if eq .Provider "cloudflare" }}
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token {{ .CloudflareTunnelToken }}
+    environment:
+      TUNNEL_TOKEN: "{{ .CloudflareTunnelToken }}"
+    depends_on:
+      - server
+    restart: unless-stopped
+{{ end }}
 
 volumes:
 {{ if .Sqlite }}

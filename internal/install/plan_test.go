@@ -318,6 +318,34 @@ func TestRenderComposeHasNoTrustedProxyForLAN(t *testing.T) {
 	}
 }
 
+func TestRenderComposeIncludesCloudflareSidecar(t *testing.T) {
+	state := testState(t)
+	state.Provider = ProviderCloudflare
+
+	compose, err := RenderCompose(state)
+	if err != nil {
+		t.Fatalf("RenderCompose: %v", err)
+	}
+	if !strings.Contains(compose, "cloudflared:") {
+		t.Errorf("cloudflare compose missing cloudflared service:\n%s", compose)
+	}
+	if !strings.Contains(compose, "cloudflare/cloudflared:latest") {
+		t.Errorf("cloudflare compose missing cloudflared image:\n%s", compose)
+	}
+	if !strings.Contains(compose, "tunnel --no-autoupdate run --token") {
+		t.Errorf("cloudflare compose missing tunnel command:\n%s", compose)
+	}
+	if !strings.Contains(compose, `TRUSTED_PROXIES: "172.16.0.0/12"`) {
+		t.Errorf("cloudflare compose does not trust the compose subnet:\n%s", compose)
+	}
+	if !strings.Contains(compose, `"127.0.0.1:8080:8080"`) {
+		t.Errorf("cloudflare compose does not publish on loopback:\n%s", compose)
+	}
+	if strings.Contains(compose, `"0.0.0.0:8080:8080"`) {
+		t.Errorf("cloudflare compose publishes on every interface:\n%s", compose)
+	}
+}
+
 func TestRenderExposedComposePublishesOnEveryInterface(t *testing.T) {
 	state := testState(t)
 

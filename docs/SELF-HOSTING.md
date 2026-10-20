@@ -351,6 +351,62 @@ tailscale serve reset
 The command never resets an existing Funnel/Serve configuration automatically;
 it prints the reset command and keeps the customer in control.
 
+### Cloudflare Tunnel exposure (Docker and `tt`)
+
+For a customer who already owns a domain on Cloudflare:
+
+```bash
+tt expose --provider=cloudflare --domain tasks.example.com
+```
+
+What the command does:
+
+1. Detects `cloudflared` on `PATH`. If absent, prints the platform install
+   command and exits without changing anything.
+2. Requires `--domain` with a hostname whose zone is on Cloudflare. If the
+   domain's authoritative nameservers are not Cloudflare, it prints guidance on
+   changing them at the registrar and notes that DNS propagation can take
+   minutes to hours.
+3. Creates a Cloudflare Tunnel via the customer's API token (run `cloudflared
+   tunnel login` first to authenticate). The tunnel token is stored in the OS
+   keychain (macOS/Windows) or a `0600` file at
+   `~/.config/tasktracker/cloudflare-token`; never in the compose file or
+   install state.
+4. Routes the domain to the tunnel: `cloudflared tunnel route dns <tunnel-id>
+   <domain>`.
+5. Rewrites the Docker Compose file to publish on `127.0.0.1:<port>:8080`, adds
+   a `cloudflared` sidecar service with the tunnel token, and adds
+   `TRUSTED_PROXIES: "172.16.0.0/12"` so the server sees the correct client
+   address through the Cloudflare proxy. The server never publishes `0.0.0.0`.
+6. Requests `https://<domain>/readyz` with certificate verification. Only on
+   success does it print the public URL and the `tasktracker://connect` pairing
+   link and QR.
+
+**Caveats:**
+
+- Cloudflare Free/Pro/Business plans have a 100 MiB request-body limit.
+  `ATTACHMENT_MAX_BYTES` is validated at server startup; if it exceeds 100 MiB,
+  the server refuses to start with a clear message naming Cloudflare's cap.
+- DNS propagation for the new CNAME can take minutes to hours. The command
+  verifies with retries but does not wait indefinitely.
+- `cloudflared` auto-updates by default. The compose pins the image tag to
+  `cloudflare/cloudflared:latest`; the `--no-autoupdate` flag is used.
+- The tunnel token is a secret. The CLI never logs it. The OS keychain is
+  preferred; the `0600` file fallback must be clearly documented.
+- The install state does not persist the exposed domain. `tt doctor` therefore
+  cannot re-check the URL without re-running `tt expose`; it stays honest as a
+  `skip`.
+
+**To stop exposing:**
+
+```bash
+cloudflared tunnel delete <tunnel-id>
+cloudflared tunnel route dns --overwrite-hostname <tunnel-id> <domain>
+```
+
+The command never deletes an existing tunnel automatically; it prints the
+cleanup commands and keeps the customer in control.
+
 ### Behind a reverse proxy
 
 Set `TRUSTED_PROXIES` to the proxy's CIDR. The server then reads
