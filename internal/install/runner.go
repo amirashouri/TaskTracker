@@ -57,8 +57,6 @@ func (r ExecRunner) Run(ctx context.Context, step Step) error {
 		return r.waitReady(ctx, step.State)
 	case StepCreateAdmin:
 		return r.createAdmin(ctx, step)
-	case StepComposePS:
-		return r.compose(ctx, step.State, "ps")
 	case StepComposeLogs:
 		return r.compose(ctx, step.State, "logs", "-f", "--tail=200")
 	case StepComposeDown:
@@ -81,17 +79,21 @@ func (r ExecRunner) compose(ctx context.Context, state State, args ...string) er
 // bootstrap carries a password in argv; redactAdminArgs replaces it before the
 // command is ever formatted.
 func (r ExecRunner) composeDisplay(ctx context.Context, state State, display string, args ...string) error {
-	command := []string{"compose", "--project-name", state.InstanceName, "-f", state.ComposePath}
-	command = append(command, args...)
-
 	runner := r.commands
 	if runner == nil {
 		runner = execCommandRunner{}
 	}
-	if err := runner.Run(ctx, r.Stdout, r.Stderr, "docker", command...); err != nil {
+	if err := runner.Run(ctx, r.Stdout, r.Stderr, "docker", composeArgs(state, args...)...); err != nil {
 		return fmt.Errorf("docker compose %s: %w", display, err)
 	}
 	return nil
+}
+
+// composeArgs is the single compose invocation shape shared by the executing
+// runner and the read-only checks.
+func composeArgs(state State, args ...string) []string {
+	command := []string{"compose", "--project-name", state.InstanceName, "-f", state.ComposePath}
+	return append(command, args...)
 }
 
 func (r ExecRunner) createAdmin(ctx context.Context, step Step) error {

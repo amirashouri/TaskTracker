@@ -12,8 +12,6 @@ type Action string
 
 const (
 	ActionInstall   Action = "install"
-	ActionStatus    Action = "status"
-	ActionDoctor    Action = "doctor"
 	ActionLogs      Action = "logs"
 	ActionUninstall Action = "uninstall"
 )
@@ -58,7 +56,6 @@ const (
 	StepComposeUp    StepKind = "compose-up"
 	StepWaitReady    StepKind = "wait-ready"
 	StepCreateAdmin  StepKind = "create-admin"
-	StepComposePS    StepKind = "compose-ps"
 	StepComposeLogs  StepKind = "compose-logs"
 	StepComposeDown  StepKind = "compose-down"
 	StepRemoveState  StepKind = "remove-state"
@@ -82,10 +79,6 @@ func Next(state State, cmd Command) ([]Step, error) {
 	switch cmd.Action {
 	case ActionInstall:
 		return nextInstall(state, cmd)
-	case ActionStatus:
-		return nextStatus(state)
-	case ActionDoctor:
-		return nextDoctor(state)
 	case ActionLogs:
 		return nextLogs(state)
 	case ActionUninstall:
@@ -195,23 +188,6 @@ func sameInstance(state State, cmd Command) error {
 		return fmt.Errorf("instance %q already uses port %d; run tt uninstall before changing it", state.InstanceName, state.ServerPort)
 	}
 	return nil
-}
-
-func nextStatus(state State) ([]Step, error) {
-	if state.Version == 0 {
-		return nil, errors.New("no installation found; run tt install")
-	}
-	return []Step{{Kind: StepComposePS, Description: "Show the container state", State: state}}, nil
-}
-
-func nextDoctor(state State) ([]Step, error) {
-	if state.Version == 0 {
-		return nil, errors.New("no installation found; run tt install")
-	}
-	// T9.6 adds the network, TLS, DNS, and clock checks. Until then doctor
-	// tells the operator the same container-state truth as status rather than
-	// inventing a green check it cannot prove.
-	return []Step{{Kind: StepComposePS, Description: "Show the container state", State: state}}, nil
 }
 
 func nextLogs(state State) ([]Step, error) {
