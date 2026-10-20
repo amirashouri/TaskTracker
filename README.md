@@ -289,6 +289,7 @@ test are green, so a red run is a real regression.
 - [`docs/PLAN.md`](docs/PLAN.md) — concise active roadmap and task index.
 - [`docs/PLAN-ARCHIVE.md`](docs/PLAN-ARCHIVE.md) — completed-work history and
   detailed plans for pending tasks without specs.
+- [`docs/INSTALL.md`](docs/INSTALL.md) — **customer-facing install guide**: what you need, `tt install`, `tt expose` for LAN/Tailscale/Cloudflare, Day 2 operations, and troubleshooting.
 - [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) — the bare-metal/systemd deployment path, without Docker.
 - [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) — roles, CLI bootstrap, token lifecycle, and how a user gets provisioned.
 - [`AGENTS.md`](AGENTS.md) — working agreement for this repository, including the wire-compatibility policy.
