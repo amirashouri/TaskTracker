@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+const (
+	// Cloudflare's request-body limit on Free/Pro/Business plans (100 MiB).
+	// Enterprise plans can request a higher limit.
+	CloudflareRequestBodyLimit = 100 * 1024 * 1024
+)
+
 type Config struct {
 	DatabaseURL        string
 	JWTSecret          string
@@ -100,6 +106,20 @@ func (c *Config) validate() error {
 	}
 	if c.AttachmentMaxBytes <= 0 {
 		return errors.New("ATTACHMENT_MAX_BYTES must be positive; it is the largest attachment the server accepts")
+	}
+	return nil
+}
+
+// ValidateForCloudflare checks that ATTACHMENT_MAX_BYTES does not exceed
+// Cloudflare's 100 MiB request-body limit. This should be called when the
+// exposure provider is Cloudflare, so the server fails fast with a clear
+// message instead of silently returning 413 from the edge.
+func (c *Config) ValidateForCloudflare() error {
+	if c.AttachmentMaxBytes > CloudflareRequestBodyLimit {
+		return fmt.Errorf(
+			"ATTACHMENT_MAX_BYTES (%d) exceeds Cloudflare's 100 MiB request-body limit (%d). Reduce ATTACHMENT_MAX_BYTES or use a different exposure provider.",
+			c.AttachmentMaxBytes, CloudflareRequestBodyLimit,
+		)
 	}
 	return nil
 }

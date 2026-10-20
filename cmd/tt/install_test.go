@@ -389,6 +389,30 @@ func TestWizardTailscaleProviderPointsAtExpose(t *testing.T) {
 	}
 }
 
+func TestWizardCloudflareProviderPointsAtExpose(t *testing.T) {
+	dir := t.TempDir()
+	runner := &recordingRunner{}
+	opts := defaultInstallOptions()
+	opts.dataDir = dir
+	opts.provider = "cloudflare"
+	opts.adminEmail = "admin@example.com"
+	opts.adminPassword = "password123"
+
+	result := runInstallFlow(t, opts, filepath.Join(dir, "install.json"), "v1.2.3", runner, nil, false, nil, func() string {
+		return "192.168.1.50"
+	})
+
+	if result.code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", result.code, result.stderr)
+	}
+	if !strings.Contains(result.stdout, "tt expose --provider=cloudflare --domain") {
+		t.Errorf("stdout = %q, want the Cloudflare next step", result.stdout)
+	}
+	if strings.Contains(result.stdout, "LAN address:") {
+		t.Errorf("non-LAN install printed a LAN address:\n%s", result.stdout)
+	}
+}
+
 func TestWizardPrintsTheSecretBeforeAFailingAdminStep(t *testing.T) {
 	dir := t.TempDir()
 	var steps []install.Step

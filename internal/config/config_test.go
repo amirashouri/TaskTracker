@@ -329,6 +329,55 @@ func TestLoadRejectsAnUnknownLogLevel(t *testing.T) {
 	}
 }
 
+func TestValidateForCloudflareRejectsOverLimit(t *testing.T) {
+	cfg := &Config{
+		DatabaseURL:        "sqlite:///data/tasktracker.db",
+		JWTSecret:          strings.Repeat("a", 32),
+		ServerBind:         "127.0.0.1",
+		ServerPort:         "8080",
+		LogLevel:           "info",
+		AttachmentRoot:     "./data/blobstore",
+		AttachmentMaxBytes: CloudflareRequestBodyLimit + 1,
+	}
+	err := cfg.ValidateForCloudflare()
+	if err == nil {
+		t.Fatal("expected an error when ATTACHMENT_MAX_BYTES exceeds Cloudflare limit")
+	}
+	if !strings.Contains(err.Error(), "Cloudflare's 100 MiB") {
+		t.Errorf("error %q does not name Cloudflare's limit", err)
+	}
+}
+
+func TestValidateForCloudflareAcceptsAtLimit(t *testing.T) {
+	cfg := &Config{
+		DatabaseURL:        "sqlite:///data/tasktracker.db",
+		JWTSecret:          strings.Repeat("a", 32),
+		ServerBind:         "127.0.0.1",
+		ServerPort:         "8080",
+		LogLevel:           "info",
+		AttachmentRoot:     "./data/blobstore",
+		AttachmentMaxBytes: CloudflareRequestBodyLimit,
+	}
+	if err := cfg.ValidateForCloudflare(); err != nil {
+		t.Fatalf("ValidateForCloudflare: %v", err)
+	}
+}
+
+func TestValidateForCloudflareAcceptsUnderLimit(t *testing.T) {
+	cfg := &Config{
+		DatabaseURL:        "sqlite:///data/tasktracker.db",
+		JWTSecret:          strings.Repeat("a", 32),
+		ServerBind:         "127.0.0.1",
+		ServerPort:         "8080",
+		LogLevel:           "info",
+		AttachmentRoot:     "./data/blobstore",
+		AttachmentMaxBytes: 25 * 1024 * 1024, // 25 MiB default
+	}
+	if err := cfg.ValidateForCloudflare(); err != nil {
+		t.Fatalf("ValidateForCloudflare: %v", err)
+	}
+}
+
 func TestSlogLevelMapsTheConfiguredName(t *testing.T) {
 	cases := map[string]slog.Level{
 		"debug":   slog.LevelDebug,
