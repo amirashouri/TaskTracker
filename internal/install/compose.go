@@ -7,8 +7,10 @@ import (
 	"text/template"
 )
 
-// composeTemplatePath is relative to the embedded filesystem.
-const composeTemplatePath = "embed/docker-compose.yml"
+// composeTemplatePath is relative to the embedded filesystem. The .tmpl
+// suffix keeps editors from parsing the Go directives as YAML; the rendered
+// file is still written as docker-compose.yml.
+const composeTemplatePath = "embed/docker-compose.tmpl"
 
 // composeTemplate is parsed once. It is a text template rather than YAML
 // marshalling so the rendered file keeps the comments and shape a customer
