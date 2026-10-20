@@ -300,4 +300,12 @@ test are green, so a red run is a real regression.
 
 ## License
 
-No license has been chosen — all rights reserved by default.
+[MIT + Commons Clause](LICENSE), plus one extra term: no rebranding.
+
+You can run, host, and deploy the backend in your own team — personal,
+commercial, or in production — and you can change the code. What you cannot do
+is sell it, or repackage it under your own name and brand: the code stays the
+author's, and the "TaskTracker" name and logos are the author's trademarks.
+
+The full text is in [`LICENSE`](LICENSE). The same license covers the
+[client](https://github.com/amirashouri/TaskTrackerKMP).

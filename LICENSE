@@ -1,0 +1,65 @@
+MIT License
+
+Copyright (c) 2026 Amirreza Ashouri
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+"Commons Clause" License Condition v1.0
+
+The Software is provided to you by the Licensor under the License, as defined
+below, subject to the following condition.
+
+Without limiting other conditions in the License, the grant of rights under the
+License will not include, and the License does not grant to you, the right to
+Sell the Software.
+
+For purposes of the foregoing, "Sell" means practicing any or all of the rights
+granted to you under the License to provide to third parties, for a fee or
+other consideration (including without limitation fees for hosting or
+consulting/support services related to the Software), a product or service
+whose value derives, entirely or substantially, from the functionality of the
+Software. Any license notice or attribution required by the License must also
+include this Commons Clause License Condition notice.
+
+---
+
+Additional terms — no rebranding
+
+The Licensor grants you the right to run, host, and deploy the Software inside
+your own team or organisation, including for commercial and production use. You
+may not distribute the Software, in original or modified form, under a name,
+brand, logo, or product identity other than the one the Licensor ships, nor
+present it as your own product.
+
+The two clauses above cover the two halves of that intent, so read together:
+this is the MIT permission to use, copy, modify, merge, publish, distribute and
+sublicense, with the right to *Sell* withdrawn by the Commons Clause, and the
+right to repackage under a different identity withdrawn here. Nothing else is
+restricted — you do not have to open a pull request, and there is no fee.
+
+The Licensor is the author of the Software and retains copyright in it. The
+"TaskTracker" name and the accompanying logos are the Licensor's trademarks and
+are not licensed by this document; use them only to identify the Software as
+the Licensor's.
+
+This is not an OSI-approved open source license. The Commons Clause and the
+no-rebranding terms above are what make it a source-available license, and they
+are the whole of the difference from the plain MIT terms.
