@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ type Config struct {
 	JWTRefreshTTL      time.Duration
 	ServerBind         string
 	ServerPort         string
+	TrustedProxies     []netip.Prefix
 	CORSOrigins        []string
 	LogLevel           string
 	SignInMaxAttempts  int
@@ -37,6 +39,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("load %s: %w", envFile, err)
 	}
 
+	trustedProxies, err := parseTrustedProxies(getCSVEnv("TRUSTED_PROXIES", ""))
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &Config{
 		DatabaseURL:        getEnv("DATABASE_URL", "sqlite:///data/tasktracker.db"),
 		JWTSecret:          os.Getenv("JWT_SECRET"),
@@ -44,6 +51,7 @@ func Load() (*Config, error) {
 		JWTRefreshTTL:      getDurationEnv("JWT_REFRESH_TTL", 720*time.Hour),
 		ServerBind:         serverBind(),
 		ServerPort:         getEnv("SERVER_PORT", "8080"),
+		TrustedProxies:     trustedProxies,
 		CORSOrigins:        getCSVEnv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080"),
 		LogLevel:           getEnv("LOG_LEVEL", "info"),
 		SignInMaxAttempts:  getIntEnv("SIGNIN_MAX_ATTEMPTS", 10),
@@ -149,6 +157,40 @@ func serverBind() string {
 		return strings.TrimSpace(value)
 	}
 	return "127.0.0.1"
+}
+
+// parseTrustedProxies turns TRUSTED_PROXIES into the prefixes the auth resolver
+// checks once per request. Empty means trust no peer, which is the safe
+// default: a forwarding header from an unconfigured peer is ignored.
+func parseTrustedProxies(values []string) ([]netip.Prefix, error) {
+	prefixes := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"TRUSTED_PROXIES entry %q is not an IP prefix (use e.g. 127.0.0.1/32 for one host): %w",
+				value, err,
+			)
+		}
+		prefix = prefix.Masked()
+		if prefix.Addr().Is4In6() {
+			if prefix.Bits() < 96 {
+				return nil, fmt.Errorf(
+					"TRUSTED_PROXIES entry %q is an IPv4-mapped IPv6 prefix broader than /96; use an IPv4 CIDR",
+					value,
+				)
+			}
+			prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
+		}
+		if prefix.Bits() == 0 {
+			return nil, fmt.Errorf(
+				"TRUSTED_PROXIES entry %q trusts every address, which makes forwarded headers forgeable; list the proxy's own prefix",
+				value,
+			)
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes, nil
 }
 
 func getEnv(key, defaultValue string) string {

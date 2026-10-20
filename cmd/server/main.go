@@ -78,7 +78,7 @@ func runServer() {
 	// Initialize auth handler with token store
 	tokenStore := auth.NewTokenStore(database.DB)
 	limiter := ratelimit.New(cfg.SignInMaxAttempts, cfg.SignInWindow)
-	authHandler := auth.NewHandler(jwtManager, userRepo, tokenStore, limiter)
+	authHandler := auth.NewHandler(jwtManager, userRepo, tokenStore, limiter, cfg.TrustedProxies)
 
 	// Initialize admin handler
 	adminHandler := admin.NewHandler(userRepo, tokenStore)

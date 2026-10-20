@@ -182,7 +182,7 @@ func newTestMux(t *testing.T) *http.ServeMux {
 	jwtManager := auth.NewJWTManager(strings.Repeat("s", 32), time.Hour, time.Hour)
 
 	return mount(
-		auth.NewHandler(jwtManager, users, tokens, ratelimit.New(5, time.Minute)),
+		auth.NewHandler(jwtManager, users, tokens, ratelimit.New(5, time.Minute), nil),
 		admin.NewHandler(users, tokens),
 		admin.NewProjectHandler(entities.NewProjectRepository(database.DB), sync.NewEngine(database.DB, "")),
 		sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),
