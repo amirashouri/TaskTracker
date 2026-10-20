@@ -1,6 +1,6 @@
 # attachment-server-storage — Store WorkItem attachments on the server
 
-- **status:** in-progress
+- **status:** done
 - **priority:** P1
 - **plan:** proposed (no `docs/PLAN.md` entry yet). Companion client spec:
   `../TaskTrackerKMP/specs/attachment-client-sync.md`. This is a **dual-repo wire
