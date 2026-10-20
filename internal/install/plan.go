@@ -31,6 +31,21 @@ type Command struct {
 	DBPassword   string
 	ConfirmName  string
 	ServerPort   int
+
+	// Admin bootstrap is first-install only. Repair ignores these fields so a
+	// re-run cannot create a second account or resurrect a deleted one.
+	AdminEmail       string
+	AdminPassword    string
+	AdminDisplayName string
+}
+
+// AdminBootstrap is the first account created after the server is ready. It
+// travels on the plan step rather than in State: the password must never reach
+// install.json.
+type AdminBootstrap struct {
+	Email       string
+	Password    string
+	DisplayName string
 }
 
 // StepKind names one unit of work. The plan returns steps; the runner is the
@@ -42,6 +57,7 @@ const (
 	StepWriteCompose StepKind = "write-compose"
 	StepComposeUp    StepKind = "compose-up"
 	StepWaitReady    StepKind = "wait-ready"
+	StepCreateAdmin  StepKind = "create-admin"
 	StepComposePS    StepKind = "compose-ps"
 	StepComposeLogs  StepKind = "compose-logs"
 	StepComposeDown  StepKind = "compose-down"
@@ -56,6 +72,7 @@ type Step struct {
 	Init        bool
 	State       State
 	Compose     string
+	Admin       *AdminBootstrap
 }
 
 // Next turns a state and a command into a plan. It is pure: no clock, no
@@ -127,6 +144,9 @@ func nextInstall(state State, cmd Command) ([]Step, error) {
 		if state.Mode == ModePostgres && state.DatabasePassword == "" {
 			return nil, errors.New("a database password is required for the postgres mode")
 		}
+		if (cmd.AdminEmail == "") != (cmd.AdminPassword == "") {
+			return nil, errors.New("admin email and password must be provided together")
+		}
 	}
 
 	if err := state.Validate(); err != nil {
@@ -137,12 +157,25 @@ func nextInstall(state State, cmd Command) ([]Step, error) {
 		return nil, err
 	}
 
-	return []Step{
+	steps := []Step{
 		{Kind: StepWriteState, Description: "Write the install state", Init: !installed, State: state},
 		{Kind: StepWriteCompose, Description: "Write the compose file", State: state, Compose: compose},
 		{Kind: StepComposeUp, Description: "Start the server", State: state},
 		{Kind: StepWaitReady, Description: "Wait for /readyz", State: state},
-	}, nil
+	}
+	if !installed && cmd.AdminEmail != "" {
+		steps = append(steps, Step{
+			Kind:        StepCreateAdmin,
+			Description: "Create the first admin",
+			State:       state,
+			Admin: &AdminBootstrap{
+				Email:       cmd.AdminEmail,
+				Password:    cmd.AdminPassword,
+				DisplayName: cmd.AdminDisplayName,
+			},
+		})
+	}
+	return steps, nil
 }
 
 // sameInstance refuses a command that would turn an existing SQLite instance

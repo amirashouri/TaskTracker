@@ -49,6 +49,72 @@ func TestFirstInstallPlansOneInitStepAndUsesTheSecret(t *testing.T) {
 	}
 }
 
+func TestFirstInstallPlansAdminBootstrapAfterReady(t *testing.T) {
+	state := State{Path: filepath.Join(t.TempDir(), "install.json")}
+	command := Command{
+		Action:           ActionInstall,
+		Mode:             ModeSQLite,
+		Provider:         ProviderLAN,
+		DataDir:          t.TempDir(),
+		InstanceName:     "demo",
+		Version:          "v1.2.3",
+		Secret:           strings.Repeat("s", 64),
+		ServerPort:       8080,
+		AdminEmail:       "admin@example.com",
+		AdminPassword:    "s3cret-password",
+		AdminDisplayName: "Admin",
+	}
+
+	steps, err := Next(state, command)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+
+	adminIndex := -1
+	for i, step := range steps {
+		if step.Kind == StepCreateAdmin {
+			adminIndex = i
+			if step.Init {
+				t.Error("admin bootstrap marked as an init step")
+			}
+			if step.Admin == nil {
+				t.Fatal("admin step has no admin details")
+			}
+			if step.Admin.Email != command.AdminEmail || step.Admin.Password != command.AdminPassword || step.Admin.DisplayName != command.AdminDisplayName {
+				t.Errorf("admin step = %+v, want the command's credentials", step.Admin)
+			}
+			if step.State.InstanceName != command.InstanceName {
+				t.Errorf("admin step state instance = %q, want %q", step.State.InstanceName, command.InstanceName)
+			}
+		}
+	}
+	if adminIndex == -1 {
+		t.Fatal("first install did not plan an admin bootstrap")
+	}
+	if adminIndex == 0 || steps[adminIndex-1].Kind != StepWaitReady {
+		t.Errorf("admin step index = %d, want it immediately after wait-ready", adminIndex)
+	}
+}
+
+func TestInstallRejectsHalfAdminCredentials(t *testing.T) {
+	state := State{Path: filepath.Join(t.TempDir(), "install.json")}
+	command := Command{
+		Action:       ActionInstall,
+		Mode:         ModeSQLite,
+		Provider:     ProviderLAN,
+		DataDir:      t.TempDir(),
+		InstanceName: "demo",
+		Version:      "v1.2.3",
+		Secret:       strings.Repeat("s", 64),
+		ServerPort:   8080,
+		AdminEmail:   "admin@example.com",
+	}
+
+	if _, err := Next(state, command); err == nil {
+		t.Fatal("Next accepted an admin email without a password")
+	}
+}
+
 // The second install is a repair. It must not create a secret, and it must
 // not silently pull a newer server than the state was installed with.
 func TestSecondInstallIsRepairAndPreservesTheSecret(t *testing.T) {
@@ -84,6 +150,31 @@ func TestSecondInstallIsRepairAndPreservesTheSecret(t *testing.T) {
 	}
 	if compose := ComposeFromSteps(steps); strings.Contains(compose, "v9.9.9") {
 		t.Error("repair rendered the newer CLI version instead of the installed one")
+	}
+}
+
+func TestRepairNeverPlansAdminBootstrap(t *testing.T) {
+	state := testState(t)
+
+	steps, err := Next(state, Command{
+		Action:           ActionInstall,
+		Mode:             state.Mode,
+		Provider:         state.Provider,
+		DataDir:          state.DataDir,
+		InstanceName:     state.InstanceName,
+		Version:          state.ImageTag,
+		AdminEmail:       "someone@example.com",
+		AdminPassword:    "s3cret-password",
+		AdminDisplayName: "Someone",
+	})
+	if err != nil {
+		t.Fatalf("Next repair: %v", err)
+	}
+
+	for _, step := range steps {
+		if step.Kind == StepCreateAdmin {
+			t.Fatal("repair planned an admin bootstrap")
+		}
 	}
 }
 
