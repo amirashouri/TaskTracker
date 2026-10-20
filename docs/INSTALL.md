@@ -27,37 +27,62 @@ internals — just a Linux host and a terminal.
 
 ## Step 0 — Install the `tt` CLI
 
-Download the latest release for your platform:
+Download the latest release for your platform. **Copy only the block for your OS:**
+
+### Linux (amd64 / x86_64)
 
 ```bash
-# Linux amd64
 curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_linux_amd64 -o /usr/local/bin/tt
 chmod +x /usr/local/bin/tt
-
-# Linux arm64
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_linux_arm64 -o /usr/local/bin/tt
-chmod +x /usr/local/bin/tt
-
-# macOS (Apple Silicon)
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_darwin_arm64 -o /usr/local/bin/tt
-chmod +x /usr/local/bin/tt
-
-# macOS (Intel)
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_darwin_amd64 -o /usr/local/bin/tt
-chmod +x /usr/local/bin/tt
-
-# Windows (PowerShell)
-iwr -useb https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_windows_amd64.exe -outfile $env:USERPROFILE\tt.exe
-# Add to PATH
 ```
 
-Verify:
+### Linux (arm64 / aarch64)
+
+```bash
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_linux_arm64 -o /usr/local/bin/tt
+chmod +x /usr/local/bin/tt
+```
+
+### macOS (Apple Silicon / arm64)
+
+```bash
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_darwin_arm64 -o /usr/local/bin/tt
+chmod +x /usr/local/bin/tt
+```
+
+### macOS (Intel / amd64)
+
+```bash
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_darwin_amd64 -o /usr/local/bin/tt
+chmod +x /usr/local/bin/tt
+```
+
+### Windows (PowerShell, amd64)
+
+```powershell
+iwr -useb https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_windows_amd64.exe -outfile $env:USERPROFILE\tt.exe
+# Add $env:USERPROFILE to your PATH if not already present
+```
+
+### Verify
 
 ```bash
 tt --help
 ```
 
 You should see the command list: `install`, `expose`, `status`, `doctor`, `logs`, `upgrade`, `uninstall`, `version`.
+
+## Get the TaskTracker App
+
+The TaskTracker client runs on your phone or desktop and connects to your server via the pairing link/QR code from `tt expose`.
+
+| Platform | Download |
+|----------|----------|
+| **Android** | [GitHub Releases → `tasktracker-android-*.apk`](https://github.com/amirashouri/TaskTracker/releases/latest) |
+| **iOS** | [TestFlight](https://testflight.apple.com/join/...) (or build from source via Xcode) |
+| **Desktop (Linux/macOS/Windows)** | [GitHub Releases → `tasktracker-desktop-*.tar.gz` / `.dmg` / `.msi`](https://github.com/amirashouri/TaskTracker/releases/latest) |
+
+> **Note:** The iOS app requires a TestFlight invite or building from source (see the [KMP client repo](../TaskTrackerKMP) for build instructions). The Android APK and Desktop binaries are published to GitHub Releases on every tag.
 
 ## Step 1 — Run `tt install`
 
@@ -214,6 +239,7 @@ QR code: (ASCII QR printed to terminal)
 ```
 
 - **The link/QR carries only the server URL.** It does **not** carry a password.
+- Install the TaskTracker app first (see [Get the TaskTracker App](#get-the-tasktracker-app) above).
 - Open the link on a phone with the TaskTracker app installed, or scan the QR.
 - The app will open, connect to the URL, and prompt for sign-in.
 
