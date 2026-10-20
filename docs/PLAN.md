@@ -48,7 +48,7 @@ need a remote HTTPS provider rather than plain LAN access.
 | T9.2 | Pending | Per-route attachment-transfer deadlines | None | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.2 |
 | T9.3 | Complete | Bind and publish the server safely | None | [`t9.3-server-bind.md`](../specs/t9.3-server-bind.md) |
 | T9.4 | Complete | `tt` CLI skeleton, state file, and idempotence | T9.3 | [`t9.4-tt-cli-skeleton.md`](../specs/t9.4-tt-cli-skeleton.md) |
-| T9.5 | Pending | Interactive `tt install` wizard | T9.4 | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.5 |
+| T9.5 | Complete | Interactive `tt install` wizard | T9.4 | [`t9.5-install-wizard.md`](../specs/t9.5-install-wizard.md) |
 | T9.6 | Pending | `tt doctor` and `tt status` | T9.5 | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.6 |
 | T9.7 | Pending | Runtime server URL and `tasktracker://connect` pairing | Client first; CLI depends on T9.5 | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.7 |
 | T9.8 | Pending | `tt expose --provider=lan` (default) | T9.3, T9.5 | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.8 |

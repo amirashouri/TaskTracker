@@ -53,7 +53,7 @@ func run(
 
 	switch args[0] {
 	case "install":
-		return runInstall(ctx, args[1:], stdout, stderr, statePath, buildVersion, runner)
+		return runInstall(ctx, args[1:], stdin, stdout, stderr, statePath, buildVersion, runner)
 	case "status":
 		return runStatus(ctx, args[1:], stdout, stderr, statePath, runner)
 	case "doctor":
@@ -124,7 +124,9 @@ func usage(w io.Writer) {
 
 Usage:
   tt install [--mode sqlite|postgres] [--provider lan|tailscale|cloudflare]
-             [--data-dir PATH] [--name NAME] [--port PORT] [--dry-run]
+             [--data-dir PATH] [--name NAME] [--port PORT]
+             [--admin-email EMAIL --admin-password PASSWORD]
+             [--admin-display-name NAME] [--yes] [--dry-run]
   tt status
   tt doctor
   tt logs

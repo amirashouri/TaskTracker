@@ -161,16 +161,16 @@ func TestRepairDoesNotPrintTheSecretAgain(t *testing.T) {
 	seedState(t, statePath)
 	runner := &recordingRunner{}
 
-	code, stdout, stderr := runCLI(t, []string{"install"}, "", statePath, "v2.0.0", runner)
+	result := runInstallFlow(t, defaultInstallOptions(), statePath, "v2.0.0", runner, nil, false, nil, nil)
 
-	if code != 0 {
-		t.Fatalf("exit = %d, stderr = %s", code, stderr)
+	if result.code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", result.code, result.stderr)
 	}
-	if strings.Contains(stdout, "JWT_SECRET=") {
+	if strings.Contains(result.stdout, "JWT_SECRET=") {
 		t.Error("repair printed the JWT secret a second time")
 	}
-	if !strings.Contains(stdout, "Repaired") {
-		t.Errorf("stdout = %q, want a repair message", stdout)
+	if !strings.Contains(result.stdout, "Repaired") {
+		t.Errorf("stdout = %q, want a repair message", result.stdout)
 	}
 }
 
@@ -198,9 +198,9 @@ func TestRepairWithoutFlagsPreservesAnExistingPostgresInstance(t *testing.T) {
 	}
 	runner := &recordingRunner{}
 
-	code, _, stderr := runCLI(t, []string{"install"}, "", statePath, "v2.0.0", runner)
-	if code != 0 {
-		t.Fatalf("exit = %d, stderr = %s", code, stderr)
+	result := runInstallFlow(t, defaultInstallOptions(), statePath, "v2.0.0", runner, nil, false, nil, nil)
+	if result.code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", result.code, result.stderr)
 	}
 	if len(runner.steps) == 0 {
 		t.Fatal("repair executed no steps")
@@ -221,19 +221,24 @@ func TestRepairWithoutFlagsPreservesAnExistingPostgresInstance(t *testing.T) {
 func TestFirstInstallPrintsTheSecret(t *testing.T) {
 	dir := t.TempDir()
 	runner := &recordingRunner{}
+	opts := defaultInstallOptions()
+	opts.dataDir = dir
+	opts.name = "demo"
+	opts.adminEmail = "admin@example.com"
+	opts.adminPassword = "password123"
 
-	code, stdout, stderr := runCLI(t,
-		[]string{"install", "--data-dir", dir, "--name", "demo"},
-		"", filepath.Join(dir, "install.json"), "v1.2.3", runner)
+	result := runInstallFlow(t, opts, filepath.Join(dir, "install.json"), "v1.2.3", runner, nil, false, nil, func() string {
+		return "192.168.1.50"
+	})
 
-	if code != 0 {
-		t.Fatalf("exit = %d, stderr = %s", code, stderr)
+	if result.code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", result.code, result.stderr)
 	}
-	if !strings.Contains(stdout, "JWT_SECRET=") {
-		t.Errorf("first install did not print the secret:\n%s", stdout)
+	if !strings.Contains(result.stdout, "JWT_SECRET=") {
+		t.Errorf("first install did not print the secret:\n%s", result.stdout)
 	}
-	if !strings.Contains(stdout, "not printed again") {
-		t.Errorf("first install did not say the secret is printed once:\n%s", stdout)
+	if !strings.Contains(result.stdout, "not printed again") {
+		t.Errorf("first install did not say the secret is printed once:\n%s", result.stdout)
 	}
 }
 

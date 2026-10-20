@@ -18,6 +18,21 @@ type Runner interface {
 	Run(ctx context.Context, step Step) error
 }
 
+// commandRunner is the exec seam. Production uses exec.CommandContext; tests
+// record the argv without requiring a Docker daemon.
+type commandRunner interface {
+	Run(ctx context.Context, stdout, stderr io.Writer, name string, args ...string) error
+}
+
+type execCommandRunner struct{}
+
+func (execCommandRunner) Run(ctx context.Context, stdout, stderr io.Writer, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	return cmd.Run()
+}
+
 // ExecRunner is the production adapter. Stdout and Stderr are the CLI's
 // streams so `docker compose logs -f` behaves like the command an operator
 // would type by hand.
@@ -26,6 +41,8 @@ type ExecRunner struct {
 	Stderr       io.Writer
 	WaitTimeout  time.Duration
 	PollInterval time.Duration
+
+	commands commandRunner
 }
 
 func (r ExecRunner) Run(ctx context.Context, step Step) error {
@@ -38,6 +55,8 @@ func (r ExecRunner) Run(ctx context.Context, step Step) error {
 		return r.compose(ctx, step.State, "up", "-d")
 	case StepWaitReady:
 		return r.waitReady(ctx, step.State)
+	case StepCreateAdmin:
+		return r.createAdmin(ctx, step)
 	case StepComposePS:
 		return r.compose(ctx, step.State, "ps")
 	case StepComposeLogs:
@@ -55,16 +74,55 @@ func (r ExecRunner) Run(ctx context.Context, step Step) error {
 }
 
 func (r ExecRunner) compose(ctx context.Context, state State, args ...string) error {
+	return r.composeDisplay(ctx, state, strings.Join(args, " "), args...)
+}
+
+// composeDisplay separates the argv from what an error may print. The admin
+// bootstrap carries a password in argv; redactAdminArgs replaces it before the
+// command is ever formatted.
+func (r ExecRunner) composeDisplay(ctx context.Context, state State, display string, args ...string) error {
 	command := []string{"compose", "--project-name", state.InstanceName, "-f", state.ComposePath}
 	command = append(command, args...)
 
-	cmd := exec.CommandContext(ctx, "docker", command...)
-	cmd.Stdout = r.Stdout
-	cmd.Stderr = r.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker compose %s: %w", strings.Join(args, " "), err)
+	runner := r.commands
+	if runner == nil {
+		runner = execCommandRunner{}
+	}
+	if err := runner.Run(ctx, r.Stdout, r.Stderr, "docker", command...); err != nil {
+		return fmt.Errorf("docker compose %s: %w", display, err)
 	}
 	return nil
+}
+
+func (r ExecRunner) createAdmin(ctx context.Context, step Step) error {
+	if step.Admin == nil {
+		return errors.New("create admin: no admin details")
+	}
+	if strings.TrimSpace(step.Admin.Email) == "" || step.Admin.Password == "" {
+		return errors.New("create admin: email and password are required")
+	}
+
+	args := []string{
+		"exec", "-T", "server", "/app/server", "user-create",
+		"--email", step.Admin.Email,
+		"--password", step.Admin.Password,
+	}
+	if step.Admin.DisplayName != "" {
+		args = append(args, "--display-name", step.Admin.DisplayName)
+	}
+	args = append(args, "--admin")
+
+	return r.composeDisplay(ctx, step.State, strings.Join(redactAdminArgs(args), " "), args...)
+}
+
+func redactAdminArgs(args []string) []string {
+	redacted := append([]string(nil), args...)
+	for i := 0; i+1 < len(redacted); i++ {
+		if redacted[i] == "--password" {
+			redacted[i+1] = "[redacted]"
+		}
+	}
+	return redacted
 }
 
 // waitReady polls the health endpoint, not compose. `docker compose up -d`
