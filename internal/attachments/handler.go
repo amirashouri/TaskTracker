@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
@@ -21,10 +23,11 @@ type Handler struct {
 	db       *sql.DB
 	blobs    *BlobStore
 	maxBytes int64
+	deadline time.Duration
 }
 
-func NewHandler(engine *sync.Engine, db *sql.DB, blobs *BlobStore, maxBytes int64) *Handler {
-	return &Handler{engine: engine, db: db, blobs: blobs, maxBytes: maxBytes}
+func NewHandler(engine *sync.Engine, db *sql.DB, blobs *BlobStore, maxBytes int64, deadline time.Duration) *Handler {
+	return &Handler{engine: engine, db: db, blobs: blobs, maxBytes: maxBytes, deadline: deadline}
 }
 
 func (h *Handler) caller(r *http.Request) (string, bool) {
@@ -54,6 +57,18 @@ func (h *Handler) authorize(ctx context.Context, userID, projectID, workItemID, 
 // (it arrives through the sync feed); only then may the blob be stored. The body
 // is capped at maxBytes so a 25 MiB photo cannot exhaust memory.
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
+	// Set per-request read/write deadline for this blob route.
+	// This allows large uploads over slow links while keeping the 15s global
+	// timeout for the JSON API. If the connection doesn't support deadlines
+	// (e.g., in tests), we log and continue with the global timeout.
+	rc := http.NewResponseController(w)
+	if err := rc.SetReadDeadline(time.Now().Add(h.deadline)); err != nil {
+		slog.Debug("could not set read deadline for attachment upload", "error", err)
+	}
+	if err := rc.SetWriteDeadline(time.Now().Add(h.deadline)); err != nil {
+		slog.Debug("could not set write deadline for attachment upload", "error", err)
+	}
+
 	userID, ok := h.caller(r)
 	if !ok {
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
@@ -102,6 +117,15 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 
 // Download streams one attachment's bytes to a member, honouring Range requests.
 func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
+	// Set per-request read/write deadline for this blob route.
+	rc := http.NewResponseController(w)
+	if err := rc.SetReadDeadline(time.Now().Add(h.deadline)); err != nil {
+		slog.Debug("could not set read deadline for attachment download", "error", err)
+	}
+	if err := rc.SetWriteDeadline(time.Now().Add(h.deadline)); err != nil {
+		slog.Debug("could not set write deadline for attachment download", "error", err)
+	}
+
 	userID, ok := h.caller(r)
 	if !ok {
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")

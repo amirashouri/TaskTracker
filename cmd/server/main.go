@@ -91,7 +91,7 @@ func runServer() {
 	projectHandler := admin.NewProjectHandler(entities.NewProjectRepository(database.DB), syncEngine)
 
 	// Setup HTTP handlers
-	mux := mount(authHandler, adminHandler, projectHandler, syncHandler, jwtManager, database.DB, syncEngine, cfg.AttachmentRoot, cfg.AttachmentMaxBytes)
+	mux := mount(authHandler, adminHandler, projectHandler, syncHandler, jwtManager, database.DB, syncEngine, cfg.AttachmentRoot, cfg.AttachmentMaxBytes, cfg.AttachmentDeadline())
 
 	// Apply middleware chain
 	handler := middleware.Chain(
@@ -169,6 +169,7 @@ func mount(
 	syncEngine *sync.Engine,
 	attachmentRoot string,
 	attachmentMaxBytes int64,
+	attachmentDeadline time.Duration,
 ) *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -228,7 +229,7 @@ func mount(
 	// Attachment blobs. Metadata rides the sync feed; the bytes come here, scoped
 	// to the same project membership. The blob store is keyed under attachmentRoot.
 	blobStore := &attachments.BlobStore{Root: attachmentRoot}
-	attachmentBlobs := attachments.NewHandler(syncEngine, database, blobStore, attachmentMaxBytes)
+	attachmentBlobs := attachments.NewHandler(syncEngine, database, blobStore, attachmentMaxBytes, attachmentDeadline)
 	mux.Handle("POST /v1/projects/{projectId}/work-items/{workItemId}/attachments/{attachmentId}/blob",
 		middleware.Auth(jwtManager)(http.HandlerFunc(attachmentBlobs.Upload)))
 	mux.Handle("GET /v1/projects/{projectId}/work-items/{workItemId}/attachments/{attachmentId}/blob",

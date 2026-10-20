@@ -191,5 +191,6 @@ func newTestMux(t *testing.T) *http.ServeMux {
 		sync.NewEngine(database.DB, ""),
 		"",
 		int64(25*1024*1024),
+		30*time.Second,
 	)
 }

@@ -17,6 +17,10 @@ const (
 	// Cloudflare's request-body limit on Free/Pro/Business plans (100 MiB).
 	// Enterprise plans can request a higher limit.
 	CloudflareRequestBodyLimit = 100 * 1024 * 1024
+
+	// Floor bandwidth for attachment deadline calculation (1 MiB/s).
+	// A 25 MiB file at 1 MiB/s takes 25s; capped at 15s minimum for slowloris protection.
+	AttachmentFloorBandwidth = 1 * 1024 * 1024
 )
 
 type Config struct {
@@ -137,6 +141,19 @@ func (c *Config) SlogLevel() slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+// AttachmentDeadline returns the per-request read/write deadline for attachment
+// blob routes. It is computed from ATTACHMENT_MAX_BYTES at a conservative
+// floor bandwidth (1 MiB/s), with a 15s minimum to retain slowloris protection
+// for the JSON API.
+func (c *Config) AttachmentDeadline() time.Duration {
+	// At 1 MiB/s floor, deadline = max(15s, bytes / 1MiB/s)
+	seconds := int64(c.AttachmentMaxBytes) / AttachmentFloorBandwidth
+	if seconds < 15 {
+		seconds = 15
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // loadEnvFile parses simple KEY=VALUE lines. Missing file is not an error.
