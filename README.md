@@ -117,9 +117,9 @@ one reads the same `.env` as the commands below.
    POSTGRES_PASSWORD=change-me
    ```
 
-   All other variables (`SERVER_PORT`, `CORS_ORIGINS`, `LOG_LEVEL`, etc.)
-   have sensible defaults in `.env.example` — override them only if your
-   setup requires it.
+   All other variables (`SERVER_BIND`, `SERVER_PORT`, `CORS_ORIGINS`,
+   `LOG_LEVEL`, etc.) have sensible defaults in `.env.example` — override them
+   only if your setup requires it.
 
 2. **Pick a profile and start:**
 
@@ -218,6 +218,7 @@ secrets without any file on disk — see [Production](#production) below.
 ```bash
 docker build -t tasktracker-server .
 docker run -p 8080:8080 -e JWT_SECRET=$(openssl rand -hex 32) \
+  -e SERVER_BIND=0.0.0.0 \
   -e DATABASE_URL=sqlite:///data/tasktracker.db \
   -v tt-data:/data tasktracker-server
 ```

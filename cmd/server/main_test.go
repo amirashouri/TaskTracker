@@ -1,8 +1,10 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +94,83 @@ func TestAnUnregisteredSyncScopeIsNotFound(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("GET an unregistered scope = %d, want 404", rec.Code)
 	}
+}
+
+// The default bind is only useful if it is actually unreachable from the
+// network, and the 0.0.0.0 opt-in is only useful if it is reachable. The test
+// binds port 0 so it does not compete for a fixed port, and dials the host's
+// own non-loopback address: the loopback check passes even when the bind is
+// wrong, which is the mistake this test exists to catch.
+func TestTheBindAddressControlsNetworkReachability(t *testing.T) {
+	lan := nonLoopbackIPv4(t)
+
+	for _, tc := range []struct {
+		name         string
+		bind         string
+		lanReachable bool
+	}{
+		{"loopback", "127.0.0.1", false},
+		{"all interfaces", "0.0.0.0", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			listener, err := net.Listen("tcp", listenAddr(tc.bind, "0"))
+			if err != nil {
+				t.Fatalf("listen on %s: %v", tc.bind, err)
+			}
+			defer listener.Close()
+
+			port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+			if err := dialTCP(net.JoinHostPort("127.0.0.1", port)); err != nil {
+				t.Fatalf("loopback dial failed with SERVER_BIND=%s: %v", tc.bind, err)
+			}
+
+			addr := net.JoinHostPort(lan, port)
+			err = dialTCP(addr)
+			if tc.lanReachable && err != nil {
+				t.Fatalf("LAN dial to %s failed with SERVER_BIND=%s: %v", addr, tc.bind, err)
+			}
+			if !tc.lanReachable && err == nil {
+				t.Fatalf("LAN dial to %s succeeded with SERVER_BIND=%s; the server is reachable from the network", addr, tc.bind)
+			}
+		})
+	}
+}
+
+func TestListenAddrBracketsIPv6(t *testing.T) {
+	if got := listenAddr("::1", "8080"); got != "[::1]:8080" {
+		t.Errorf("listenAddr(::1, 8080) = %q, want [::1]:8080", got)
+	}
+}
+
+func dialTCP(addr string) error {
+	conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
+
+// nonLoopbackIPv4 returns an address assigned to this host that is not
+// loopback. A host with only loopback cannot exercise the distinction, so the
+// test skips rather than inventing an address.
+func nonLoopbackIPv4(t *testing.T) string {
+	t.Helper()
+
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Skipf("list interfaces: %v", err)
+	}
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok || ipNet.IP.IsLoopback() {
+			continue
+		}
+		if ip4 := ipNet.IP.To4(); ip4 != nil {
+			return ip4.String()
+		}
+	}
+	t.Skip("no non-loopback IPv4 address to dial")
+	return ""
 }
 
 func newTestMux(t *testing.T) *http.ServeMux {
