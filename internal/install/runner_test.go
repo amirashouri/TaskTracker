@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type recordingCommands struct {
@@ -112,5 +115,31 @@ func TestCreateAdminRequiresCredentials(t *testing.T) {
 	}
 	if commands.name != "" {
 		t.Errorf("Run invoked %q for an invalid admin step", commands.name)
+	}
+}
+
+func TestWaitReadyReturnsOnA200(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	if err := WaitReady(context.Background(), server.URL, time.Second, 10*time.Millisecond); err != nil {
+		t.Fatalf("WaitReady: %v", err)
+	}
+}
+
+func TestWaitReadyTimesOutOnANon200(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	err := WaitReady(context.Background(), server.URL, 50*time.Millisecond, 10*time.Millisecond)
+	if err == nil {
+		t.Fatal("WaitReady accepted a non-200 response")
+	}
+	if !strings.Contains(err.Error(), server.URL) {
+		t.Errorf("error %q does not name the address", err)
 	}
 }

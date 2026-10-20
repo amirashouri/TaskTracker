@@ -51,7 +51,7 @@ need a remote HTTPS provider rather than plain LAN access.
 | T9.5 | Complete | Interactive `tt install` wizard | T9.4 | [`t9.5-install-wizard.md`](../specs/t9.5-install-wizard.md) |
 | T9.6 | Complete | `tt doctor` and `tt status` | T9.5 | [`t9.6-doctor-status.md`](../specs/t9.6-doctor-status.md) |
 | T9.7 | Complete | Runtime server URL and `tasktracker://connect` pairing | Client first; CLI depends on T9.5 | [`t9.7-connect-pairing.md`](../specs/t9.7-connect-pairing.md) |
-| T9.8 | Pending | `tt expose --provider=lan` (default) | T9.3, T9.5 | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.8 |
+| T9.8 | Complete | `tt expose --provider=lan` (default) | T9.3, T9.5 | [`t9.8-lan-expose.md`](../specs/t9.8-lan-expose.md) |
 | T9.9 | Pending | `tt expose --provider=tailscale` | T9.1, T9.7, T9.8 | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.9 |
 | T9.10 | Pending | `tt expose --provider=cloudflare` | T9.1, T9.7, T9.8 | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.10 |
 | T9.11 | Deferred | VPS + Caddy deployment guide (documented, not implemented) | T9.1–T9.3, if picked up | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.11 |

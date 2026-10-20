@@ -274,6 +274,42 @@ func TestRenderComposeSelectsTheDatabase(t *testing.T) {
 	})
 }
 
+func TestRenderComposePublishesLoopbackByDefault(t *testing.T) {
+	state := testState(t)
+
+	compose, err := RenderCompose(state)
+	if err != nil {
+		t.Fatalf("RenderCompose: %v", err)
+	}
+	if !strings.Contains(compose, `"127.0.0.1:8080:8080"`) {
+		t.Errorf("loopback compose does not publish on 127.0.0.1:\n%s", compose)
+	}
+	if strings.Contains(compose, `"0.0.0.0:8080:8080"`) {
+		t.Errorf("loopback compose publishes on every interface:\n%s", compose)
+	}
+}
+
+func TestRenderExposedComposePublishesOnEveryInterface(t *testing.T) {
+	state := testState(t)
+
+	compose, err := RenderExposedCompose(state)
+	if err != nil {
+		t.Fatalf("RenderExposedCompose: %v", err)
+	}
+	if !strings.Contains(compose, `"0.0.0.0:8080:8080"`) {
+		t.Errorf("exposed compose does not publish on 0.0.0.0:\n%s", compose)
+	}
+	if strings.Contains(compose, `"127.0.0.1:8080:8080"`) {
+		t.Errorf("exposed compose still publishes on loopback:\n%s", compose)
+	}
+	if !strings.Contains(compose, `SERVER_BIND: "0.0.0.0"`) {
+		t.Errorf("exposed compose does not bind the container on every interface:\n%s", compose)
+	}
+	if !strings.Contains(compose, "tasktracker-server:v1.2.3") {
+		t.Errorf("exposed compose dropped the pinned image tag:\n%s", compose)
+	}
+}
+
 func TestNextIsPure(t *testing.T) {
 	state := testState(t)
 	command := Command{
