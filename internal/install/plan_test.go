@@ -322,7 +322,7 @@ func TestUninstallRequiresTheInstanceName(t *testing.T) {
 }
 
 func TestCommandsOtherThanInstallRequireAnInstance(t *testing.T) {
-	for _, action := range []Action{ActionStatus, ActionDoctor, ActionLogs, ActionUninstall} {
+	for _, action := range []Action{ActionLogs, ActionUninstall} {
 		if _, err := Next(State{}, Command{Action: action}); err == nil {
 			t.Errorf("%s succeeded with no state", action)
 		}

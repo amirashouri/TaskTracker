@@ -55,9 +55,9 @@ func run(
 	case "install":
 		return runInstall(ctx, args[1:], stdin, stdout, stderr, statePath, buildVersion, runner)
 	case "status":
-		return runStatus(ctx, args[1:], stdout, stderr, statePath, runner)
+		return runStatus(ctx, args[1:], stdout, stderr, statePath)
 	case "doctor":
-		return runDoctor(ctx, args[1:], stdout, stderr, statePath, runner)
+		return runDoctor(ctx, args[1:], stdout, stderr, statePath)
 	case "logs":
 		return runLogs(ctx, args[1:], stdout, stderr, statePath, runner)
 	case "uninstall":
