@@ -1,6 +1,6 @@
 # TaskTrackerServer — Docker Compose
 #
-# Two deployment profiles:
+# Deployment profiles (run one at a time):
 #
 #   Postgres (shared, multi-user):
 #     docker compose --profile postgres up -d
@@ -8,62 +8,103 @@
 #   SQLite (single-node, zero external dependencies):
 #     docker compose --profile sqlite up -d
 #
-# JWT_SECRET is required for both. Generate one:
+#   Expose (no host publish, for a tunnelling sidecar):
+#     docker compose --profile expose up -d
+#
+# The server binds 0.0.0.0 *inside* the container; the published side is
+# loopback, so plain HTTP is not reachable from the network. A reverse proxy on
+# the host reaches it at 127.0.0.1:${SERVER_PORT}.
+#
+# JWT_SECRET is required for every profile. Generate one:
 #   openssl rand -hex 32
 #
 # Pass it via environment variable or a .env file next to this compose file:
 #   JWT_SECRET=<your-secret>
 #   POSTGRES_PASSWORD=<change-me>   # only for the postgres profile
 
+x-postgres: &postgres
+  image: postgres:16-alpine
+  environment:
+    POSTGRES_USER: tasktracker
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tasktracker}
+    POSTGRES_DB: tasktracker
+  volumes:
+    - pg-data:/var/lib/postgresql/data
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U tasktracker"]
+    interval: 5s
+    timeout: 5s
+    retries: 5
+  restart: unless-stopped
+
+x-server-pg: &server-pg
+  build: .
+  environment:
+    SERVER_BIND: "0.0.0.0"
+    SERVER_PORT: "8080"
+    DATABASE_URL: "postgres://tasktracker:${POSTGRES_PASSWORD:-tasktracker}@postgres:5432/tasktracker"
+    JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required}"
+    JWT_ACCESS_TTL: "${JWT_ACCESS_TTL:-1h}"
+    JWT_REFRESH_TTL: "${JWT_REFRESH_TTL:-720h}"
+    CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}"
+    LOG_LEVEL: "${LOG_LEVEL:-info}"
+  depends_on:
+    postgres:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD-SHELL", "wget -qO- http://localhost:8080/readyz >/dev/null || exit 1"]
+    interval: 10s
+    timeout: 3s
+    retries: 3
+    start_period: 5s
+  restart: unless-stopped
+
 services:
   # ── Postgres profile ──────────────────────────────────────────────
   postgres:
+    <<: *postgres
     profiles: ["postgres"]
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: tasktracker
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tasktracker}
-      POSTGRES_DB: tasktracker
-    volumes:
-      - pg-data:/var/lib/postgresql/data
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tasktracker"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
 
   server-pg:
+    <<: *server-pg
     profiles: ["postgres"]
-    build: .
-    environment:
-      SERVER_PORT: "8080"
-      DATABASE_URL: "postgres://tasktracker:${POSTGRES_PASSWORD:-tasktracker}@postgres:5432/tasktracker"
-      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required}"
-      JWT_ACCESS_TTL: "${JWT_ACCESS_TTL:-1h}"
-      JWT_REFRESH_TTL: "${JWT_REFRESH_TTL:-720h}"
-      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}"
-      LOG_LEVEL: "${LOG_LEVEL:-info}"
     ports:
-      - "${SERVER_PORT:-8080}:8080"
+      - "127.0.0.1:${SERVER_PORT:-8080}:8080"
+
+  # ── Expose profile ────────────────────────────────────────────────
+  # No host publishes at all: a sidecar in this profile reaches the server as
+  # http://server-pg:8080 over the compose network. The database shares
+  # pg-data, so switching between this profile and `postgres` keeps the data.
+  postgres-expose:
+    <<: *postgres
+    profiles: ["expose"]
+    networks:
+      default:
+        # Keeps the server's DATABASE_URL hostname unchanged across profiles.
+        aliases:
+          - postgres
+
+  server-pg-expose:
+    <<: *server-pg
+    profiles: ["expose"]
     depends_on:
-      postgres:
+      postgres-expose:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/readyz >/dev/null || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-      start_period: 5s
-    restart: unless-stopped
+    expose:
+      - "8080"
+    networks:
+      default:
+        aliases:
+          - server-pg
 
   # ── SQLite profile ────────────────────────────────────────────────
   server-sqlite:
     profiles: ["sqlite"]
     build: .
     environment:
+      SERVER_BIND: "0.0.0.0"
       SERVER_PORT: "8080"
       DATABASE_URL: "sqlite:///data/tasktracker.db"
       JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is required}"
@@ -72,7 +113,7 @@ services:
       CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
     ports:
-      - "${SERVER_PORT:-8080}:8080"
+      - "127.0.0.1:${SERVER_PORT:-8080}:8080"
     volumes:
       - sqlite-data:/data
     healthcheck:

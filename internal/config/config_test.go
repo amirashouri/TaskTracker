@@ -124,6 +124,75 @@ func TestLoadRejectsNegativeSignInAttempts(t *testing.T) {
 	}
 }
 
+// An install that forgets SERVER_BIND must be unreachable rather than exposed.
+func TestLoadDefaultsServerBindToLoopback(t *testing.T) {
+	isolate(t, testKeyJWT)
+	isolate(t, "SERVER_BIND")
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+	t.Setenv(testKeyJWT, strings.Repeat("a", 32))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ServerBind != "127.0.0.1" {
+		t.Errorf("ServerBind = %q, want 127.0.0.1", cfg.ServerBind)
+	}
+}
+
+func TestLoadAcceptsIPLiteralServerBind(t *testing.T) {
+	for _, bind := range []string{"0.0.0.0", "::1", "192.168.1.10"} {
+		t.Run(bind, func(t *testing.T) {
+			isolate(t, testKeyJWT)
+			isolate(t, "SERVER_BIND")
+			t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+			t.Setenv(testKeyJWT, strings.Repeat("a", 32))
+			t.Setenv("SERVER_BIND", bind)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load with SERVER_BIND=%q: %v", bind, err)
+			}
+			if cfg.ServerBind != bind {
+				t.Errorf("ServerBind = %q, want %q", cfg.ServerBind, bind)
+			}
+		})
+	}
+}
+
+// A hostname would be resolved to whatever the host's resolver says, which is
+// not the address the operator saw. Refuse it instead. An explicitly empty
+// value is also an error: it is a missing decision, not a request for the
+// default.
+func TestLoadRejectsNonLiteralServerBind(t *testing.T) {
+	cases := []struct {
+		name string
+		bind string
+	}{
+		{"hostname", "localhost"},
+		{"empty", ""},
+		{"whitespace", "   "},
+		{"host and port", "127.0.0.1:8080"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t, testKeyJWT)
+			isolate(t, "SERVER_BIND")
+			t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+			t.Setenv(testKeyJWT, strings.Repeat("a", 32))
+			t.Setenv("SERVER_BIND", tc.bind)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("Load with SERVER_BIND=%q succeeded, want an error", tc.bind)
+			}
+			if !strings.Contains(err.Error(), "SERVER_BIND") {
+				t.Errorf("error %q does not name SERVER_BIND", err)
+			}
+		})
+	}
+}
+
 // A typo in LOG_LEVEL must stop startup rather than silently logging at info.
 func TestLoadRejectsAnUnknownLogLevel(t *testing.T) {
 	isolate(t, testKeyJWT)

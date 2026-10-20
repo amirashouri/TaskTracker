@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ type Config struct {
 	JWTSecret          string
 	JWTAccessTTL       time.Duration
 	JWTRefreshTTL      time.Duration
+	ServerBind         string
 	ServerPort         string
 	CORSOrigins        []string
 	LogLevel           string
@@ -40,6 +42,7 @@ func Load() (*Config, error) {
 		JWTSecret:          os.Getenv("JWT_SECRET"),
 		JWTAccessTTL:       getDurationEnv("JWT_ACCESS_TTL", 1*time.Hour),
 		JWTRefreshTTL:      getDurationEnv("JWT_REFRESH_TTL", 720*time.Hour),
+		ServerBind:         serverBind(),
 		ServerPort:         getEnv("SERVER_PORT", "8080"),
 		CORSOrigins:        getCSVEnv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080"),
 		LogLevel:           getEnv("LOG_LEVEL", "info"),
@@ -68,6 +71,12 @@ func (c *Config) validate() error {
 	case "debug", "info", "warn", "warning", "error":
 	default:
 		return fmt.Errorf("LOG_LEVEL %q is not one of debug, info, warn, error", c.LogLevel)
+	}
+	if c.ServerBind == "" {
+		return errors.New("SERVER_BIND is required; set it to an IP literal such as 127.0.0.1 or 0.0.0.0")
+	}
+	if net.ParseIP(c.ServerBind) == nil {
+		return fmt.Errorf("SERVER_BIND %q is not an IP literal; hostnames are not resolved", c.ServerBind)
 	}
 	if c.SignInMaxAttempts < 0 {
 		return errors.New("SIGNIN_MAX_ATTEMPTS must not be negative; use 0 to disable")
@@ -130,6 +139,16 @@ func loadEnvFile(path string) error {
 		}
 	}
 	return scanner.Err()
+}
+
+// serverBind defaults to loopback: an install that forgets the variable is
+// unreachable rather than exposed. An explicitly empty value stays empty so
+// validate rejects it instead of silently falling back to the default.
+func serverBind() string {
+	if value, ok := os.LookupEnv("SERVER_BIND"); ok {
+		return strings.TrimSpace(value)
+	}
+	return "127.0.0.1"
 }
 
 func getEnv(key, defaultValue string) string {

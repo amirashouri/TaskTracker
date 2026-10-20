@@ -26,16 +26,17 @@ up:
 rebuild:
 	$(COMPOSE) --profile $(PROFILE) up -d --build
 
-# Both profiles, so this closes the stack that is actually running rather than the one this
-# shell last named: a `down` scoped to one profile leaves the other profile's containers up.
+# Every profile, so this closes the stack that is actually running rather than the one
+# this shell last named: a `down` scoped to one profile leaves the other profiles'
+# containers up.
 down:
-	$(COMPOSE) --profile postgres --profile sqlite down --remove-orphans
+	$(COMPOSE) --profile postgres --profile sqlite --profile expose down --remove-orphans
 
 destroy:
-	$(COMPOSE) --profile postgres --profile sqlite down -v --remove-orphans
+	$(COMPOSE) --profile postgres --profile sqlite --profile expose down -v --remove-orphans
 
 logs:
 	$(COMPOSE) --profile $(PROFILE) logs -f --tail=200
 
 ps:
-	$(COMPOSE) --profile postgres --profile sqlite ps
+	$(COMPOSE) --profile postgres --profile sqlite --profile expose ps

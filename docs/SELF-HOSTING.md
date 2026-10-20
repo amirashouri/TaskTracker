@@ -62,6 +62,7 @@ inherit the unit's environment — see §7.
 sudo tee /etc/tasktracker/secrets.env >/dev/null <<EOF
 JWT_SECRET=$(openssl rand -hex 32)
 DATABASE_URL=sqlite:///var/lib/tasktracker/tasktracker.db
+SERVER_BIND=127.0.0.1
 SERVER_PORT=8080
 LOG_LEVEL=info
 CORS_ORIGINS=
@@ -87,6 +88,8 @@ worth knowing:
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `DATABASE_URL` | `sqlite:///data/tasktracker.db` | see the two forms below |
+| `SERVER_BIND` | `127.0.0.1` | IP literal; loopback keeps the server off the network |
+| `SERVER_PORT` | `8080` | the port the server listens on |
 | `JWT_SECRET` | — | required, ≥32 bytes |
 | `JWT_ACCESS_TTL` | `1h` | access tokens are stateless; this bounds a stolen one |
 | `JWT_REFRESH_TTL` | `720h` | how long a session can idle and still be resumed |
@@ -236,9 +239,11 @@ tasks.example.com {
 }
 ```
 
-Keep the server bound to the loopback interface (`SERVER_PORT` only sets the
-port; bind via the proxy and a firewall). If you must expose it directly, at
-minimum restrict it with a firewall to the proxy's address.
+`SERVER_BIND` defaults to `127.0.0.1`, so the server listens only on this
+host's loopback interface; `SERVER_PORT` sets the port. Leave both alone and
+let the proxy be the only path in. Setting `SERVER_BIND=0.0.0.0` exposes the
+server directly — do that only if you restrict the port with a firewall to the
+addresses that should reach it.
 
 ### A caveat behind a proxy
 
@@ -314,6 +319,12 @@ old binary still works against the old schema.
 
 Take a backup before an upgrade that includes a migration. Rolling back the
 binary is easy; rolling back a schema change is not.
+
+**Upgrading from a build before `SERVER_BIND`.** The default changed from every
+interface to loopback. A bare-metal install that relied on direct LAN access
+must now set `SERVER_BIND=0.0.0.0`; an install behind a reverse proxy should
+keep the default. Docker Compose installs set the container-side bind
+explicitly and publish the port on loopback.
 
 ## 11. Operations
 

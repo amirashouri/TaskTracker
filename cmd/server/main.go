@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -111,7 +112,7 @@ func runServer() {
 	}
 
 	server := &http.Server{
-		Addr:         ":" + cfg.ServerPort,
+		Addr:         listenAddr(cfg.ServerBind, cfg.ServerPort),
 		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
@@ -120,7 +121,7 @@ func runServer() {
 
 	// Graceful shutdown
 	go func() {
-		logger.Info("server listening", "port", cfg.ServerPort)
+		logger.Info("server listening", "addr", server.Addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fatal("server failed", err)
 		}
@@ -140,6 +141,12 @@ func runServer() {
 	}
 
 	logger.Info("server exited")
+}
+
+// listenAddr joins the configured bind address and port. net.JoinHostPort
+// brackets an IPv6 literal; string concatenation does not.
+func listenAddr(bind, port string) string {
+	return net.JoinHostPort(bind, port)
 }
 
 // fatal reports a startup failure and exits. slog has no Fatal, and a failure
