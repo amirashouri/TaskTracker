@@ -299,6 +299,14 @@ func TestInstallFlagsFeedTheNonInteractiveAdminStep(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Installed") {
 		t.Errorf("stdout = %q, want an install message", stdout.String())
 	}
+	// No exposure provider has verified a URL in this task, so install must point
+	// at the command that will produce one rather than print a link to loopback.
+	if !strings.Contains(stdout.String(), "tt expose --provider=lan") {
+		t.Errorf("stdout = %q, want the pairing hint", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "tasktracker://") {
+		t.Errorf("stdout = %q, want no pairing link without a verified URL", stdout.String())
+	}
 }
 
 func TestWizardRepairAsksAndSkipsAdmin(t *testing.T) {
@@ -329,6 +337,12 @@ func TestWizardRepairAsksAndSkipsAdmin(t *testing.T) {
 	}
 	if !strings.Contains(result.stdout, "Repaired") {
 		t.Errorf("stdout = %q, want a repair message", result.stdout)
+	}
+	if !strings.Contains(result.stdout, "tt expose --provider=lan") {
+		t.Errorf("stdout = %q, want the pairing hint", result.stdout)
+	}
+	if strings.Contains(result.stdout, "tasktracker://") {
+		t.Errorf("stdout = %q, want no pairing link without a verified URL", result.stdout)
 	}
 }
 
