@@ -80,66 +80,52 @@ The TaskTracker client runs on your phone or desktop and connects to your server
 |----------|----------|
 | **Android** | [GitHub Releases → `tasktracker-android-*.apk`](https://github.com/amirashouri/TaskTracker/releases/latest) |
 | **iOS** | [TestFlight](https://testflight.apple.com/join/...) (or build from source via Xcode) |
-| **Desktop (Linux/macOS/Windows)** | [GitHub Releases → `desktop-dist.tar.gz` / `desktop-dist.zip`](https://github.com/amirashouri/TaskTracker/releases/latest) |
+| **macOS** | [GitHub Releases → `TaskTracker-*.dmg`](https://github.com/amirashouri/TaskTracker/releases/latest) |
+| **Windows** | [GitHub Releases → `TaskTracker-*.msi`](https://github.com/amirashouri/TaskTracker/releases/latest) |
+| **Linux** | [GitHub Releases → `TaskTracker-*.deb`](https://github.com/amirashouri/TaskTracker/releases/latest) |
 
 ### Installing the Desktop App
 
-The desktop app is distributed as a portable archive containing a Java JAR and launcher scripts. No system installation is required — just extract and run.
+The desktop app is distributed as native installers for each platform.
 
-#### Linux / macOS
+#### macOS (.dmg)
 
 ```bash
-# Download the latest release (adjust version as needed)
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/desktop-dist.tar.gz -o desktop-dist.tar.gz
+# Download the latest release
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/TaskTracker-*.dmg -o TaskTracker.dmg
 
-# Extract
-tar -xzf desktop-dist.tar.gz
-
-# Run
-./run.sh
+# Open and install
+open TaskTracker.dmg
+# In the Finder window that opens, drag TaskTracker to Applications folder
 ```
 
-> **Tip:** Create a desktop entry (Linux) or add to Applications (macOS) for easier access. See below.
+Or simply download the `.dmg` from the browser and double-click to install.
 
-#### Windows
+#### Windows (.msi)
 
 ```powershell
 # Download the latest release
-iwr -useb https://github.com/amirashouri/TaskTracker/releases/latest/download/desktop-dist.zip -outfile desktop-dist.zip
+iwr -useb https://github.com/amirashouri/TaskTracker/releases/latest/download/TaskTracker-*.msi -outfile TaskTracker.msi
 
-# Extract
-Expand-Archive -Path desktop-dist.zip -DestinationPath .
-
-# Run
-.\run.bat
+# Install
+msiexec /i TaskTracker.msi
 ```
 
-> **Tip:** Pin `run.bat` to Start menu or create a shortcut for easier access.
+Or download the `.msi` from the browser and double-click to install.
 
-#### Creating a Desktop Shortcut (Linux)
+#### Linux (.deb) — Ubuntu/Debian
 
 ```bash
-# Example: create a .desktop file
-cat > ~/.local/share/applications/tasktracker.desktop << 'EOF'
-[Desktop Entry]
-Name=TaskTracker
-Comment=TaskTracker Desktop Client
-Exec=/path/to/extracted/run.sh
-Icon=/path/to/extracted/icon.png
-Terminal=false
-Type=Application
-Categories=Office;
-EOF
+# Download the latest release
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/TaskTracker-*.deb -o TaskTracker.deb
+
+# Install
+sudo dpkg -i TaskTracker.deb
+# If there are missing dependencies:
+sudo apt-get install -f
 ```
 
-#### Creating a Shortcut (macOS)
-
-```bash
-# Create an app bundle or use Automator to create a .app from run.sh
-# Or simply run from Terminal: ./run.sh
-```
-
-> **Note:** The iOS app requires a TestFlight invite or building from source (see the [KMP client repo](../TaskTrackerKMP) for build instructions). The Android APK and Desktop binaries are published to GitHub Releases on every tag.
+> **Note:** The iOS app requires a TestFlight invite or building from source (see the [KMP client repo](../TaskTrackerKMP) for build instructions). The Android APK and Desktop native installers are published to GitHub Releases on every tag.
 
 ## Step 1 — Run `tt install`
 
