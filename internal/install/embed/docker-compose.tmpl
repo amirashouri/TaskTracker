@@ -25,6 +25,9 @@ services:
       DATABASE_URL: "{{ .DatabaseURL }}"
       JWT_SECRET: "{{ .JWTSecret }}"
       LOG_LEVEL: "info"
+{{ if .TrustedProxies }}
+      TRUSTED_PROXIES: "{{ .TrustedProxies }}"
+{{ end }}
     ports:
       - "{{ .PublishHost }}:{{ .ServerPort }}:8080"
 {{ if .Sqlite }}
