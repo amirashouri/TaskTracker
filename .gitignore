@@ -7,6 +7,7 @@
 /bin/
 /dist/
 /server
+/tt
 *.exe
 *.test
 *.out
