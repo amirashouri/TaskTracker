@@ -56,7 +56,7 @@ jobs:
 
             ### Installation
 
-            See [docs/INSTALL.md](https://github.com/amirashouri/TaskTrackerServer/blob/main/docs/INSTALL.md) for installation instructions.
+            See [docs/INSTALL.md](https://github.com/amirashouri/TaskTracker/blob/main/docs/INSTALL.md) for installation instructions.
 
             ### Server Binary
 
@@ -68,6 +68,11 @@ jobs:
             ### Client Compatibility
 
             Works with TaskTracker client at the same version tag.
-            See [TaskTracker client releases](https://github.com/amirashouri/TaskTracker/releases/tag/${{ github.ref_name }}).
+            See [TaskTracker client releases](https://github.com/amirashouri/TaskTrackerKMP/releases/tag/${{ github.ref_name }}).
+
+            ### License
+
+            MIT + Commons Clause, plus one extra term: no rebranding. You can run this server in your own team, including in production; you may not sell it or repackage it under your own name and brand. The code stays the author's.
+            Full text: [LICENSE](https://github.com/amirashouri/TaskTracker/blob/main/LICENSE).
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
