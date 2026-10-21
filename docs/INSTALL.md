@@ -32,35 +32,35 @@ Download the latest release for your platform. **Copy only the block for your OS
 ### Linux (amd64 / x86_64)
 
 ```bash
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_linux_amd64 -o /usr/local/bin/tt
+curl -fsSL https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/tt_linux_amd64 -o /usr/local/bin/tt
 chmod +x /usr/local/bin/tt
 ```
 
 ### Linux (arm64 / aarch64)
 
 ```bash
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_linux_arm64 -o /usr/local/bin/tt
+curl -fsSL https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/tt_linux_arm64 -o /usr/local/bin/tt
 chmod +x /usr/local/bin/tt
 ```
 
 ### macOS (Apple Silicon / arm64)
 
 ```bash
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_darwin_arm64 -o /usr/local/bin/tt
+curl -fsSL https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/tt_darwin_arm64 -o /usr/local/bin/tt
 chmod +x /usr/local/bin/tt
 ```
 
 ### macOS (Intel / amd64)
 
 ```bash
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_darwin_amd64 -o /usr/local/bin/tt
+curl -fsSL https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/tt_darwin_amd64 -o /usr/local/bin/tt
 chmod +x /usr/local/bin/tt
 ```
 
 ### Windows (PowerShell, amd64)
 
 ```powershell
-iwr -useb https://github.com/amirashouri/TaskTracker/releases/latest/download/tt_windows_amd64.exe -outfile $env:USERPROFILE\tt.exe
+iwr -useb https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/tt_windows_amd64.exe -outfile $env:USERPROFILE\tt.exe
 # Add $env:USERPROFILE to your PATH if not already present
 ```
 
@@ -78,11 +78,11 @@ The TaskTracker client runs on your phone or desktop and connects to your server
 
 | Platform | Download |
 |----------|----------|
-| **Android** | [GitHub Releases → `tasktracker-android-*.apk`](https://github.com/amirashouri/TaskTracker/releases/latest) |
+| **Android** | [GitHub Releases → `tasktracker-android-*.apk`](https://github.com/amirashouri/TaskTrackerKMP/releases/latest) |
 | **iOS** | [TestFlight](https://testflight.apple.com/join/...) (or build from source via Xcode) |
-| **macOS** | [GitHub Releases → `TaskTracker-*.dmg`](https://github.com/amirashouri/TaskTracker/releases/latest) |
-| **Windows** | [GitHub Releases → `TaskTracker-*.msi`](https://github.com/amirashouri/TaskTracker/releases/latest) |
-| **Linux** | [GitHub Releases → `TaskTracker-*.deb`](https://github.com/amirashouri/TaskTracker/releases/latest) |
+| **macOS** | [GitHub Releases → `TaskTracker-*.dmg`](https://github.com/amirashouri/TaskTrackerKMP/releases/latest) |
+| **Windows** | [GitHub Releases → `TaskTracker-*.msi`](https://github.com/amirashouri/TaskTrackerKMP/releases/latest) |
+| **Linux** | [GitHub Releases → `TaskTracker-*.deb`](https://github.com/amirashouri/TaskTrackerKMP/releases/latest) |
 
 ### Installing the Desktop App
 
@@ -92,7 +92,7 @@ The desktop app is distributed as native installers for each platform.
 
 ```bash
 # Download the latest release
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/TaskTracker-*.dmg -o TaskTracker.dmg
+curl -fsSL https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/TaskTracker-*.dmg -o TaskTracker.dmg
 
 # Open and install
 open TaskTracker.dmg
@@ -105,7 +105,7 @@ Or simply download the `.dmg` from the browser and double-click to install.
 
 ```powershell
 # Download the latest release
-iwr -useb https://github.com/amirashouri/TaskTracker/releases/latest/download/TaskTracker-*.msi -outfile TaskTracker.msi
+iwr -useb https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/TaskTracker-*.msi -outfile TaskTracker.msi
 
 # Install
 msiexec /i TaskTracker.msi
@@ -117,7 +117,7 @@ Or download the `.msi` from the browser and double-click to install.
 
 ```bash
 # Download the latest release
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/TaskTracker-*.deb -o TaskTracker.deb
+curl -fsSL https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/TaskTracker-*.deb -o TaskTracker.deb
 
 # Install
 sudo dpkg -i TaskTracker.deb
