@@ -16,6 +16,7 @@ import (
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/dbtest"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
+	"github.com/amirashouri/tasktracker-server/internal/profile"
 	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
 	"github.com/amirashouri/tasktracker-server/internal/sync"
 )
@@ -105,6 +106,20 @@ type clientUser struct {
 	CreatedAt   int64  `json:"created_at"`
 }
 
+// clientProfile mirrors the KMP `UserProfileResponse`, transcribed from
+// specs/settings-user-backend-profile.md. Every field after the id has a Kotlin
+// default, which is why the response may omit the optional ones; the key set is
+// still closed, because `ignoreUnknownKeys` is off.
+type clientProfile struct {
+	ID           string `json:"id"`
+	Email        string `json:"email"`
+	DisplayName  string `json:"display_name"`
+	Position     string `json:"position"`
+	AvatarID     string `json:"avatar_id"`
+	Presence     string `json:"presence"`
+	PresenceNote string `json:"presence_note"`
+}
+
 type contractEnv struct {
 	mux     *http.ServeMux
 	project *entities.Project
@@ -143,6 +158,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 		mux: mount(
 			auth.NewHandler(jwtManager, users, tokens, ratelimit.New(100, time.Minute), nil),
 			admin.NewHandler(users, tokens),
+			profile.NewHandler(users),
 			admin.NewProjectHandler(entities.NewProjectRepository(database.DB), sync.NewEngine(database.DB, "")),
 			sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),
 			jwtManager,
@@ -519,6 +535,75 @@ func TestTheUserObjectIsWhatTheClientDecodes(t *testing.T) {
 	if user.CreatedAt <= 0 {
 		t.Errorf("created_at = %d, want the epoch-millis the admin API uses", user.CreatedAt)
 	}
+}
+
+// The self-profile routes are the client's Settings identity block. They must
+// decode into the client's DTO, carry no key it does not declare, and leave the
+// admin/directory user object unchanged — that shape is already installed on
+// devices that reject an unknown key.
+func TestTheSelfProfileIsWhatTheClientDecodes(t *testing.T) {
+	env := newContractEnv(t)
+	tokens := env.signIn(t)
+
+	rec := env.do(t, http.MethodGet, "/v1/me", tokens.AccessToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /v1/me = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	profile := decodeInto[clientProfile](t, rec)
+	assertWireKeys(t, "the self profile", rec.Body.Bytes(),
+		[]string{"id", "email", "presence"},
+		[]string{"display_name", "position", "avatar_id", "presence_note"})
+
+	if profile.ID != string(env.user.ID) || profile.Email != "ada@example.com" {
+		t.Errorf("profile = %+v, want the signed-in account", profile)
+	}
+	if profile.Presence != entities.PresenceActive {
+		t.Errorf("presence = %q, want the column default %q", profile.Presence, entities.PresenceActive)
+	}
+
+	rec = env.do(t, http.MethodPatch, "/v1/me", tokens.AccessToken, map[string]string{
+		"display_name":  "Ada Lovelace",
+		"position":      "Product owner",
+		"avatar_id":     "7",
+		"presence":      "away",
+		"presence_note": "At the dentist",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH /v1/me = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	updated := decodeInto[clientProfile](t, rec)
+	assertWireKeys(t, "the updated self profile", rec.Body.Bytes(),
+		[]string{"id", "email", "presence"},
+		[]string{"display_name", "position", "avatar_id", "presence_note"})
+
+	want := clientProfile{
+		ID:           string(env.user.ID),
+		Email:        "ada@example.com",
+		DisplayName:  "Ada Lovelace",
+		Position:     "Product owner",
+		AvatarID:     "7",
+		Presence:     entities.PresenceAway,
+		PresenceNote: "At the dentist",
+	}
+	if updated != want {
+		t.Errorf("updated profile = %+v, want %+v", updated, want)
+	}
+
+	// The admin/directory object is a different, already-installed contract. A
+	// presence key leaking into it would fail every client that decodes it.
+	rec = env.do(t, http.MethodGet, "/v1/users/search?q=ada", tokens.AccessToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("search = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var rawUsers []json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &rawUsers); err != nil {
+		t.Fatalf("decode users: %v", err)
+	}
+	assertWireKeys(t, "the user object", rawUsers[0],
+		[]string{"id", "email", "display_name", "role", "created_at"},
+		[]string{"position", "avatar_id", "status", "last_seen"})
 }
 
 // Deleting a member is a soft delete: the row stays, but the account can no

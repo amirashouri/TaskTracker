@@ -13,6 +13,7 @@ import (
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/dbtest"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
+	"github.com/amirashouri/tasktracker-server/internal/profile"
 	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
 	"github.com/amirashouri/tasktracker-server/internal/sync"
 )
@@ -184,6 +185,7 @@ func newTestMux(t *testing.T) *http.ServeMux {
 	return mount(
 		auth.NewHandler(jwtManager, users, tokens, ratelimit.New(5, time.Minute), nil),
 		admin.NewHandler(users, tokens),
+		profile.NewHandler(users),
 		admin.NewProjectHandler(entities.NewProjectRepository(database.DB), sync.NewEngine(database.DB, "")),
 		sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),
 		jwtManager,

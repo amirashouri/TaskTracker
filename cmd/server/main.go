@@ -22,6 +22,7 @@ import (
 	"github.com/amirashouri/tasktracker-server/internal/entities"
 	"github.com/amirashouri/tasktracker-server/internal/httpx"
 	"github.com/amirashouri/tasktracker-server/internal/middleware"
+	"github.com/amirashouri/tasktracker-server/internal/profile"
 	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
 	"github.com/amirashouri/tasktracker-server/internal/sync"
 )
@@ -89,6 +90,10 @@ func runServer() {
 	// Initialize admin handler
 	adminHandler := admin.NewHandler(userRepo, tokenStore)
 
+	// The signed-in user's own profile. Any authenticated member may read and
+	// write it, so it is not part of the admin router.
+	profileHandler := profile.NewHandler(userRepo)
+
 	// Initialize sync handler
 	syncHandler := sync.NewHandler(syncEngine, jwtManager)
 
@@ -97,7 +102,7 @@ func runServer() {
 	projectHandler := admin.NewProjectHandler(entities.NewProjectRepository(database.DB), syncEngine)
 
 	// Setup HTTP handlers
-	mux := mount(authHandler, adminHandler, projectHandler, syncHandler, jwtManager, database.DB, syncEngine, cfg.AttachmentRoot, cfg.AttachmentMaxBytes, cfg.AttachmentDeadline())
+	mux := mount(authHandler, adminHandler, profileHandler, projectHandler, syncHandler, jwtManager, database.DB, syncEngine, cfg.AttachmentRoot, cfg.AttachmentMaxBytes, cfg.AttachmentDeadline())
 
 	// Apply middleware chain
 	handler := middleware.Chain(
@@ -168,6 +173,7 @@ func fatal(message string, err error) {
 func mount(
 	authHandler *auth.Handler,
 	adminHandler *admin.Handler,
+	profileHandler *profile.Handler,
 	projectHandler *admin.ProjectHandler,
 	syncHandler *sync.Handler,
 	jwtManager *auth.JWTManager,
@@ -228,6 +234,12 @@ func mount(
 	mux.Handle("GET /v1/admin/projects", adminMW(http.HandlerFunc(projectHandler.List)))
 	mux.Handle("GET /v1/admin/projects/{id}", adminMW(http.HandlerFunc(projectHandler.Get)))
 	mux.Handle("PATCH /v1/admin/projects/{id}", adminMW(http.HandlerFunc(projectHandler.Update)))
+
+	// Self profile (any authenticated user). The response carries the account's
+	// own email, so it is not cacheable by an intermediary.
+	selfProfile := middleware.Auth(jwtManager)
+	mux.Handle("GET /v1/me", noStore(selfProfile(http.HandlerFunc(profileHandler.Get))))
+	mux.Handle("PATCH /v1/me", noStore(selfProfile(http.HandlerFunc(profileHandler.Update))))
 
 	// Directory search (any authenticated user)
 	mux.Handle("GET /v1/users/search", middleware.Auth(jwtManager)(http.HandlerFunc(adminHandler.Search)))

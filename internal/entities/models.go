@@ -50,6 +50,29 @@ const (
 	StatusDeleted  = "deleted"
 )
 
+// Presence values are the signed-in user's availability, written through
+// PATCH /v1/me. They are deliberately not the Status values above: an account
+// can be active and away at the same time.
+const (
+	PresenceActive      = "active"
+	PresenceAway        = "away"
+	PresenceBeRightBack = "be_right_back"
+	PresenceBusy        = "busy"
+)
+
+// PresenceValues is the closed vocabulary the self-profile endpoint accepts.
+var PresenceValues = []string{PresenceActive, PresenceAway, PresenceBeRightBack, PresenceBusy}
+
+// IsValidPresence reports whether value is one of PresenceValues.
+func IsValidPresence(value string) bool {
+	for _, candidate := range PresenceValues {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
 type User struct {
 	ID           UserID `json:"id"`
 	Email        string `json:"email"`
@@ -58,6 +81,10 @@ type User struct {
 	Position     string `json:"position,omitempty"`
 	AvatarID     string `json:"avatarId,omitempty"`
 	Status       string `json:"status,omitempty"`
+	// Presence and PresenceNote are what the settings screen shows as the
+	// user's availability, separate from Status (the account lifecycle above).
+	Presence     string `json:"presence,omitempty"`
+	PresenceNote string `json:"presenceNote,omitempty"`
 	Role         string `json:"role,omitempty"`
 	// User timestamps stay plain epoch millis. A user is never synced, and its
 	// only wire shape is the admin API's snake_case userResponse, which is a

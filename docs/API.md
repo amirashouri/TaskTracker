@@ -146,7 +146,9 @@ key rather than skipping it.
 ```
 
 `password_hash` is never present in any response. `last_seen` is omitted when
-null.
+null. Presence (`presence`, `presence_note`) is deliberately **not** part of
+this object; it belongs to the self-profile shape below, so adding it here would
+break installed clients that decode this object strictly.
 
 ### `POST /v1/admin/users` — admin only
 
@@ -237,6 +239,64 @@ account is still the author of the work it left behind. The blank listing is the
 live directory, because that is the set a new project can add as a collaborator.
 The members list, which is about managing accounts, uses `?status=` and is the
 admin-only view of both.
+
+## Me — the signed-in user's own profile
+
+Any authenticated user, member or admin. The caller is always the token's `uid`;
+neither route accepts a user id, so one account cannot read or write another's
+profile through them.
+
+### `GET /v1/me`
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "email": "jane@example.com",
+  "display_name": "Jane Doe",
+  "position": "Product owner",
+  "avatar_id": "7",
+  "presence": "away",
+  "presence_note": "At the dentist"
+}
+```
+
+`presence` is always present and defaults to `"active"`. The empty-string fields
+are omitted (`omitempty`); the client declares them with defaults. `email` and
+`role` are read-only: changing an email needs a verification flow that does not
+exist, and the role is admin-managed.
+
+### `PATCH /v1/me`
+
+```json
+{ "display_name": "Jane Doe", "presence": "away", "presence_note": "At the dentist" }
+```
+
+Every field is optional; only the keys present are applied. Email, role,
+`status`, `password`, `last_seen` and `created_at` are unknown fields here and
+are rejected (`DisallowUnknownFields`). An empty object is a `400`, so a client
+that believes it saved something is told it did not.
+
+| Field | Rule |
+| --- | --- |
+| `display_name` | trimmed; 1–120 characters; blank rejected |
+| `position` | trimmed; 0–120 characters; empty clears |
+| `avatar_id` | `""` or exactly one ASCII digit `0`–`9` |
+| `presence` | `active`, `away`, `be_right_back`, or `busy`; empty rejected |
+| `presence_note` | trimmed; 0–280 characters; empty clears |
+
+`presence` and `presence_note` are **not** `status`. `status` answers "may this
+account sign in?" (`active`/`inactive`/`deleted`) and is admin-owned; `presence`
+answers "is this person available?" and belongs to the user. A presence write
+cannot reactivate or inactivate an account, and an admin status write does not
+change presence.
+
+| Status | Body |
+| --- | --- |
+| `200` | the updated self-profile object |
+| `400` | `{"error": "display name is required"}` |
+| `400` | `{"error": "presence must be active, away, be_right_back or busy"}` |
+| `400` | `{"error": "no fields to update"}` |
+| `401` | `{"error": "authentication required"}` |
 
 ## Projects (admin)
 
