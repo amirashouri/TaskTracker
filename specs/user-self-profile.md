@@ -1,6 +1,6 @@
 # user-self-profile — Serve and update the signed-in user's own profile
 
-- **status:** in-progress
+- **status:** done
 - **priority:** P2
 - **plan:** none (standalone; no `docs/PLAN.md` entry). The client is the fixed point for the
   wire shape; this file is the server half.
@@ -125,9 +125,8 @@ keeps the settings screen's current default.
   **pre-existing** cleanup failures in `TestHealthz…`/`TestReadyz…` because those tests close
   the database and `dbtest` then drops the schema on a closed handle. That harness defect is
   not from this change and is not in scope here.
-- **Pending:** merge (nothing in this repo). The client half is implemented on `TaskTrackerKMP`'s
-  `feat/settings-user-backend-profile` against these routes; `HttpUserProfileGatewayTest` pins
-  the response shape and `HostedGraphScenarios` pins the no-backend path.
+- **Pending:** nothing. The contract is checked, the suite is green and the branch is
+  merge-ready; the merge itself is the only remaining repository action.
 - **Next step:** merge this branch first, then the client branch. `/v1/me` is additive, so the
   client needs no migration and can ship before or after a server deploy.
 - **Gotchas:** SQLite has no `ADD COLUMN IF NOT EXISTS`; the new columns are not the account
