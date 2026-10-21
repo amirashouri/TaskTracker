@@ -30,7 +30,7 @@ RUN addgroup -S app && adduser -S app -G app
 WORKDIR /app
 COPY --from=builder /out/server .
 
-# The licence travels with the image. The `.dockerignore` excludes `*.md`, not
+# The license travels with the image. The `.dockerignore` excludes `*.md`, not
 # `LICENSE`, so this file is in the build context; the runtime stage is where
 # a customer reads it.
 COPY LICENSE ./LICENSE
