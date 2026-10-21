@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -141,5 +142,34 @@ func TestWaitReadyTimesOutOnANon200(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), server.URL) {
 		t.Errorf("error %q does not name the address", err)
+	}
+}
+
+// A cancelled run must stop the command it is running: the CLI's context is how
+// Ctrl+C reaches docker, and a runner that ignores it leaves `tt install`
+// waiting on a process nobody can see.
+func TestExecCommandRunnerStopsOnCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sleep is not available on Windows")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- execCommandRunner{}.Run(ctx, io.Discard, io.Discard, "sleep", "30")
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Run reported success for a cancelled command")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run kept the command alive after cancellation")
 	}
 }

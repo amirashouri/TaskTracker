@@ -94,11 +94,24 @@ func parseFlags(fs *flag.FlagSet, args []string, stderr io.Writer) (int, bool) {
 func execute(ctx context.Context, steps []install.Step, stderr io.Writer, runner install.Runner) int {
 	for _, step := range steps {
 		if err := runner.Run(ctx, step); err != nil {
-			fmt.Fprintf(stderr, "tt: %v\n", err)
-			return 1
+			return fail(ctx, stderr, "tt", err)
 		}
 	}
 	return 0
+}
+
+// interruptedExit is the status a shell reports for a process stopped by SIGINT.
+const interruptedExit = 130
+
+// fail reports a command error and returns the CLI exit status. A signal is the
+// user's instruction to stop, not a failure: it exits 130 with no line, so
+// Ctrl+C reads as "I quit" rather than "tt broke".
+func fail(ctx context.Context, w io.Writer, label string, err error) int {
+	if errors.Is(err, errInterrupted) || ctx.Err() != nil {
+		return interruptedExit
+	}
+	fmt.Fprintf(w, "%s: %v\n", label, err)
+	return 1
 }
 
 func loadState(statePath string) (install.State, error) {

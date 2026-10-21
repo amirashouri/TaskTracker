@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amirashouri/tasktracker-server/internal/install"
 )
@@ -674,5 +675,54 @@ func TestInstallInteractiveDeclinesDockerInstall(t *testing.T) {
 	}
 	if len(runner.steps) != 0 {
 		t.Errorf("ran %d steps despite Docker install declined, want none", len(runner.steps))
+	}
+}
+
+// main's signal handler cancels the context without killing the process, so a
+// prompt that ignores cancellation is a `tt install` no Ctrl+C can leave. The
+// interrupt must exit quietly with the shell's status for SIGINT, not print a
+// failure the user did not cause.
+func TestWizardInterruptedAtAPromptExitsWith130(t *testing.T) {
+	dir := t.TempDir()
+	runner := &recordingRunner{}
+	opts := defaultInstallOptions()
+	opts.dataDir = dir
+	opts.platform = "linux"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	unanswered, writer := io.Pipe()
+	t.Cleanup(func() { writer.Close() })
+
+	var stdout, stderr bytes.Buffer
+	deps := installDeps{
+		stdout:       &stdout,
+		stderr:       &stderr,
+		statePath:    filepath.Join(dir, "install.json"),
+		buildVersion: "v1.2.3",
+		runner:       runner,
+		preflight:    install.Preflight,
+		ensureDocker: install.EnsureDocker,
+		executor:     install.RealExecutor{},
+		prompter:     newPrompter(ctx, unanswered, &stdout),
+		lanAddress:   func() string { return "" },
+		interactive:  true,
+	}
+	cancel()
+
+	code := make(chan int, 1)
+	go func() { code <- installWith(ctx, opts, deps) }()
+	select {
+	case got := <-code:
+		if got != interruptedExit {
+			t.Errorf("exit = %d, want %d for an interrupted prompt", got, interruptedExit)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("install ignored the cancellation and stayed at the prompt")
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want no error line when the user interrupted", stderr.String())
+	}
+	if len(runner.steps) != 0 {
+		t.Errorf("ran %d steps after an interrupted prompt, want none", len(runner.steps))
 	}
 }

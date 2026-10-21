@@ -73,7 +73,7 @@ func runInstall(
 		preflight:    install.Preflight,
 		ensureDocker: install.EnsureDocker,
 		executor:     install.RealExecutor{},
-		prompter:     newPrompter(stdin, stdout),
+		prompter:     newPrompter(ctx, stdin, stdout),
 		lanAddress:   install.LANAddress,
 	})
 }
@@ -119,8 +119,7 @@ func installWith(ctx context.Context, opts installOptions, deps installDeps) int
 
 	state, err := loadState(deps.statePath)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-		return 1
+		return fail(ctx, deps.stderr, "tt install", err)
 	}
 	wasInstalled := state.Version != 0
 
@@ -158,14 +157,12 @@ func installWith(ctx context.Context, opts installOptions, deps installDeps) int
 		}
 		if !wasInstalled {
 			if err := fillSecrets(&cmd); err != nil {
-				fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-				return 1
+				return fail(ctx, deps.stderr, "tt install", err)
 			}
 		}
 		steps, err := install.Next(state, cmd)
 		if err != nil {
-			fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-			return 1
+			return fail(ctx, deps.stderr, "tt install", err)
 		}
 		compose := install.ComposeFromSteps(steps)
 		if compose == "" {
@@ -186,8 +183,7 @@ func repairInstall(ctx context.Context, opts installOptions, state install.State
 	if deps.interactive {
 		ok, err := deps.prompter.Confirm(fmt.Sprintf("Repair the existing %q install?", state.InstanceName), true)
 		if err != nil {
-			fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-			return 1
+			return fail(ctx, deps.stderr, "tt install", err)
 		}
 		if !ok {
 			fmt.Fprintln(deps.stdout, "Nothing changed.")
@@ -209,8 +205,7 @@ func repairInstall(ctx context.Context, opts installOptions, state install.State
 			Repair:   true,
 			Platform: platform,
 		}); err != nil {
-			fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-			return 1
+			return fail(ctx, deps.stderr, "tt install", err)
 		}
 	}
 
@@ -221,8 +216,7 @@ func repairInstall(ctx context.Context, opts installOptions, state install.State
 		Repair:   true,
 		Platform: platform,
 	}); err != nil {
-		fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-		return 1
+		return fail(ctx, deps.stderr, "tt install", err)
 	}
 
 	steps, err := install.Next(state, install.Command{
@@ -235,8 +229,7 @@ func repairInstall(ctx context.Context, opts installOptions, state install.State
 		ServerPort:   opts.port,
 	})
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-		return 1
+		return fail(ctx, deps.stderr, "tt install", err)
 	}
 	if code := executeInstallSteps(ctx, steps, deps, false); code != 0 {
 		return code
@@ -253,30 +246,26 @@ func repairInstall(ctx context.Context, opts installOptions, state install.State
 
 func freshInstall(ctx context.Context, opts installOptions, deps installDeps) int {
 	if err := validateInstallShape(opts, deps.buildVersion); err != nil {
-		fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-		return 1
+		return fail(ctx, deps.stderr, "tt install", err)
 	}
 
 	if deps.interactive {
 		mode, err := askMode(deps.prompter, deps.stdout, opts.mode)
 		if err != nil {
-			fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-			return 1
+			return fail(ctx, deps.stderr, "tt install", err)
 		}
 		opts.mode = string(mode)
 
 		dataDir, err := askDataDir(deps.prompter, opts.dataDir)
 		if err != nil {
-			fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-			return 1
+			return fail(ctx, deps.stderr, "tt install", err)
 		}
 		opts.dataDir = dataDir
 	}
 
 	dataDir, err := normalizeDataDir(opts.dataDir)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-		return 1
+		return fail(ctx, deps.stderr, "tt install", err)
 	}
 	opts.dataDir = dataDir
 
@@ -285,8 +274,7 @@ func freshInstall(ctx context.Context, opts installOptions, deps installDeps) in
 	// nobody can sign in to.
 	if !deps.interactive {
 		if err := validateAdminFlags(opts); err != nil {
-			fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-			return 1
+			return fail(ctx, deps.stderr, "tt install", err)
 		}
 	}
 
@@ -303,8 +291,7 @@ func freshInstall(ctx context.Context, opts installOptions, deps installDeps) in
 			Port:     opts.port,
 			Platform: platform,
 		}); err != nil {
-			fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-			return 1
+			return fail(ctx, deps.stderr, "tt install", err)
 		}
 	}
 
@@ -314,16 +301,14 @@ func freshInstall(ctx context.Context, opts installOptions, deps installDeps) in
 		Port:     opts.port,
 		Platform: platform,
 	}); err != nil {
-		fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-		return 1
+		return fail(ctx, deps.stderr, "tt install", err)
 	}
 
 	var admin *install.AdminBootstrap
 	if deps.interactive {
 		admin, err = askAdmin(deps.prompter, deps.stdout)
 		if err != nil {
-			fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-			return 1
+			return fail(ctx, deps.stderr, "tt install", err)
 		}
 	} else {
 		admin = &install.AdminBootstrap{
@@ -346,14 +331,12 @@ func freshInstall(ctx context.Context, opts installOptions, deps installDeps) in
 		AdminDisplayName: admin.DisplayName,
 	}
 	if err := fillSecrets(&cmd); err != nil {
-		fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-		return 1
+		return fail(ctx, deps.stderr, "tt install", err)
 	}
 
 	steps, err := install.Next(install.State{Path: deps.statePath}, cmd)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-		return 1
+		return fail(ctx, deps.stderr, "tt install", err)
 	}
 	if code := executeInstallSteps(ctx, steps, deps, true); code != 0 {
 		return code
@@ -395,8 +378,7 @@ func fillSecrets(cmd *install.Command) error {
 func executeInstallSteps(ctx context.Context, steps []install.Step, deps installDeps, printSecret bool) int {
 	for _, step := range steps {
 		if err := deps.runner.Run(ctx, step); err != nil {
-			fmt.Fprintf(deps.stderr, "tt install: %v\n", err)
-			return 1
+			return fail(ctx, deps.stderr, "tt install", err)
 		}
 		if printSecret && step.Kind == install.StepWriteState {
 			fmt.Fprintf(deps.stdout, "JWT_SECRET=%s\n", step.State.JWTSecret)

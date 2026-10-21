@@ -2,12 +2,17 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 )
+
+// errInterrupted is a prompt abandoned because a signal cancelled the run. The
+// caller turns it into the shell's exit status for SIGINT rather than an error.
+var errInterrupted = errors.New("interrupted")
 
 // prompter is the wizard's only source of answers. Tests provide a scripted
 // implementation; production reads the terminal without a TUI dependency.
@@ -19,12 +24,42 @@ type prompter interface {
 }
 
 type stdinPrompter struct {
+	ctx    context.Context
 	reader *bufio.Reader
 	out    io.Writer
 }
 
-func newPrompter(in io.Reader, out io.Writer) *stdinPrompter {
-	return &stdinPrompter{reader: bufio.NewReader(in), out: out}
+// newPrompter carries the run's context because main installs a signal handler:
+// SIGINT no longer terminates the process by itself, so a read that ignores the
+// context is a CLI that cannot be interrupted while it waits for an answer.
+func newPrompter(ctx context.Context, in io.Reader, out io.Writer) *stdinPrompter {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &stdinPrompter{ctx: ctx, reader: bufio.NewReader(in), out: out}
+}
+
+type lineResult struct {
+	line string
+	err  error
+}
+
+// readLine returns one line, or errInterrupted once ctx is cancelled. A blocked
+// read on a terminal cannot be unblocked portably, so it is left to finish on
+// its own while the CLI exits.
+func (p *stdinPrompter) readLine() (string, error) {
+	lines := make(chan lineResult, 1)
+	go func() {
+		line, err := p.reader.ReadString('\n')
+		lines <- lineResult{line: line, err: err}
+	}()
+
+	select {
+	case result := <-lines:
+		return result.line, result.err
+	case <-p.ctx.Done():
+		return "", errInterrupted
+	}
 }
 
 func (p *stdinPrompter) Ask(label, defaultValue string) (string, error) {
@@ -34,7 +69,7 @@ func (p *stdinPrompter) Ask(label, defaultValue string) (string, error) {
 	}
 	fmt.Fprint(p.out, ": ")
 
-	line, err := p.reader.ReadString('\n')
+	line, err := p.readLine()
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
 			return "", err
@@ -68,7 +103,7 @@ func (p *stdinPrompter) AskRequired(label string) (string, error) {
 func (p *stdinPrompter) Secret(label string) (string, error) {
 	for {
 		fmt.Fprintf(p.out, "%s: ", label)
-		line, err := p.reader.ReadString('\n')
+		line, err := p.readLine()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				return "", err
@@ -93,7 +128,7 @@ func (p *stdinPrompter) Confirm(label string, defaultYes bool) (bool, error) {
 	}
 	for {
 		fmt.Fprintf(p.out, "%s %s: ", label, suffix)
-		line, err := p.reader.ReadString('\n')
+		line, err := p.readLine()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				return false, err
