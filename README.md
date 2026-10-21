@@ -212,8 +212,10 @@ secrets without any file on disk — see [Production](#production) below.
   image includes it, so users don't install `gcc` on their machines.
 - **Postgres** — the `postgres` profile starts a Postgres 16 container
   with a healthcheck; the server waits for it before booting.
-- **SQLite data** — the `sqlite` profile mounts a Docker volume at
-  `/data`, so the database survives container restarts.
+- **SQLite data and attachments** — the `sqlite` profile mounts a Docker volume
+  at `/data`, so the database and the attachment blobs survive container
+  restarts. The Postgres profile mounts a separate `blob-data` volume there for
+  the blobs; its database lives in `pg-data`.
 - **Non-root user** — the server runs as `app`, not `root`.
 
 ### Building without Compose

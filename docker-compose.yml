@@ -53,6 +53,11 @@ x-server-pg: &server-pg
     CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}"
     LOG_LEVEL: "${LOG_LEVEL:-info}"
     TRUSTED_PROXIES: "${TRUSTED_PROXIES:-}"
+  # Blob bytes live under /data (the image sets ATTACHMENT_ROOT=/data/blobstore).
+  # Without a named volume here they land in a container-scoped anonymous one and
+  # vanish when the container is recreated, while Postgres keeps the metadata.
+  volumes:
+    - blob-data:/data
   depends_on:
     postgres:
       condition: service_healthy
@@ -172,4 +177,5 @@ services:
 
 volumes:
   pg-data:
+  blob-data:
   sqlite-data:

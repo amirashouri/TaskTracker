@@ -102,6 +102,10 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.blobs.Write(attachmentID, data); err != nil {
+		// The client cannot see this; without the cause in the log it can only
+		// observe a 500 and retry. The root is usually the answer.
+		slog.Error("store attachment bytes",
+			"attachment", attachmentID, "root", h.blobs.Root, "error", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "could not store the attachment")
 		return
 	}
@@ -109,6 +113,8 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	// not rebroadcast the attachment through the change feed.
 	if err := entities.NewAttachmentRepository(h.db).SetBlobRef(r.Context(), entities.AttachmentID(attachmentID), attachmentID); err != nil {
 		// The blob is now orphaned; a later re-upload overwrites it. Best-effort.
+		slog.Error("record attachment upload",
+			"attachment", attachmentID, "error", err)
 		httpx.WriteError(w, http.StatusInternalServerError, "could not record the attachment")
 		return
 	}

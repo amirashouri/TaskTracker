@@ -5,6 +5,7 @@
 package attachments
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -18,6 +19,31 @@ type BlobStore struct {
 
 func (b *BlobStore) path(attachmentID string) string {
 	return filepath.Join(b.Root, attachmentID+".blob")
+}
+
+// EnsureRoot creates the root if needed and proves it is writable.
+//
+// This runs at startup because the failure it catches is otherwise invisible:
+// the root used to default to a path relative to the working directory, which
+// the image (/app, root-owned) and the systemd unit (/opt/tasktracker, read-only
+// under ProtectSystem=strict) do not let the service write. Write would then
+// fail on every upload, and the handler could only answer 500 with no clue why.
+func EnsureRoot(root string) error {
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		return fmt.Errorf("ATTACHMENT_ROOT %s is not a writable directory: %w", root, err)
+	}
+	probe, err := os.CreateTemp(root, ".write-probe-*")
+	if err != nil {
+		return fmt.Errorf("ATTACHMENT_ROOT %s is not writable: %w", root, err)
+	}
+	name := probe.Name()
+	if err := probe.Close(); err != nil {
+		return fmt.Errorf("close probe in ATTACHMENT_ROOT %s: %w", root, err)
+	}
+	if err := os.Remove(name); err != nil {
+		return fmt.Errorf("remove probe in ATTACHMENT_ROOT %s: %w", root, err)
+	}
+	return nil
 }
 
 // Write creates the root if needed and stores the bytes. A file per attachment

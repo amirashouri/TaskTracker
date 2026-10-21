@@ -54,6 +54,12 @@ func runServer() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.SlogLevel()}))
 	slog.SetDefault(logger)
 
+	// Prove the blob root is writable before serving: a bad path must stop the
+	// process, not turn every upload into a 500 the client retries forever.
+	if err := attachments.EnsureRoot(cfg.AttachmentRoot); err != nil {
+		fatal("attachment storage is not ready", err)
+	}
+
 	// Initialize database
 	database, err := db.New(cfg.DatabaseURL)
 	if err != nil {

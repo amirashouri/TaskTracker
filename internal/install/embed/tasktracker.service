@@ -14,6 +14,11 @@ ExecStart=/opt/tasktracker/server serve
 # service. See docs/SELF-HOSTING.md — never commit this file.
 EnvironmentFile=/etc/tasktracker/secrets.env
 
+# Blob bytes live in the state directory. /opt/tasktracker is root-owned and
+# read-only under ProtectSystem=strict, so the relative config default cannot be
+# written there; EnvironmentFile still wins if an operator sets a different path.
+Environment=ATTACHMENT_ROOT=/var/lib/tasktracker/blobstore
+
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65536

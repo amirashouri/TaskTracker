@@ -274,6 +274,39 @@ func TestRenderComposeSelectsTheDatabase(t *testing.T) {
 	})
 }
 
+// Attachment bytes live beside the database on /data inside the image, so both
+// database modes must mount that path. PostgreSQL had no /data mount at all:
+// blobs would land in a container-scoped anonymous volume while the metadata
+// stayed in the named Postgres volume.
+func TestRenderComposeMountsTheDataVolume(t *testing.T) {
+	t.Run("sqlite", func(t *testing.T) {
+		compose, err := RenderCompose(testState(t))
+		if err != nil {
+			t.Fatalf("RenderCompose: %v", err)
+		}
+		if !strings.Contains(compose, "tasktracker-data:/data") {
+			t.Errorf("sqlite compose does not mount /data for attachments:\n%s", compose)
+		}
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		state := testState(t)
+		state.Mode = ModePostgres
+		state.DatabasePassword = "p@ss:word"
+
+		compose, err := RenderCompose(state)
+		if err != nil {
+			t.Fatalf("RenderCompose: %v", err)
+		}
+		if !strings.Contains(compose, "tasktracker-blob-data:/data") {
+			t.Errorf("postgres compose does not mount /data for attachments:\n%s", compose)
+		}
+		if !strings.Contains(compose, "\n  tasktracker-blob-data:\n") {
+			t.Errorf("postgres compose mounts a volume it does not declare:\n%s", compose)
+		}
+	})
+}
+
 func TestRenderComposePublishesLoopbackByDefault(t *testing.T) {
 	state := testState(t)
 

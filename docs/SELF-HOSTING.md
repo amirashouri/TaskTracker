@@ -62,6 +62,7 @@ inherit the unit's environment — see §7.
 sudo tee /etc/tasktracker/secrets.env >/dev/null <<EOF
 JWT_SECRET=$(openssl rand -hex 32)
 DATABASE_URL=sqlite:///var/lib/tasktracker/tasktracker.db
+ATTACHMENT_ROOT=/var/lib/tasktracker/blobstore
 SERVER_BIND=127.0.0.1
 SERVER_PORT=8080
 LOG_LEVEL=info
@@ -88,6 +89,8 @@ worth knowing:
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `DATABASE_URL` | `sqlite:///data/tasktracker.db` | see the two forms below |
+| `ATTACHMENT_ROOT` | `./data/blobstore` | directory for attachment bytes; must be writable by the service user. Docker image: `/data/blobstore`; unit: `/var/lib/tasktracker/blobstore` |
+| `ATTACHMENT_MAX_BYTES` | `26214400` | largest accepted attachment (25 MiB) |
 | `SERVER_BIND` | `127.0.0.1` | IP literal; loopback keeps the server off the network |
 | `SERVER_PORT` | `8080` | the port the server listens on |
 | `JWT_SECRET` | — | required, ≥32 bytes |

@@ -30,12 +30,20 @@ RUN addgroup -S app && adduser -S app -G app
 WORKDIR /app
 COPY --from=builder /out/server .
 
+# Attachment bytes go on the data volume, beside the default SQLite database.
+# The config default (./data/blobstore) is relative to WORKDIR, and /app is
+# root-owned while the process runs as app: leaving it unset makes every upload
+# fail with EACCES. /data is created below, owned by app, and declared as the
+# volume.
+ENV ATTACHMENT_ROOT=/data/blobstore
+
 # The license travels with the image. The `.dockerignore` excludes `*.md`, not
 # `LICENSE`, so this file is in the build context; the runtime stage is where
 # a customer reads it.
 COPY LICENSE ./LICENSE
 
 # SQLite writes to /data; the server expects the directory to exist.
+# The same volume holds attachment blobs (ATTACHMENT_ROOT=/data/blobstore).
 RUN mkdir -p /data && chown app:app /data
 VOLUME ["/data"]
 

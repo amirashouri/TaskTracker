@@ -35,6 +35,13 @@ services:
       - tasktracker-data:/data
 {{ end }}
 {{ if .Postgres }}
+    # Attachment blobs sit beside the PostgreSQL metadata. The image points
+    # ATTACHMENT_ROOT at /data/blobstore; without this mount the bytes live in
+    # an anonymous volume and disappear when the container is recreated.
+    volumes:
+      - tasktracker-blob-data:/data
+{{ end }}
+{{ if .Postgres }}
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,4 +70,5 @@ volumes:
 {{ end }}
 {{ if .Postgres }}
   tasktracker-pg-data:
+  tasktracker-blob-data:
 {{ end }}
