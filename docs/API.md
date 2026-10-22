@@ -313,6 +313,9 @@ model decodes either:
   "keyPrefix": "TT",
   "name": "Demo",
   "details": "",
+  "tags": [
+    { "id": "660e8400-e29b-41d4-a716-446655440000", "name": "Bug", "color": "red", "icon": "bug" }
+  ],
   "memberIds": ["550e8400-e29b-41d4-a716-446655440000"],
   "isArchived": false,
   "nextItemNumber": 1,
@@ -321,6 +324,13 @@ model decodes either:
   "version": "the-version-now-stored"
 }
 ```
+
+`tags` is the project's admin-defined tag catalog. `color` and `icon` are the
+client's design-system keys; the server stores them verbatim and a client that
+does not know one simply does not draw it. A work item carries only `tagIDs`,
+and a tag removed from the catalog leaves stale ids on items, which every reader
+drops when it cannot resolve them. The catalog travels with the project, so it
+has no route or sync entity of its own.
 
 ### `POST /v1/admin/projects` — admin only
 
@@ -341,7 +351,8 @@ lost in flight leaves a row the caller can name rather than a second project:
 `id` may be omitted, and the server mints one. `isArchived`, `nextItemNumber`,
 `createdAt`, `updatedAt` and `version` are the server's and are not read from the
 body: a project being created is active, has issued no keys, and needs the
-`version` its first edit saves against.
+`version` its first edit saves against. A new project starts with an empty `tags`
+catalog; tags are added through the `PATCH` below.
 
 The create is applied through the sync engine as a project push authorized by the
 admin route rather than by membership — an admin creating a project for other
@@ -399,6 +410,10 @@ The edit is applied through the sync engine, so the row and its change-feed entr
 commit together, and the project's members pull the edit as they would one of
 their own. The response is the stored project, carrying the new `version` the
 client saves against next time.
+
+`tags` is replaced wholesale, like every other field in the body: the edit
+screen sends the catalog it holds. This is the only route that writes it, and
+removing a tag does not rewrite the items that referenced it.
 
 | Status | Body |
 | --- | --- |

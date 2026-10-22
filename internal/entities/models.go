@@ -21,6 +21,7 @@ type WorkItemID string
 type SprintID string
 type CommentID string
 type AttachmentID string
+type TagID string
 
 func NewUserID() UserID             { return UserID(uuid.New().String()) }
 func NewProjectID() ProjectID       { return ProjectID(uuid.New().String()) }
@@ -108,17 +109,32 @@ func (u *User) PreferredGreeting() string {
 
 // ============ Project ============
 
+// ProjectTag is one admin-defined tag on a project. Tags are project
+// configuration, so they travel and version with the project rather than in a
+// table of their own; a work item references one by ID.
+//
+// The vocabulary is deliberately open on the server: color and icon are the
+// client's design-system keys, stored verbatim so a build that knows more of
+// them can add one without a migration. Unknown keys are simply not drawn.
+type ProjectTag struct {
+	ID    TagID  `json:"id"`
+	Name  string `json:"name"`
+	Color string `json:"color"`
+	Icon  string `json:"icon"`
+}
+
 type Project struct {
-	ID             ProjectID `json:"id"`
-	KeyPrefix      string    `json:"keyPrefix"`
-	Name           string    `json:"name"`
-	Details        string    `json:"details"`
-	MemberIDs      []UserID  `json:"memberIds"`
-	IsArchived     bool      `json:"isArchived"`
-	NextItemNumber int       `json:"nextItemNumber"`
-	CreatedAt      Timestamp `json:"createdAt"`
-	UpdatedAt      Timestamp `json:"updatedAt"`
-	Version        string    `json:"version"`
+	ID             ProjectID    `json:"id"`
+	KeyPrefix      string       `json:"keyPrefix"`
+	Name           string       `json:"name"`
+	Details        string       `json:"details"`
+	Tags           []ProjectTag `json:"tags"`
+	MemberIDs      []UserID     `json:"memberIds"`
+	IsArchived     bool         `json:"isArchived"`
+	NextItemNumber int          `json:"nextItemNumber"`
+	CreatedAt      Timestamp    `json:"createdAt"`
+	UpdatedAt      Timestamp    `json:"updatedAt"`
+	Version        string       `json:"version"`
 }
 
 // Key formats a work-item key. Numbers are decimal, so item 10 is "TT-10"
@@ -171,6 +187,7 @@ type WorkItem struct {
 	Recurrence   *Recurrence    `json:"recurrence,omitempty"`
 	StoryPoints  *int           `json:"storyPoints,omitempty"`
 	BlockedByIDs []WorkItemID   `json:"blockedByIds"`
+	TagIDs       []TagID        `json:"tagIDs"`
 	SprintID     *SprintID      `json:"sprintId,omitempty"`
 	Rank         int            `json:"rank"`
 	CreatedAt    Timestamp      `json:"createdAt"`
