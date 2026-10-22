@@ -163,7 +163,13 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// *string*, not a nested object. Update spells out why -- the client's DTO
 	// declares `payload` as a String, so an object here would fail the decode of
 	// the whole page on every client rather than be skipped.
-	encoded, err := json.Marshal(project)
+	//
+	// Version travels on the envelope (PushChange.Version → RemoteChange.Version),
+	// not inside the project payload: the client's Project DTO does not declare it,
+	// so including it breaks decoding on every pull. Strip it before marshaling.
+	feed := *project
+	feed.Version = ""
+	encoded, err := json.Marshal(&feed)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not encode project")
 		return
@@ -246,7 +252,13 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// *string*, not a nested object. The client's DTO declares `payload` as a
 	// String and leaves ignoreUnknownKeys off, so an object here would fail the
 	// decode of the whole page on every client rather than be skipped.
-	encoded, err := json.Marshal(&project)
+	//
+	// Version travels on the envelope (PushChange.Version → RemoteChange.Version),
+	// not inside the project payload: the client's Project DTO does not declare it,
+	// so including it breaks decoding on every pull. Strip it before marshaling.
+	feed := project
+	feed.Version = ""
+	encoded, err := json.Marshal(&feed)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not encode project")
 		return

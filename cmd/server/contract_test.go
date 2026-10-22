@@ -498,6 +498,53 @@ func TestThePullPageAlwaysStatesHasMore(t *testing.T) {
 	}
 }
 
+// An update echoes the project back to the server, body including the `version`
+// the client read from a GET. That version travels on the envelope
+// (RemoteChange.Version), not inside the project payload: the client's Project
+// DTO does not declare it, so including it breaks decoding on every pull.
+func TestTheProjectUpdateOmitsVersionFromTheFeedPayload(t *testing.T) {
+	env := newContractEnv(t)
+	tokens := env.signIn(t)
+
+	// Fetch the stored project so the body carries the server's version.
+	getRec := env.do(t, http.MethodGet, "/v1/admin/projects/"+string(env.project.ID), tokens.AccessToken, nil)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get project = %d, body = %s", getRec.Code, getRec.Body.String())
+	}
+	var stored entities.Project
+	if err := json.Unmarshal(getRec.Body.Bytes(), &stored); err != nil {
+		t.Fatalf("decode stored project: %v", err)
+	}
+
+	// Echo it back with a change.
+	stored.Name = "Demo renamed"
+	rec := env.do(t, http.MethodPatch, "/v1/admin/projects/"+string(env.project.ID), tokens.AccessToken, stored)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update project = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	// Pull the project through the sync feed.
+	pullRec := env.do(t, http.MethodGet, "/v1/sync/changes/projects?limit=50", tokens.AccessToken, nil)
+	if pullRec.Code != http.StatusOK {
+		t.Fatalf("pull projects = %d, body = %s", pullRec.Code, pullRec.Body.String())
+	}
+
+	page := decodeInto[clientChangesPage](t, pullRec)
+	if len(page.Changes) == 0 {
+		t.Fatalf("no project changes in the feed: %s", pullRec.Body.String())
+	}
+
+	// The payload is a JSON string (the client's encoding). Decode it as a
+	// string, then as a map, and assert `version` is not a top-level key.
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(page.Changes[0].Payload), &payload); err != nil {
+		t.Fatalf("decode project payload: %v", err)
+	}
+	if _, ok := payload["version"]; ok {
+		t.Errorf("project payload carries a top-level `version` key; the client's Project DTO does not declare it, so it is a decoding failure on every pull: %s", page.Changes[0].Payload)
+	}
+}
+
 // The client's TeamPort reads this shape from the directory search.
 func TestTheUserObjectIsWhatTheClientDecodes(t *testing.T) {
 	env := newContractEnv(t)

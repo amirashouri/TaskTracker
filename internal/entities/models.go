@@ -134,7 +134,7 @@ type Project struct {
 	NextItemNumber int          `json:"nextItemNumber"`
 	CreatedAt      Timestamp    `json:"createdAt"`
 	UpdatedAt      Timestamp    `json:"updatedAt"`
-	Version        string       `json:"version"`
+	Version        string       `json:"version,omitempty"`
 }
 
 // Key formats a work-item key. Numbers are decimal, so item 10 is "TT-10"
