@@ -178,9 +178,13 @@ func TestProjectRoundTripMembersAndClientID(t *testing.T) {
 
 	const clientID = ProjectID("11111111-1111-1111-1111-111111111111")
 	project := &Project{
-		ID:             clientID,
-		KeyPrefix:      "TT",
-		Name:           "Demo",
+		ID:        clientID,
+		KeyPrefix: "TT",
+		Name:      "Demo",
+		Tags: []ProjectTag{
+			{ID: "33333333-3333-3333-3333-333333333333", Name: "Bug", Color: "red", Icon: "bug"},
+			{ID: "44444444-4444-4444-4444-444444444444", Name: "Mobile", Color: "blue", Icon: "mobile"},
+		},
 		MemberIDs:      []UserID{owner.ID},
 		NextItemNumber: 1,
 	}
@@ -201,8 +205,14 @@ func TestProjectRoundTripMembersAndClientID(t *testing.T) {
 	if len(got.MemberIDs) != 1 || !containsID(got.MemberIDs, owner.ID) {
 		t.Errorf("MemberIDs = %v, want just the owner %s", got.MemberIDs, owner.ID)
 	}
+	if len(got.Tags) != 2 || got.Tags[0].Name != "Bug" || got.Tags[1].Icon != "mobile" {
+		t.Errorf("Tags = %+v, want the two tags in order", got.Tags)
+	}
 
 	got.Name = "Renamed"
+	got.Tags = []ProjectTag{
+		{ID: "33333333-3333-3333-3333-333333333333", Name: "Defect", Color: "amber", Icon: "bug"},
+	}
 	got.MemberIDs = []UserID{owner.ID, member.ID}
 	if err := projects.Update(ctx, got); err != nil {
 		t.Fatalf("update: %v", err)
@@ -215,8 +225,32 @@ func TestProjectRoundTripMembersAndClientID(t *testing.T) {
 	if reloaded.Name != "Renamed" {
 		t.Errorf("Name = %q, want Renamed", reloaded.Name)
 	}
+	if len(reloaded.Tags) != 1 || reloaded.Tags[0].Name != "Defect" {
+		t.Errorf("Tags = %+v, want the replaced catalog", reloaded.Tags)
+	}
 	if len(reloaded.MemberIDs) != 2 {
 		t.Errorf("MemberIDs = %v, want two members", reloaded.MemberIDs)
+	}
+}
+
+func TestProjectWithoutTagsScansAnEmptySlice(t *testing.T) {
+	database := newTestDB(t)
+	projects := NewProjectRepository(database.DB)
+	ctx := context.Background()
+
+	project := &Project{KeyPrefix: "TT", Name: "Demo"}
+	if err := projects.Create(ctx, project); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := projects.GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	// A nil slice marshals as `null`, which the client's non-null list cannot
+	// decode; an empty slice is the wire contract.
+	if got.Tags == nil || len(got.Tags) != 0 {
+		t.Errorf("Tags = %#v, want an empty non-nil slice", got.Tags)
 	}
 }
 
@@ -299,6 +333,7 @@ func TestWorkItemRoundTrip(t *testing.T) {
 		StoryPoints:  intPtr(5),
 		Recurrence:   &Recurrence{Type: "weekly", Day: 2, Until: timestampPtr(1800000000000)},
 		BlockedByIDs: []WorkItemID{"22222222-2222-2222-2222-222222222222"},
+		TagIDs:       []TagID{"33333333-3333-3333-3333-333333333333"},
 	}
 	if err := workItems.Create(ctx, item); err != nil {
 		t.Fatalf("create: %v", err)
@@ -319,6 +354,9 @@ func TestWorkItemRoundTrip(t *testing.T) {
 	}
 	if len(got.BlockedByIDs) != 1 {
 		t.Errorf("BlockedByIDs = %v, want one entry", got.BlockedByIDs)
+	}
+	if len(got.TagIDs) != 1 || got.TagIDs[0] != TagID("33333333-3333-3333-3333-333333333333") {
+		t.Errorf("TagIDs = %v, want one tag", got.TagIDs)
 	}
 
 	stale := *got

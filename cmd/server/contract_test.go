@@ -833,7 +833,7 @@ func TestAdminProjectEditSavesTheProjectAndReachesTheFeed(t *testing.T) {
 	// Seed the change feed with an ordinary push, so there is a genuine sync
 	// payload and version to work from rather than a shape restated here.
 	seed := fmt.Sprintf(
-		`{"id":%q,"keyPrefix":"TT","name":"Demo","details":"","memberIds":[%q],"isArchived":false,"nextItemNumber":1,"createdAt":"1970-01-01T00:00:00Z","updatedAt":"1970-01-01T00:00:00Z","version":""}`,
+		`{"id":%q,"keyPrefix":"TT","name":"Demo","details":"","tags":[],"memberIds":[%q],"isArchived":false,"nextItemNumber":1,"createdAt":"1970-01-01T00:00:00Z","updatedAt":"1970-01-01T00:00:00Z","version":""}`,
 		string(env.project.ID), string(env.user.ID))
 	seeded := env.do(t, http.MethodPost, "/v1/sync/push", admin.AccessToken, map[string]any{
 		"changes": []map[string]any{{
@@ -941,7 +941,7 @@ func TestAdminProjectGetSeedsTheEditScreen(t *testing.T) {
 	// a field it skips.
 	assertWireKeys(t, "the admin project", got.Body.Bytes(),
 		[]string{
-			"id", "keyPrefix", "name", "details", "memberIds", "isArchived",
+			"id", "keyPrefix", "name", "details", "tags", "memberIds", "isArchived",
 			"nextItemNumber", "createdAt", "updatedAt", "version",
 		}, nil)
 
@@ -997,7 +997,7 @@ func TestAdminProjectCreateLandsTheProjectAndReachesTheFeed(t *testing.T) {
 	// one DTO.
 	assertWireKeys(t, "the created project", rec.Body.Bytes(),
 		[]string{
-			"id", "keyPrefix", "name", "details", "memberIds", "isArchived",
+			"id", "keyPrefix", "name", "details", "tags", "memberIds", "isArchived",
 			"nextItemNumber", "createdAt", "updatedAt", "version",
 		}, nil)
 
