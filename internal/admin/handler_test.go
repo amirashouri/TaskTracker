@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,5 +112,105 @@ func TestSearchWithNoQueryListsTheLiveDirectory(t *testing.T) {
 	}
 	if len(resp) != 1 || resp[0].ID != string(live.ID) {
 		t.Errorf("directory = %+v, want only the live member %s", resp, live.ID)
+	}
+}
+
+// resetCodeRequest mints a code the way the route does: the member is named by
+// the path, and the response hands the code to the caller — there is no mail
+// infrastructure, so this reply *is* the delivery (AGENTS.md §7).
+func resetCodeRequest(t *testing.T, handler *Handler, userID string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/users/"+userID+"/password-reset-code", nil)
+	req.SetPathValue("id", userID)
+	rec := httptest.NewRecorder()
+	handler.PasswordResetCode(rec, req)
+	return rec
+}
+
+func TestPasswordResetCodeReturnsAFreshUsableCode(t *testing.T) {
+	database := dbtest.NewDatabase(t)
+	users := entities.NewUserRepository(database.DB)
+	handler := NewHandler(users, auth.NewTokenStore(database.DB))
+	ctx := context.Background()
+
+	member := &entities.User{Email: "grace@example.com", PasswordHash: "x", Role: entities.RoleMember}
+	if err := users.Create(ctx, member); err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+
+	rec := resetCodeRequest(t, handler, string(member.ID))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("reset code = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// The key set is the client's DTO contract: no sent flag, no password — the
+	// code itself and when it dies, and nothing the client does not declare.
+	var resp struct {
+		Code      string `json:"code"`
+		ExpiresAt int64  `json:"expires_at"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode reset code: %v", err)
+	}
+	if resp.Code == "" {
+		t.Fatal("the response carries no code, so the admin has nothing to hand over")
+	}
+	if resp.ExpiresAt <= time.Now().UnixMilli() {
+		t.Errorf("expires_at = %d, want a future epoch-millisecond instant", resp.ExpiresAt)
+	}
+
+	// The code the member receives is the one that verifies against the row.
+	ok, err := users.VerifyResetCode(ctx, member.ID, resp.Code)
+	if err != nil || !ok {
+		t.Errorf("VerifyResetCode = %v, %v; want the minted code to verify", ok, err)
+	}
+
+	// Two mints are two different codes: nothing is reused across requests.
+	second := resetCodeRequest(t, handler, string(member.ID))
+	if second.Code == http.StatusCreated {
+		var again struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(second.Body.Bytes(), &again); err == nil && again.Code == resp.Code {
+			t.Error("a second mint returned the same code")
+		}
+	}
+}
+
+func TestPasswordResetCodeRefusesADeletedMember(t *testing.T) {
+	database := dbtest.NewDatabase(t)
+	users := entities.NewUserRepository(database.DB)
+	handler := NewHandler(users, auth.NewTokenStore(database.DB))
+	ctx := context.Background()
+
+	gone := &entities.User{Email: "gone@example.com", PasswordHash: "x", Role: entities.RoleMember}
+	if err := users.Create(ctx, gone); err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	if err := users.SetStatus(ctx, gone.ID, entities.StatusDeleted); err != nil {
+		t.Fatalf("delete member: %v", err)
+	}
+
+	rec := resetCodeRequest(t, handler, string(gone.ID))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("reset code for a deleted member = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "user is deleted") {
+		t.Errorf("body = %s, want it to say the user is deleted", rec.Body.String())
+	}
+}
+
+func TestPasswordResetCodeAnswersUserNotFound(t *testing.T) {
+	database := dbtest.NewDatabase(t)
+	users := entities.NewUserRepository(database.DB)
+	handler := NewHandler(users, auth.NewTokenStore(database.DB))
+
+	rec := resetCodeRequest(t, handler, string(entities.NewUserID()))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("reset code for an unknown member = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "user not found") {
+		t.Errorf("body = %s, want it to say the user was not found", rec.Body.String())
 	}
 }

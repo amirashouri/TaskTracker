@@ -22,6 +22,7 @@ import (
 	"github.com/amirashouri/tasktracker-server/internal/entities"
 	"github.com/amirashouri/tasktracker-server/internal/httpx"
 	"github.com/amirashouri/tasktracker-server/internal/middleware"
+	"github.com/amirashouri/tasktracker-server/internal/me"
 	"github.com/amirashouri/tasktracker-server/internal/profile"
 	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
 	"github.com/amirashouri/tasktracker-server/internal/sync"
@@ -94,6 +95,10 @@ func runServer() {
 	// write it, so it is not part of the admin router.
 	profileHandler := profile.NewHandler(userRepo)
 
+	// The password half of the caller's own account: change-password takes its
+	// own route because PATCH /v1/me is the profile write above.
+	meHandler := me.NewHandler(userRepo)
+
 	// Initialize sync handler
 	syncHandler := sync.NewHandler(syncEngine, jwtManager)
 
@@ -102,7 +107,7 @@ func runServer() {
 	projectHandler := admin.NewProjectHandler(entities.NewProjectRepository(database.DB), syncEngine)
 
 	// Setup HTTP handlers
-	mux := mount(authHandler, adminHandler, profileHandler, projectHandler, syncHandler, jwtManager, database.DB, syncEngine, cfg.AttachmentRoot, cfg.AttachmentMaxBytes, cfg.AttachmentDeadline())
+	mux := mount(authHandler, adminHandler, profileHandler, meHandler, projectHandler, syncHandler, jwtManager, database.DB, syncEngine, cfg.AttachmentRoot, cfg.AttachmentMaxBytes, cfg.AttachmentDeadline())
 
 	// Apply middleware chain
 	handler := middleware.Chain(
@@ -174,6 +179,7 @@ func mount(
 	authHandler *auth.Handler,
 	adminHandler *admin.Handler,
 	profileHandler *profile.Handler,
+	meHandler *me.Handler,
 	projectHandler *admin.ProjectHandler,
 	syncHandler *sync.Handler,
 	jwtManager *auth.JWTManager,
@@ -227,6 +233,7 @@ func mount(
 	mux.Handle("GET /v1/admin/users", adminMW(http.HandlerFunc(adminHandler.List)))
 	mux.Handle("PATCH /v1/admin/users/{id}", adminMW(http.HandlerFunc(adminHandler.Update)))
 	mux.Handle("DELETE /v1/admin/users/{id}", adminMW(http.HandlerFunc(adminHandler.Delete)))
+	mux.Handle("POST /v1/admin/users/{id}/password-reset-code", adminMW(http.HandlerFunc(adminHandler.PasswordResetCode)))
 
 	// Admin project routes. Projects are otherwise reachable only through the
 	// sync feed, which is scoped to membership; an admin manages every project.
@@ -240,6 +247,10 @@ func mount(
 	selfProfile := middleware.Auth(jwtManager)
 	mux.Handle("GET /v1/me", noStore(selfProfile(http.HandlerFunc(profileHandler.Get))))
 	mux.Handle("PATCH /v1/me", noStore(selfProfile(http.HandlerFunc(profileHandler.Update))))
+	// Change-password is an action with its own body, not a profile field patch,
+	// so it gets its own route rather than overloading PATCH /v1/me — which the
+	// client already decodes as the profile write (specs/user-self-profile.md).
+	mux.Handle("POST /v1/me/password", noStore(selfProfile(http.HandlerFunc(meHandler.ChangePassword))))
 
 	// Directory search (any authenticated user)
 	mux.Handle("GET /v1/users/search", middleware.Auth(jwtManager)(http.HandlerFunc(adminHandler.Search)))

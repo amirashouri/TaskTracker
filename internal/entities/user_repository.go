@@ -3,10 +3,12 @@ package entities
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -126,6 +128,76 @@ func (r *UserRepository) CountByRole(ctx context.Context, role string) (int, err
 		return 0, err
 	}
 	return n, nil
+}
+
+// The three ways a reset code can be refused. They are sentinels because the
+// change-password handler maps each to its own wire message, and matching on an
+// error string would break the contract the moment the wording is edited.
+var (
+	ErrResetCodeNotFound = errors.New("reset code not found")
+	ErrResetCodeUsed     = errors.New("reset code has already been used")
+	ErrResetCodeExpired  = errors.New("reset code has expired")
+)
+
+// GeneratePasswordResetCode creates a new time-limited, single-use reset code
+// for userID and returns it in the clear. The project owns no mail
+// infrastructure (AGENTS.md §7), so the caller — the admin endpoint — is what
+// hands the code to the member out of band; this row is the server's only copy.
+// Times are epoch milliseconds in both dialects, as everywhere in this schema.
+func (r *UserRepository) GeneratePasswordResetCode(ctx context.Context, userID UserID, ttl time.Duration) (string, error) {
+	code := uuid.NewString()
+	now := time.Now().UnixMilli()
+
+	query := `INSERT INTO password_reset_codes (code, user_id, expires_at, created_at)
+	          VALUES ($1, $2, $3, $4)`
+	if _, err := r.db.ExecContext(ctx, query, code, userID, now+ttl.Milliseconds(), now); err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+// VerifyResetCode checks that a reset code exists for this user, is unexpired
+// and unconsumed — and consumes it in the same call, so one code authorises
+// exactly one password change. The consumption is a guarded UPDATE, so two
+// concurrent verifications of the same code cannot both win.
+func (r *UserRepository) VerifyResetCode(ctx context.Context, userID UserID, code string) (bool, error) {
+	var (
+		consumed  bool
+		expiresAt int64
+	)
+	query := `SELECT consumed, expires_at FROM password_reset_codes WHERE code = $1 AND user_id = $2`
+	err := r.db.QueryRowContext(ctx, query, code, userID).Scan(&consumed, &expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrResetCodeNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	if consumed {
+		return false, ErrResetCodeUsed
+	}
+	if time.Now().UnixMilli() > expiresAt {
+		return false, ErrResetCodeExpired
+	}
+
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE password_reset_codes SET consumed = TRUE
+		 WHERE code = $1 AND user_id = $2 AND consumed = FALSE`, code, userID)
+	if err != nil {
+		return false, err
+	}
+	if n, err := result.RowsAffected(); err != nil || n != 1 {
+		return false, ErrResetCodeUsed
+	}
+	return true, nil
+}
+
+// SetPassword replaces the user's password hash. It is a dedicated write
+// because Update deliberately never carries the hash — an ordinary profile
+// patch must not be able to overwrite it — and change-password is the only
+// caller that may.
+func (r *UserRepository) SetPassword(ctx context.Context, id UserID, hash string) error {
+	return execOneRow(ctx, r.db, errUserNotFound, `UPDATE users SET password_hash=$1 WHERE id=$2`, hash, id)
 }
 
 // List returns every user that has not been soft-deleted, newest first.

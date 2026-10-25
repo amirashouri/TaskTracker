@@ -271,6 +271,53 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
+// ── Password reset code ───────────────────────────────────────────
+
+// passwordResetCodeTTL is the window the forgot-password flow allows: long
+// enough for an admin to hand a code over and a member to use it, short enough
+// that a code sitting in a chat window does not stay a credential forever.
+const passwordResetCodeTTL = 24 * time.Hour
+
+type adminPasswordResetCodeResponse struct {
+	Code string `json:"code"`
+	// ExpiresAt is epoch milliseconds, as every timestamp on this API.
+	ExpiresAt int64 `json:"expires_at"`
+}
+
+// PasswordResetCode generates a time-limited, single-use reset code for the
+// member on the route and returns it to the admin. The project owns no mail
+// infrastructure (AGENTS.md §7) — nothing emails the member — so handing the
+// code over here *is* the delivery: the admin passes it on out of band, which
+// is the flow the client's forgot-password sheet points at.
+func (h *Handler) PasswordResetCode(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "user id is required")
+		return
+	}
+
+	user, err := h.users.GetByID(r.Context(), entities.UserID(id))
+	if err != nil || user == nil {
+		httpx.WriteError(w, http.StatusBadRequest, "user not found")
+		return
+	}
+	if user.Status == entities.StatusDeleted {
+		httpx.WriteError(w, http.StatusBadRequest, "user is deleted")
+		return
+	}
+
+	code, err := h.users.GeneratePasswordResetCode(r.Context(), user.ID, passwordResetCodeTTL)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not generate reset code")
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusCreated, adminPasswordResetCodeResponse{
+		Code:      code,
+		ExpiresAt: time.Now().Add(passwordResetCodeTTL).UnixMilli(),
+	})
+}
+
 // ── Response shape ──────────────────────────────────────────────────
 
 type userResponse struct {

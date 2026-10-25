@@ -16,6 +16,7 @@ import (
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/dbtest"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
+	"github.com/amirashouri/tasktracker-server/internal/me"
 	"github.com/amirashouri/tasktracker-server/internal/profile"
 	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
 	"github.com/amirashouri/tasktracker-server/internal/sync"
@@ -159,6 +160,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 			auth.NewHandler(jwtManager, users, tokens, ratelimit.New(100, time.Minute), nil),
 			admin.NewHandler(users, tokens),
 			profile.NewHandler(users),
+			me.NewHandler(users),
 			admin.NewProjectHandler(entities.NewProjectRepository(database.DB), sync.NewEngine(database.DB, "")),
 			sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),
 			jwtManager,
@@ -1171,5 +1173,106 @@ func TestAdminProjectListSplitsActiveFromArchived(t *testing.T) {
 	bad := env.do(t, http.MethodGet, "/v1/admin/projects?status=deleted", admin.AccessToken, nil)
 	if bad.Code != http.StatusBadRequest {
 		t.Errorf("listing an unknown bucket = %d, want 400 (body %s)", bad.Code, bad.Body.String())
+	}
+}
+
+// clientResetCodeResponse mirrors the KMP `ResetCodeResponse`, transcribed from
+// TaskTrackerKMP's HttpMemberAdminRemote. The admin endpoint hands the code
+// back rather than emailing it — the project owns no mail infrastructure
+// (AGENTS.md §7) — so these two keys are the entire response.
+type clientResetCodeResponse struct {
+	Code      string `json:"code"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+// clientChangePasswordResponse mirrors the KMP `ChangePasswordResponse`,
+// transcribed from TaskTrackerKMP's HttpUserProfileGateway. Like the sign-in
+// pair, every field is required and the key set is closed.
+type clientChangePasswordResponse struct {
+	ID           string `json:"id"`
+	Email        string `json:"email"`
+	DisplayName  string `json:"display_name"`
+	PasswordHash string `json:"password_hash"`
+}
+
+// The whole forgot-password flow over the routes the client actually calls
+// (specs/t8.1-change-password.md): the admin mints a code, the member spends it
+// on a new password exactly once, and the new password is what signs in
+// afterwards. It also pins the route table itself — both handlers existed
+// before they were mounted, which is the exact failure mode a route-level test
+// exists to catch.
+func TestChangePasswordFlowOverTheMountedRoutes(t *testing.T) {
+	env := newContractEnv(t)
+	member := env.signIn(t)
+
+	// The route is mounted and auth-gated: without a token it is 401, not 404.
+	denied := env.do(t, http.MethodPost, "/v1/me/password", "", map[string]string{
+		"old_password_or_code": "correct horse battery",
+		"new_password":         "brand new secret",
+	})
+	if denied.Code != http.StatusUnauthorized {
+		t.Fatalf("change-password without a token = %d, want 401 (body %s)", denied.Code, denied.Body.String())
+	}
+
+	// A wrong credential refuses with a 400 the client renders verbatim.
+	wrong := env.do(t, http.MethodPost, "/v1/me/password", member.AccessToken, map[string]string{
+		"old_password_or_code": "not-the-password",
+		"new_password":         "brand new secret",
+	})
+	if wrong.Code != http.StatusBadRequest {
+		t.Fatalf("change-password with a wrong credential = %d, want 400 (body %s)", wrong.Code, wrong.Body.String())
+	}
+
+	// The admin mints a code for the member. The fixture user is an admin, so
+	// one account exercises both halves of the flow.
+	minted := env.do(t, http.MethodPost, "/v1/admin/users/"+string(env.user.ID)+"/password-reset-code", member.AccessToken, nil)
+	if minted.Code != http.StatusCreated {
+		t.Fatalf("mint reset code = %d, want 201 (body %s)", minted.Code, minted.Body.String())
+	}
+	assertWireKeys(t, "the reset code", minted.Body.Bytes(), []string{"code", "expires_at"}, nil)
+	code := decodeInto[clientResetCodeResponse](t, minted)
+	if code.Code == "" {
+		t.Fatal("the minted response carries no code, so there is nothing to hand over")
+	}
+	if code.ExpiresAt <= time.Now().UnixMilli() {
+		t.Errorf("expires_at = %d, want a future epoch-millisecond instant", code.ExpiresAt)
+	}
+
+	// The member spends the code on a new password.
+	changed := env.do(t, http.MethodPost, "/v1/me/password", member.AccessToken, map[string]string{
+		"old_password_or_code": code.Code,
+		"new_password":         "brand new secret",
+	})
+	if changed.Code != http.StatusOK {
+		t.Fatalf("change-password with the code = %d, want 200 (body %s)", changed.Code, changed.Body.String())
+	}
+	assertWireKeys(t, "the change-password response", changed.Body.Bytes(),
+		[]string{"id", "email", "display_name", "password_hash"}, nil)
+	applied := decodeInto[clientChangePasswordResponse](t, changed)
+	if applied.ID != string(env.user.ID) || applied.Email != env.user.Email {
+		t.Errorf("change-password answered %+v, want the caller's own row", applied)
+	}
+
+	// Single use: the spent code cannot authorise a second change.
+	replay := env.do(t, http.MethodPost, "/v1/me/password", member.AccessToken, map[string]string{
+		"old_password_or_code": code.Code,
+		"new_password":         "another secret 1",
+	})
+	if replay.Code != http.StatusBadRequest {
+		t.Fatalf("replaying the spent code = %d, want 400 (body %s)", replay.Code, replay.Body.String())
+	}
+
+	// The new password is the one that signs in, and the old one is gone.
+	signIn := func(password string) int {
+		rec := env.do(t, http.MethodPost, "/v1/auth/login", "", map[string]string{
+			"email": env.user.Email, "password": password,
+		})
+		return rec.Code
+	}
+	if got := signIn("brand new secret"); got != http.StatusOK {
+		t.Errorf("sign in with the new password = %d, want 200", got)
+	}
+	if got := signIn("correct horse battery"); got != http.StatusUnauthorized {
+		t.Errorf("sign in with the old password = %d, want 401", got)
 	}
 }
