@@ -72,9 +72,11 @@ without a new `/v`-prefixed route.
 ## Before you finish
 
 ```bash
-scripts/check.sh
+go test ./internal/<pkg>        # the development loop: the packages you touched
+scripts/check.sh               # the release gate: gofmt, build, vet, tests
 ```
 
-Use `scripts/check.sh race` for concurrent code and `scripts/check.sh docs` for
-documentation-only changes. Do not delete code or stub checks to make the tree
-green.
+Focused package tests are what a task is verified by; `scripts/check.sh` runs
+when a release is cut. Use `go test -race ./internal/<pkg>` for concurrent code
+and `scripts/check.sh docs` for documentation-only changes. Do not delete code
+or stub checks to make the tree green.

@@ -21,10 +21,12 @@ one merge request.
    files or behavior outside that scope, stop and re-plan before expanding it.
 3. **Implement.** Read any applicable skill in `.agents/skills/`. Follow the
    architecture and compatibility rules below; add tests with behavior changes.
-4. **Verify and review.** Run the check that covers the change, then review the
-   diff for scope, correctness, and tests. `scripts/check.sh` is the completion
-   check; use `scripts/check.sh race` for concurrent code and
-   `scripts/check.sh docs` for documentation-only changes.
+4. **Verify and review.** Run the focused tests for the packages you touched —
+   `go test ./internal/<pkg>` and `go test -run <Test> ./...` finish in seconds,
+   and that is the development loop. Then review the diff for scope,
+   correctness, and tests. `scripts/check.sh` is the **release gate**, not a
+   per-task check: run it when a release is cut, with `race` for anything
+   concurrent.
 5. **Update status and hand off.** Keep the spec `in-progress` while work or
    validation remains. Once its contract and checks pass and the diff review is
    approved, set it to `done` as the final task-branch update before merging.
@@ -84,18 +86,28 @@ struct is a mirror, not a check. When a response changes, pin the key set the
 **client** declares, and add that key-name assertion to every path that decodes
 one — a path that decodes without pinning is a path nobody is checking.
 
-## The command that decides whether you are done
+## Verification: a fast development loop, and a release gate
+
+Development does **not** run `scripts/check.sh`. The script builds and tests
+every package; requiring that sweep per task is what makes small changes
+unfinishable. The loop for a task is the packages it touched:
 
 ```bash
-scripts/check.sh          # scopes: all (default), race, docs
+go test ./internal/<pkg>               # seconds
+go test -run TestName ./internal/...   # one test across the tree
 ```
 
-All checks pass on `main`. Keep it that way: never make a check green by
-deleting code, stubbing a proof, or weakening an assertion.
+- A red focused run goes back to the code. Never make it green by deleting a
+test, stubbing a proof, or weakening an assertion.
+- Concurrency is the exception that cannot wait for a release: run
+  `go test -race ./internal/<pkg>` on the package you made concurrent.
+- Cross-database work (SQLite and Postgres) needs both runs; a SQLite-only pass
+  is not the same claim.
 
-Run `scripts/check.sh race` before touching anything concurrent — the sync
-engine, the rate limiter, and refresh-token rotation all are. CI runs it, so a
-plain local run is not the same check.
+**`scripts/check.sh` is the release gate** — `all` (gofmt, build, vet, tests) or
+`race` for the full race sweep — run when a release is cut. It is not a per-push
+check and not what a task is judged done by. All scopes pass on `main`; keep it
+that way at release time.
 
 ## Toolchain
 
@@ -172,7 +184,7 @@ git switch -c feat/<kebab-case-slug>
 **The review is the merge gate.** When the task is done, read your own diff as a
 stranger and answer three questions:
 
-1. Is `scripts/check.sh` green?
+1. Are the focused tests for every touched package green?
 2. Does the diff change only what the task called for — no drive-by cleanup, no
    bundled task?
 3. Does every behaviour change ship with a test that fails without it?

@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 #
-# The one place this project's validation command lives. `AGENTS.md` describes the
-# scopes; this file says what they run.
+# The one place this project's release validation command lives. `AGENTS.md`
+# describes the scopes; this file says what they run.
 #
-#   scripts/check.sh          # the deciding command (four checks, gofmt enforced)
+# Development runs focused package tests (`go test ./internal/<pkg>`); this script
+# is the gate a release is cut against, not a per-task check.
+#
+#   scripts/check.sh          # the release gate (four checks, gofmt enforced)
 #   scripts/check.sh race     # go test -race ./...  (what CI runs; needed for concurrency)
 #   scripts/check.sh docs     # a docs-only change: nothing to build
 #

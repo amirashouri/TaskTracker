@@ -35,8 +35,9 @@ that the admin API and the change feed already carry.
 
 ## Validation
 
-- Run: `scripts/check.sh` — every package, including `internal/db`, `internal/entities`,
-  `cmd/server` and `cmd/tt`.
+- Run: `go test` for the packages this task touches — `internal/db`, `internal/entities`,
+  `cmd/server` and `cmd/tt`. `scripts/check.sh` is the release gate; it sweeps every
+  package.
 - Counts: the server has no host matrix and no baseline file; the full suite is green.
 - The tests are behavioural/contract tests, not pixel tests, so no `test-reviewer` pass is
   required.

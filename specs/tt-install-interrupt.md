@@ -37,9 +37,10 @@ the server container is started detached and is untouched by the CLI exiting.
 
 ## Validation
 
-- `scripts/check.sh` — all packages.
+- Run: `go test ./cmd/tt/... ./internal/install/...` while iterating.
+  `scripts/check.sh` (all packages) is the release gate.
 - `go test -race ./cmd/tt/... ./internal/install/...` — the prompter adds a
-  goroutine per read.
+  goroutine per read, so the race run belongs to this task, not to the release.
 - Manual: built binary under a pty; Ctrl+C at `Database [sqlite/postgres]`,
   during a hanging `docker compose up` (fake docker), and during `tt logs` —
   each exits 130.

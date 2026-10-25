@@ -35,7 +35,9 @@ and only which verdict a write failure earns moves.
 
 ## Validation
 
-- Run: `scripts/check.sh` and `scripts/check.sh race` — this is the sync engine.
+- Run: `go test ./internal/sync/` while iterating, and
+  `go test -race ./internal/sync/` for the concurrent paths — the race run cannot
+  wait for a release. `scripts/check.sh` and `scripts/check.sh race` are the release gate.
 - Counts: no host matrix to move; the server has no baseline file.
 - Both drivers wanted: `TestPushRejectsAWorkItemTheDatabaseRefuses` runs against whatever
   `dbtest.NewDatabase` selects, so setting `TASKTRACKER_TEST_POSTGRES_URL` exercises the

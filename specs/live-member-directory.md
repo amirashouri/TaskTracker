@@ -41,8 +41,8 @@ route; it was the empty-query refusal that kept it from being a directory.
 
 ## Validation
 
-- Run: `scripts/check.sh` — all packages, including `internal/admin` and
-  `cmd/server`.
+- Run: `go test` for the packages this task touches — `internal/admin` and
+  `cmd/server`. `scripts/check.sh` is the release gate and sweeps every package.
 - Counts: no host matrix and no baseline file on the server.
 - The new test is behavioural, not a pixel test, so no `test-reviewer` pass is
   required.

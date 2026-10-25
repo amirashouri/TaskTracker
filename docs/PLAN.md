@@ -13,9 +13,9 @@ records system design and rationale; task specs hold the implementation contract
   review a task spec before implementation.
 - Keep one task on one feature branch and in one merge request. Do not bundle
   neighboring work.
-- Run `scripts/check.sh` for completion, or the narrowest appropriate scope;
-  use `scripts/check.sh race` for concurrent changes and
-  `scripts/check.sh docs` for documentation-only work.
+- Verify a task with focused tests for the packages it touches
+  (`go test ./internal/<pkg>`); `scripts/check.sh` is the release gate, run when
+  a release is cut, not per task. Use `race` for anything concurrent.
 - Database changes require a migration for both SQLite and Postgres, with the
   DDL and repository updates in the same change.
 

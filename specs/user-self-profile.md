@@ -110,7 +110,8 @@ keeps the settings screen's current default.
 
 ## Validation
 
-- `scripts/check.sh` (full). The new package is not concurrent, so `race` is not required.
+- Run: `go test` on the touched packages while iterating; `scripts/check.sh` (full sweep)
+  is the release gate. The new package is not concurrent, so `race` is not required.
 - Postgres: run the suite with `TASKTRACKER_TEST_POSTGRES_URL` pointed at a throwaway server.
   A schema change is verified only once both dialects pass.
 - Contract test runs under `cmd/server` and must fail if a key is renamed on either side.

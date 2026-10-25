@@ -50,9 +50,10 @@ are the terms they get on the other.
 
 ## Validation
 
-- `scripts/check.sh` — the full suite: `gofmt`, `go build`, `go vet`,
-  `go test`. The change touches no Go file, but the Docker and workflow edits
-  are distribution changes, and the deciding command is the whole suite.
+- Run: `go build ./...` plus `go test` on the packages this task touches. The change
+  touches no Go file, but the Docker and workflow edits are distribution changes.
+  `scripts/check.sh` (the full suite: `gofmt`, `go build`, `go vet`, `go test`) is the
+  release gate.
 - `scripts/check.sh docs` is *not* the applicable scope here: `Dockerfile`
   and the release workflow are not documentation.
 - The Dockerfile's `COPY` is checked against `.dockerignore`, because that

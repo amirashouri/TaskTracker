@@ -34,7 +34,7 @@ API, or roadmap decisions change.
 
 ## Validation
 
-- Run `scripts/check.sh docs`.
+- Docs-only change: nothing to build; `scripts/check.sh docs` is the release scope.
 - Run `git diff --check`.
 - Check changed Markdown links and search for stale claims that the active
   roadmap contains completed history or detailed plans.

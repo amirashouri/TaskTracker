@@ -83,8 +83,10 @@ What does **not** change:
 
 ## Validation
 
-- `scripts/check.sh all` and `scripts/check.sh race` (the sync engine and the blob file
-  writes are both concurrent paths). `go build ./...` + `go vet ./...` already clean; the
+- Iterate with `go test` on `internal/attachments`, `internal/entities` and
+  `internal/sync`, plus `go test -race` on the sync engine and the blob file writes — both
+  are concurrent paths, so `race` cannot wait for a release. `scripts/check.sh all` (with
+  `race`) is the release gate. `go build ./...` + `go vet ./...` already clean; the
   existing `config`/`entities`/`sync`/`cmd/server` suites pass.
 - New tests next to the code they cover (T12): `attachment_repository_test.go`,
   `engine_test.go` additions for `applyAttachment` (membership + conflict + delete-removes-blob),

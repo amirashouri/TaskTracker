@@ -33,7 +33,7 @@ Correct only stale paths to the skills.
 
 ## Validation
 
-- Run: `scripts/check.sh docs`.
+- Docs-only change: nothing to build; `scripts/check.sh docs` is the release scope.
 - Confirm no Markdown references remain to the old skill directory or specific
   agent tools.
 - Review the complete diff for scope and stale links.

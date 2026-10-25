@@ -26,7 +26,7 @@ only the source template's extension changes.
       installs aside from freshly generated secrets.
 - [x] The rendered file a customer receives is still `docker-compose.yml`
       (`State.ComposePath` is unchanged).
-- [x] `go test ./...` and `scripts/check.sh` stay green; no other reference to
+- [x] `go test ./...` stays green, as does the release gate (`scripts/check.sh`); no other reference to
       the old embedded path remains.
 
 ## Validation

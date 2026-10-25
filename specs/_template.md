@@ -27,10 +27,12 @@ check-script result proves it, not good intentions.
 
 ## Validation
 
-- Run `scripts/check.sh` for the full suite, or the narrowest applicable scope:
-  `scripts/check.sh docs` for documentation-only changes and
-  `scripts/check.sh race` for concurrent code — sync engine, rate limiter, or
-  refresh-token rotation.
+- Run `go test ./internal/<pkg>` (or `-run <Test> ./...`) for the packages this
+  task touched — that is the development loop and it finishes in seconds.
+  `scripts/check.sh` is the release gate and is not run per task; name any check
+  it still needs and leave it pending.
+- Run `go test -race ./internal/<pkg>` for concurrent code — sync engine, rate
+  limiter, or refresh-token rotation.
 - Never make a check green by deleting code, stubbing a proof, or weakening an
   assertion. Keep the checks green.
 - Tests added go next to the code they cover and ship with the behaviour change.
