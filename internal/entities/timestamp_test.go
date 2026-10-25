@@ -274,13 +274,14 @@ func TestEntitiesRoundTripThroughToAndFromJSON(t *testing.T) {
 	t.Run("sprint", func(t *testing.T) {
 		original := &Sprint{
 			ID: "s-1", ProjectID: "p-1", Name: "Sprint 1",
-			StartDate: when, EndDate: later, FinishedAt: &later,
+			StartDate: when, EndDate: later, FinishedAt: &later, IsLocked: true,
 			CreatedAt: when, UpdatedAt: later, Version: "v-1",
 		}
 		assertRoundTrips(t, original, original.ToJSON, func(raw []byte) (*Sprint, error) {
 			return SprintFromJSON(raw)
 		}, func(a, b *Sprint) bool {
 			return a.StartDate == b.StartDate && a.EndDate == b.EndDate &&
+				a.IsLocked == b.IsLocked &&
 				a.CreatedAt == b.CreatedAt && *a.FinishedAt == *b.FinishedAt
 		})
 	})

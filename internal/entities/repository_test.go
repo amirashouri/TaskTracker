@@ -370,6 +370,44 @@ func TestWorkItemRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSprintLockPersists(t *testing.T) {
+	database := newTestDB(t)
+	projects := NewProjectRepository(database.DB)
+	sprints := NewSprintRepository(database.DB)
+	ctx := context.Background()
+
+	project := &Project{KeyPrefix: "TT", Name: "Demo"}
+	if err := projects.Create(ctx, project); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	sprint := &Sprint{ProjectID: project.ID, Name: "Sprint 1", StartDate: 1000, EndDate: 2000}
+	if err := sprints.Create(ctx, sprint); err != nil {
+		t.Fatalf("create sprint: %v", err)
+	}
+
+	got, err := sprints.GetByID(ctx, sprint.ID)
+	if err != nil {
+		t.Fatalf("read sprint: %v", err)
+	}
+	if got.IsLocked {
+		t.Fatal("a new sprint came back locked")
+	}
+
+	got.IsLocked = true
+	if err := sprints.Update(ctx, got); err != nil {
+		t.Fatalf("lock sprint: %v", err)
+	}
+
+	locked, err := sprints.GetByID(ctx, sprint.ID)
+	if err != nil {
+		t.Fatalf("read locked sprint: %v", err)
+	}
+	if !locked.IsLocked {
+		t.Fatal("the lock was not stored")
+	}
+}
+
 func TestSprintAndCommentStaleUpdatesConflict(t *testing.T) {
 	database := newTestDB(t)
 	projects := NewProjectRepository(database.DB)

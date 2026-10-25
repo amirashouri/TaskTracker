@@ -230,6 +230,7 @@ type Sprint struct {
 	IsFinished      bool       `json:"isFinished"`
 	FinishedAt      *Timestamp `json:"finishedAt,omitempty"`
 	IsArchived      bool       `json:"isArchived"`
+	IsLocked        bool       `json:"isLocked"`
 	CreatedAt       Timestamp  `json:"createdAt"`
 	UpdatedAt       Timestamp  `json:"updatedAt"`
 	Version         string     `json:"version"`
