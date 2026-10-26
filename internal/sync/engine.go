@@ -162,6 +162,7 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 
 	if err != nil {
 		var conflict *versionConflict
+		var overlap *entities.SprintWindowOverlapError
 		switch {
 		case errors.As(err, &conflict):
 			result.Status = StatusConflict
@@ -175,6 +176,12 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 			if current, err := currentVersion(ctx, tx, change); err == nil {
 				result.Version = current
 			}
+		case errors.As(err, &overlap):
+			// The window collides with a sibling's row, so re-sending this
+			// payload cannot clear it: `rejected` is what stops the client
+			// retrying, and the message names the sprint in the way.
+			result.Status = StatusRejected
+			result.Message = overlap.Error()
 		default:
 			// A write the row's own values cannot satisfy is refused for good, and
 			// saying so spares the client a retry budget it cannot spend. The

@@ -453,6 +453,87 @@ func TestSprintAndCommentStaleUpdatesConflict(t *testing.T) {
 	}
 }
 
+// A sprint window is a schedule, not a label: two unfinished windows in one
+// project may not share an instant. The store cannot see a sprint another device
+// created while it was offline, so the repository is the only layer that can
+// refuse the second one when it is pushed.
+func TestSprintWindowsMayNotOverlapWhileBothAreOpen(t *testing.T) {
+	database := newTestDB(t)
+	projects := NewProjectRepository(database.DB)
+	sprints := NewSprintRepository(database.DB)
+	ctx := context.Background()
+
+	project := &Project{KeyPrefix: "TT", Name: "Demo"}
+	if err := projects.Create(ctx, project); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	first := &Sprint{ProjectID: project.ID, Name: "Sprint 1", StartDate: 1000, EndDate: 2000}
+	if err := sprints.Create(ctx, first); err != nil {
+		t.Fatalf("create first sprint: %v", err)
+	}
+
+	// 2001 is the first instant after 2000, the staggered cadence the rule allows.
+	second := &Sprint{ProjectID: project.ID, Name: "Sprint 2", StartDate: 2001, EndDate: 3000}
+	if err := sprints.Create(ctx, second); err != nil {
+		t.Fatalf("create the adjacent sprint: %v", err)
+	}
+
+	// Both endpoints are inclusive, so a window starting where another ends is a
+	// collision — the same answer the client's `sprintBlockingOverlap` gives.
+	refused := &Sprint{ProjectID: project.ID, Name: "Sprint 3", StartDate: 1500, EndDate: 1900}
+	err := sprints.Create(ctx, refused)
+	var overlap *SprintWindowOverlapError
+	if !errors.As(err, &overlap) {
+		t.Fatalf("create over an open window = %v, want SprintWindowOverlapError", err)
+	}
+	if overlap.Blocker != "Sprint 1" {
+		t.Errorf("blocker = %q, want the open sprint's name %q", overlap.Blocker, "Sprint 1")
+	}
+	if got, want := err.Error(), "'Sprint 1' overlaps this window. Finish it before starting another."; got != want {
+		t.Errorf("refusal = %q, want %q", got, want)
+	}
+	if stored, _ := sprints.GetByID(ctx, refused.ID); stored != nil {
+		t.Error("a refused sprint was stored")
+	}
+
+	// An edit onto an open sibling is refused with the edit's own tail.
+	second.StartDate, second.EndDate = 1900, 2500
+	err = sprints.Update(ctx, second)
+	if !errors.As(err, &overlap) {
+		t.Fatalf("move an open sprint onto another = %v, want SprintWindowOverlapError", err)
+	}
+	if got, want := err.Error(), "'Sprint 1' overlaps this window. Finish it before saving this sprint."; got != want {
+		t.Errorf("update refusal = %q, want %q", got, want)
+	}
+
+	// An edit that leaves the window clear of its siblings is not a conflict with
+	// itself: the row being updated is excluded from the search.
+	second.StartDate, second.EndDate = 3001, 4000
+	if err := sprints.Update(ctx, second); err != nil {
+		t.Fatalf("update without moving the window: %v", err)
+	}
+
+	// History is not a timetable: finishing the first sprint frees its window.
+	first.IsFinished = true
+	if err := sprints.Update(ctx, first); err != nil {
+		t.Fatalf("finish the first sprint: %v", err)
+	}
+	finished := &Sprint{
+		ProjectID: project.ID, Name: "Finished Sprint", StartDate: 3001, EndDate: 4000, IsFinished: true,
+	}
+	if err := sprints.Create(ctx, finished); err != nil {
+		t.Errorf("create a finished sprint over an open sprint = %v, want accepted", err)
+	}
+	finished.Name = "Renamed Finished Sprint"
+	if err := sprints.Update(ctx, finished); err != nil {
+		t.Errorf("update a finished sprint over an open sprint = %v, want accepted", err)
+	}
+	if err := sprints.Create(ctx, &Sprint{ProjectID: project.ID, Name: "Sprint 4", StartDate: 1000, EndDate: 2000}); err != nil {
+		t.Errorf("create over a finished sprint = %v, want accepted", err)
+	}
+}
+
 // Numbers are decimal, so the tenth key is TT-10 rather than the TT-: that
 // `string(rune(n+'0'))` produced.
 func TestAllocateKeyCountsInDecimal(t *testing.T) {
