@@ -489,6 +489,18 @@ clobbering.
 server-side decoding problem turns into every change the app ever sent being
 discarded rather than retried.
 
+**Sprint windows.** Two unfinished sprints in one project may not share an instant.
+Both endpoints are inclusive and match the client's scheduling rule. The server
+checks this on push: a create or update that overlaps an unfinished sibling returns
+`status: "rejected"` with `message` naming the blocker (e.g.
+`"'Sprint 1' overlaps this window. Finish it before starting another."` or
+`"'Sprint 1' overlaps this window. Finish it before saving this sprint."`). A
+finished sprint never blocks, and editing a sprint without moving its window does
+not block itself. The refusal is permanent, so re-sending the same payload will
+not succeed; a device that was offline and pushed a colliding sprint keeps its
+local row as a dead-lettered change. No response fields are added or removed by
+this rule.
+
 | Status | Body |
 | --- | --- |
 | `200` | `{"results": [...]}` |

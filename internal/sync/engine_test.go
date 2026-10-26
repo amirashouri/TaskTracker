@@ -1164,3 +1164,146 @@ func TestRemovingAMemberWithdrawsTheOwedReplay(t *testing.T) {
 		t.Errorf("a removed member sees %d project changes, want 0", len(page.Changes))
 	}
 }
+
+// The client's scheduling rule is enforced on the push path, not only in each device's
+// store. A device that was offline when a sibling sprint was created has no row to find,
+// so its own check passes and it pushes a second open window into the same project; the
+// server is the only layer that sees both, and the verdict is the only way to tell the
+// device. The status must be `rejected` rather than `retry_later`: re-sending the same
+// payload can never clear a window another sprint already occupies.
+func TestPushRefusesASprintWindowThatOverlapsAnOpenSprint(t *testing.T) {
+	engine, _, _, _, ownerID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(ownerID, "d1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1")
+	if res := pushOne(t, engine, ownerID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create project = %s (%s)", res.Status, res.Message)
+	}
+
+	sprintOne := &entities.Sprint{
+		ID:        entities.SprintID("d2d2d2d2-d2d2-d2d2-d2d2-d2d2d2d2d2d2"),
+		ProjectID: project.ID,
+		Name:      "Sprint 1",
+		StartDate: 1000,
+		EndDate:   2000,
+	}
+	onePayload, err := json.Marshal(sprintOne)
+	if err != nil {
+		t.Fatalf("marshal Sprint 1: %v", err)
+	}
+	first := pushOne(t, engine, ownerID, entities.PushChange{
+		ID: "e2", Entity: entities.OutboxEntitySprint, EntityID: string(sprintOne.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: onePayload,
+	})
+	if first.Status != StatusAccepted {
+		t.Fatalf("push Sprint 1 = %s (%s), want accepted", first.Status, first.Message)
+	}
+
+	// 1500 sits inside 1000–2000 without sharing an endpoint, which is the window a
+	// half-remembered "no dates in common" check would let through.
+	sprintTwo := &entities.Sprint{
+		ID:        entities.SprintID("d3d3d3d3-d3d3-d3d3-d3d3-d3d3d3d3d3d3"),
+		ProjectID: project.ID,
+		Name:      "Sprint 2",
+		StartDate: 1500,
+		EndDate:   2500,
+	}
+	twoPayload, err := json.Marshal(sprintTwo)
+	if err != nil {
+		t.Fatalf("marshal Sprint 2: %v", err)
+	}
+	refused := pushOne(t, engine, ownerID, entities.PushChange{
+		ID: "e3", Entity: entities.OutboxEntitySprint, EntityID: string(sprintTwo.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: twoPayload,
+	})
+	if refused.Status != StatusRejected {
+		t.Fatalf("push Sprint 2 over Sprint 1 = %s (%s), want rejected", refused.Status, refused.Message)
+	}
+	if got, want := refused.Message, "'Sprint 1' overlaps this window. Finish it before starting another."; got != want {
+		t.Errorf("refusal message = %q, want %q", got, want)
+	}
+
+	// A rejected change is not stored, so the second device pulls only the sprint that
+	// actually won the window.
+	page, err := engine.Pull(ctx, ownerID, ScopeWorkItems, "", 0)
+	if err != nil {
+		t.Fatalf("pull workItems: %v", err)
+	}
+	for _, change := range page.Changes {
+		if change.Entity == entities.OutboxEntitySprint && change.EntityID == string(sprintTwo.ID) {
+			t.Error("a refused sprint reached the feed, so every device would pull two open windows")
+		}
+	}
+
+	// History is not a timetable: finishing Sprint 1 frees its window, and the same
+	// payload that was refused is then accepted.
+	sprintOne.IsFinished = true
+	finishedPayload, err := json.Marshal(sprintOne)
+	if err != nil {
+		t.Fatalf("marshal finished Sprint 1: %v", err)
+	}
+	if res := pushOne(t, engine, ownerID, entities.PushChange{
+		ID: "e4", Entity: entities.OutboxEntitySprint, EntityID: string(sprintOne.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: finishedPayload, Version: first.Version,
+	}); res.Status != StatusAccepted {
+		t.Fatalf("finish Sprint 1 = %s (%s), want accepted", res.Status, res.Message)
+	}
+	if res := pushOne(t, engine, ownerID, entities.PushChange{
+		ID: "e5", Entity: entities.OutboxEntitySprint, EntityID: string(sprintTwo.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: twoPayload,
+	}); res.Status != StatusAccepted {
+		t.Fatalf("push Sprint 2 over a finished Sprint 1 = %s (%s), want accepted", res.Status, res.Message)
+	}
+
+	sprintThree := &entities.Sprint{
+		ID:        entities.SprintID("d4d4d4d4-d4d4-d4d4-d4d4-d4d4d4d4d4d4"),
+		ProjectID: project.ID,
+		Name:      "Sprint 3",
+		StartDate: 3000,
+		EndDate:   4000,
+	}
+	threePayload, err := json.Marshal(sprintThree)
+	if err != nil {
+		t.Fatalf("marshal Sprint 3: %v", err)
+	}
+	third := pushOne(t, engine, ownerID, entities.PushChange{
+		ID: "e6", Entity: entities.OutboxEntitySprint, EntityID: string(sprintThree.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: threePayload,
+	})
+	if third.Status != StatusAccepted {
+		t.Fatalf("push adjacent Sprint 3 = %s (%s), want accepted", third.Status, third.Message)
+	}
+
+	// Updating a sprint without moving its window must not conflict with itself.
+	sprintThree.Name = "Renamed Sprint 3"
+	renamedPayload, err := json.Marshal(sprintThree)
+	if err != nil {
+		t.Fatalf("marshal renamed Sprint 3: %v", err)
+	}
+	renamed := pushOne(t, engine, ownerID, entities.PushChange{
+		ID: "e7", Entity: entities.OutboxEntitySprint, EntityID: string(sprintThree.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: renamedPayload, Version: third.Version,
+	})
+	if renamed.Status != StatusAccepted {
+		t.Fatalf("update Sprint 3 without moving its window = %s (%s), want accepted", renamed.Status, renamed.Message)
+	}
+
+	// The inclusive endpoint at 2000 collides with Sprint 2 and is terminal on
+	// the client, with the update-specific sentence. Sprint dates travel at
+	// whole-second resolution, so the adjacent start above is 3000.
+	sprintThree.StartDate = 2000
+	overlappingPayload, err := json.Marshal(sprintThree)
+	if err != nil {
+		t.Fatalf("marshal overlapping Sprint 3: %v", err)
+	}
+	updateRefused := pushOne(t, engine, ownerID, entities.PushChange{
+		ID: "e8", Entity: entities.OutboxEntitySprint, EntityID: string(sprintThree.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: overlappingPayload, Version: renamed.Version,
+	})
+	if updateRefused.Status != StatusRejected {
+		t.Fatalf("update Sprint 3 over Sprint 2 = %s (%s), want rejected", updateRefused.Status, updateRefused.Message)
+	}
+	if got, want := updateRefused.Message, "'Sprint 2' overlaps this window. Finish it before saving this sprint."; got != want {
+		t.Errorf("update refusal message = %q, want %q", got, want)
+	}
+}

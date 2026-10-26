@@ -3,6 +3,7 @@ package entities
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 type SprintRepository struct {
@@ -32,8 +33,71 @@ func scanSprint(row scanner, s *Sprint) error {
 	return nil
 }
 
+// SprintWindowOverlapError is the refusal Create and Update return when a
+// sprint's window shares an instant with an unfinished sibling in the same
+// project.
+//
+// The sentence is the client store's own refusal, word for word: a push this
+// server turns down becomes a dead-lettered outbox row on the device that sent
+// it, and the verdict's message is the only place that device can read why. The
+// tail changes with the operation because an edit is not a new sprint.
+type SprintWindowOverlapError struct {
+	// Blocker is the name of the sprint whose window is in the way.
+	Blocker string
+	// Updating says the refused write was an edit rather than a create.
+	Updating bool
+}
+
+func (e *SprintWindowOverlapError) Error() string {
+	remedy := "starting another"
+	if e.Updating {
+		remedy = "saving this sprint"
+	}
+	return fmt.Sprintf("'%s' overlaps this window. Finish it before %s.", e.Blocker, remedy)
+}
+
+// refusesOverlap is the scheduling rule Create and Update share, and it mirrors
+// the client's `sprintBlockingOverlap` rather than re-inventing it: two
+// unfinished windows may not share an instant, both endpoints are inclusive, and
+// a finished sprint is history rather than a timetable.
+//
+// It has to run here because the store cannot see another device. A device that
+// is offline when a sibling is created passes its own store check — it has no
+// row to find — and would otherwise push two open sprints into one project, at
+// which point every device pulls the conflict and no layer reconciles it.
+//
+// The read joins the caller's transaction, so a push that arrives after the
+// first device's sprint is committed sees it and is refused. Two pushes that are
+// genuinely concurrent can still interleave under Postgres READ COMMITTED; the
+// case worth covering is the sequential offline create, which this does.
+func (r *SprintRepository) refusesOverlap(ctx context.Context, s *Sprint, updating bool) error {
+	// A finished sprint is being written as history: its window may sit over an
+	// open one, and refusing it would dead-letter an old sprint on a fresh
+	// device. The client's rule draws the same line.
+	if s.IsFinished {
+		return nil
+	}
+
+	siblings, err := r.ListByProject(ctx, s.ProjectID)
+	if err != nil {
+		return err
+	}
+	for _, sibling := range siblings {
+		if sibling.ID == s.ID || sibling.IsFinished {
+			continue
+		}
+		if s.Overlaps(sibling) {
+			return &SprintWindowOverlapError{Blocker: sibling.Name, Updating: updating}
+		}
+	}
+	return nil
+}
+
 func (r *SprintRepository) Create(ctx context.Context, s *Sprint) error {
 	s.ID = orNewID(s.ID, NewSprintID)
+	if err := r.refusesOverlap(ctx, s, false); err != nil {
+		return err
+	}
 	s.CreatedAt, s.UpdatedAt, s.Version = createStamp(s.CreatedAt)
 
 	query := `INSERT INTO sprints (` + sprintColumns + `)
@@ -50,6 +114,9 @@ func (r *SprintRepository) GetByID(ctx context.Context, id SprintID) (*Sprint, e
 }
 
 func (r *SprintRepository) Update(ctx context.Context, s *Sprint) error {
+	if err := r.refusesOverlap(ctx, s, true); err != nil {
+		return err
+	}
 	previous := s.Version
 	s.UpdatedAt = Now()
 	s.Version = newVersion()
