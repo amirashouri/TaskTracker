@@ -586,6 +586,10 @@ func removeAttachmentBlob(root, attachmentID string) {
 // The values are the singular wire spellings the `sync_log` stores (`entities.OutboxEntity*`),
 // not the plural path segments the client calls.
 type Scope struct {
+	// name is the wire spelling the membership-replay marker is keyed by
+	// (`entities.GrantScope*`), so a grant can be consumed by the feed that replayed it and
+	// no other.
+	name     string
 	entities []entities.OutboxEntity
 }
 
@@ -593,15 +597,15 @@ type Scope struct {
 // `sprints` route on purpose: a sprint reaches a client on `workItems`, and a feed of its
 // own would be a second copy of every sprint to every board watcher.
 var (
-	ScopeProjects = Scope{entities: []entities.OutboxEntity{
+	ScopeProjects = Scope{name: entities.GrantScopeProjects, entities: []entities.OutboxEntity{
 		entities.OutboxEntityProject,
 	}}
-	ScopeWorkItems = Scope{entities: []entities.OutboxEntity{
+	ScopeWorkItems = Scope{name: entities.GrantScopeWorkItems, entities: []entities.OutboxEntity{
 		entities.OutboxEntityWorkItem,
 		entities.OutboxEntitySprint,
 		entities.OutboxEntityComment,
 	}}
-	ScopeAttachments = Scope{entities: []entities.OutboxEntity{
+	ScopeAttachments = Scope{name: entities.GrantScopeAttachments, entities: []entities.OutboxEntity{
 		entities.OutboxEntityAttachment,
 	}}
 )
@@ -700,7 +704,46 @@ func (e *Engine) Pull(ctx context.Context, userID string, scope Scope, cursor st
 	}
 	page.ResyncRequired = after > 0 && (oldest == 0 || after < oldest-1)
 
+	// A membership granted after this device synced is the other thing a cursor cannot
+	// fix: everything the new member needs was logged before their cursor existed, and
+	// `id > cursor` will never reach it. The grant row says one replay is owed on this
+	// feed; an empty cursor *is* that replay, so it retires the grant instead of asking
+	// again — which is also what stops this from becoming a resync on every cycle.
+	granted, err := e.grantOwed(ctx, userID, scope)
+	if err != nil {
+		return nil, err
+	}
+	if granted {
+		if after > 0 {
+			page.ResyncRequired = true
+		} else if err := e.retireGrant(ctx, userID, scope); err != nil {
+			return nil, err
+		}
+	}
+
 	return page, nil
+}
+
+// grantOwed reports whether this caller's membership on this feed has never been
+// replayed. Written by `entities.stampGrant` when a member is added; see Pull for the
+// half of the handshake that answers it.
+func (e *Engine) grantOwed(ctx context.Context, userID string, scope Scope) (bool, error) {
+	var owed bool
+	err := e.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM membership_grants WHERE user_id = $1 AND scope = $2)`,
+		userID, scope.name).Scan(&owed)
+	return owed, err
+}
+
+// retireGrant clears the marker for this feed and member, called by the pull that starts
+// from an empty cursor: that request is the replay the grant asked for.
+//
+// The grant for the caller's other feeds is deliberately left alone. They have cursors of
+// their own, and each of them has to reach zero once before it is done.
+func (e *Engine) retireGrant(ctx context.Context, userID string, scope Scope) error {
+	_, err := e.db.ExecContext(ctx,
+		`DELETE FROM membership_grants WHERE user_id = $1 AND scope = $2`, userID, scope.name)
+	return err
 }
 
 // oldestCursor is the smallest id still retained for a scope, or 0 when the

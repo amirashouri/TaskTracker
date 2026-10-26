@@ -1005,3 +1005,162 @@ func TestTheWorkItemsScopeCarriesSprintsAndComments(t *testing.T) {
 			"must not widen who it is scoped to", len(outsiderPage.Changes))
 	}
 }
+
+// Membership is the one entitlement a cursor cannot deliver: a member added today needs
+// rows that were logged before their cursor existed.
+//
+// The reported symptom was exactly this shape — an account signed in, pulled its own
+// project up to some cursor, was then added to a project that already had sprints in it,
+// and saw an empty board. `id > cursor` cannot reach those rows, so the feed has to say
+// "start over" once, and then stop saying it.
+func TestAMemberAddedAfterSyncingIsAskedToResyncOnce(t *testing.T) {
+	engine, users, projects, _, ownerID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(ownerID, "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1")
+	if res := pushOne(t, engine, ownerID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create project = %s (%s)", res.Status, res.Message)
+	}
+	item := &entities.WorkItem{
+		ID:        entities.WorkItemID("a2a2a2a2-a2a2-a2a2-a2a2-a2a2a2a2a2a2"),
+		ProjectID: project.ID,
+		Key:       "TT-1",
+		Title:     "Logged before the membership existed",
+		Status:    entities.WorkItemStatusTodo,
+		Priority:  entities.PriorityMedium,
+	}
+	itemPayload, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal work item: %v", err)
+	}
+	if res := pushOne(t, engine, ownerID, entities.PushChange{
+		ID: "e2", Entity: entities.OutboxEntityWorkItem, EntityID: string(item.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: itemPayload,
+	}); res.Status != StatusAccepted {
+		t.Fatalf("push work item = %s (%s)", res.Status, res.Message)
+	}
+
+	// The device has synced something — its cursor is past these rows, which is the state
+	// that used to leave them invisible forever.
+	member := createUser(t, users, "late@example.com")
+	if err := projects.AddMember(ctx, project.ID, member.ID, "member"); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+
+	owed, err := engine.Pull(ctx, string(member.ID), ScopeWorkItems, "1", 0)
+	if err != nil {
+		t.Fatalf("pull with a cursor: %v", err)
+	}
+	if !owed.ResyncRequired {
+		t.Fatalf("a member added after the feed was read was not asked to resync: the item %s "+
+			"and every later change are behind their cursor", item.ID)
+	}
+
+	// The replay itself: an empty cursor, which must both deliver the old rows and retire
+	// the marker.
+	replay, err := engine.Pull(ctx, string(member.ID), ScopeWorkItems, "", 0)
+	if err != nil {
+		t.Fatalf("replay pull: %v", err)
+	}
+	if replay.ResyncRequired {
+		t.Errorf("the replay was itself answered with resyncRequired, which the engine treats " +
+			"as a second ask in one cycle and reports as a failure — it would loop")
+	}
+	found := false
+	for _, change := range replay.Changes {
+		if change.Entity == entities.OutboxEntityWorkItem && change.EntityID == string(item.ID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the replay carried %d changes and not the item %s it exists to deliver",
+			len(replay.Changes), item.ID)
+	}
+
+	// And it stops: the next pull with a cursor is an ordinary one again.
+	after, err := engine.Pull(ctx, string(member.ID), ScopeWorkItems, "1", 0)
+	if err != nil {
+		t.Fatalf("pull after the replay: %v", err)
+	}
+	if after.ResyncRequired {
+		t.Errorf("the grant survived its replay: every cycle from now on would resync this " +
+			"device, which is a feed that never catches up")
+	}
+
+	// Each feed keeps its own cursor, so clearing one must not clear the others: this
+	// member still owes a replay on `projects` and `attachments`.
+	projectsOwed, err := engine.Pull(ctx, string(member.ID), ScopeProjects, "1", 0)
+	if err != nil {
+		t.Fatalf("projects pull: %v", err)
+	}
+	if !projectsOwed.ResyncRequired {
+		t.Errorf("retiring the workItems grant also retired the projects one: that feed's " +
+			"cursor is separate, and its history would stay unread")
+	}
+}
+
+// A member who was already there owes nothing: the set is rewritten on every project save,
+// and a grant stamped for a survivor would resync every device each time a project is
+// renamed or re-tagged.
+func TestReSavingAProjectDoesNotAskExistingMembersToResync(t *testing.T) {
+	engine, _, projects, _, ownerID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(ownerID, "b1b1b1b1-b1b1-b1b1-b1b1-b1b1b1b1b1b1")
+	if res := pushOne(t, engine, ownerID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create project = %s (%s)", res.Status, res.Message)
+	}
+
+	stored, err := projects.GetByID(ctx, project.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("read project: %v (%v)", err, stored == nil)
+	}
+	stored.Name = "Renamed"
+	if err := projects.Update(ctx, stored); err != nil {
+		t.Fatalf("update project: %v", err)
+	}
+
+	page, err := engine.Pull(ctx, ownerID, ScopeProjects, "1", 0)
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if page.ResyncRequired {
+		t.Errorf("an edit that changed no member asked the project's existing members to " +
+			"resync: the grant is stamped for additions only")
+	}
+}
+
+// A member who is no longer on the project is not owed a replay of it, and must not be
+// told to start over for a project they can no longer read.
+func TestRemovingAMemberWithdrawsTheOwedReplay(t *testing.T) {
+	engine, users, projects, _, ownerID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(ownerID, "b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2")
+	if res := pushOne(t, engine, ownerID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create project = %s (%s)", res.Status, res.Message)
+	}
+
+	member := createUser(t, users, "removed@example.com")
+	if err := projects.AddMember(ctx, project.ID, member.ID, "member"); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+	if err := projects.RemoveMember(ctx, project.ID, member.ID); err != nil {
+		t.Fatalf("remove member: %v", err)
+	}
+
+	// Asserted on `projects` rather than `workItems`: an empty feed answers `resyncRequired`
+	// on its own (nothing survived, so the cursor cannot be trusted), which would hide
+	// whether the grant itself was withdrawn.
+	page, err := engine.Pull(ctx, string(member.ID), ScopeProjects, "1", 0)
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if page.ResyncRequired {
+		t.Errorf("a removed member was still owed a replay of a project they can no longer " +
+			"read, so every cycle would ask them to reread an empty feed")
+	}
+	if len(page.Changes) != 0 {
+		t.Errorf("a removed member sees %d project changes, want 0", len(page.Changes))
+	}
+}

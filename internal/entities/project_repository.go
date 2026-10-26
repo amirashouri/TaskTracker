@@ -72,7 +72,11 @@ func (r *ProjectRepository) Create(ctx context.Context, p *Project) error {
 			p.ID, p.KeyPrefix, p.Name, p.Details, tagsJSON, p.IsArchived, p.NextItemNumber, p.CreatedAt, p.UpdatedAt, p.Version); err != nil {
 			return err
 		}
-		return replaceMembers(ctx, q, p.ID, p.MemberIDs)
+		// No replay is owed here: a brand-new project has no history behind anyone's
+		// cursor — its creation is logged after them and arrives by cursor like any later
+		// change. A grant stamped at creation would send every creator and every member
+		// named at creation back to the start of the feed for nothing.
+		return replaceMembers(ctx, q, p.ID, p.MemberIDs, false)
 	})
 }
 
@@ -104,7 +108,8 @@ func (r *ProjectRepository) Update(ctx context.Context, p *Project) error {
 			p.KeyPrefix, p.Name, p.Details, tagsJSON, p.IsArchived, p.NextItemNumber, p.UpdatedAt, p.Version, p.ID, previous); err != nil {
 			return err
 		}
-		return replaceMembers(ctx, q, p.ID, p.MemberIDs)
+		// This project has a history, so a member who is new to it is owed a replay.
+		return replaceMembers(ctx, q, p.ID, p.MemberIDs, true)
 	})
 }
 
@@ -160,16 +165,35 @@ func (r *ProjectRepository) List(ctx context.Context, includeArchived bool) ([]*
 	return projects, nil
 }
 
+// AddMember grants a user a place on a project. A user who was not already a member
+// owes a replay of the project's history — see stampGrant — so the read and the two
+// writes share a transaction.
 func (r *ProjectRepository) AddMember(ctx context.Context, projectID ProjectID, userID UserID, role string) error {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)
+	return inTx(ctx, r.db, func(q Querier) error {
+		members, err := memberSet(ctx, q, projectID)
+		if err != nil {
+			return err
+		}
+		if _, err := q.ExecContext(ctx, `INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)
 	          ON CONFLICT (project_id, user_id) DO UPDATE SET role = $3`,
-		projectID, userID, role)
-	return err
+			projectID, userID, role); err != nil {
+			return err
+		}
+		if _, existed := members[userID]; existed {
+			return nil
+		}
+		return stampGrant(ctx, q, projectID, userID)
+	})
 }
 
 func (r *ProjectRepository) RemoveMember(ctx context.Context, projectID ProjectID, userID UserID) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM project_members WHERE project_id = $1 AND user_id = $2`, projectID, userID)
-	return err
+	return inTx(ctx, r.db, func(q Querier) error {
+		if _, err := q.ExecContext(ctx, `DELETE FROM project_members WHERE project_id = $1 AND user_id = $2`, projectID, userID); err != nil {
+			return err
+		}
+		_, err := q.ExecContext(ctx, `DELETE FROM membership_grants WHERE project_id = $1 AND user_id = $2`, projectID, userID)
+		return err
+	})
 }
 
 func (r *ProjectRepository) GetMembers(ctx context.Context, projectID ProjectID) ([]*User, error) {
@@ -213,7 +237,18 @@ func normalisedTags(tags []ProjectTag) []ProjectTag {
 }
 
 // replaceMembers makes project_members the single writable store for membership.
-func replaceMembers(ctx context.Context, exec Querier, projectID ProjectID, members []UserID) error {
+//
+// The set is rewritten wholesale, exactly as before — an edit resets every role to the
+// default — but the *previous* set is read first, because it is what says which members
+// are new. Only a member who was not here before owes a replay (stampGrant); stamping
+// everyone on every save would send every device back to the start of the feed each time
+// a project was renamed, which is a far worse cost than the resync it is trying to avoid.
+func replaceMembers(ctx context.Context, exec Querier, projectID ProjectID, members []UserID, stampAdditions bool) error {
+	previous, err := memberSet(ctx, exec, projectID)
+	if err != nil {
+		return err
+	}
+
 	if _, err := exec.ExecContext(ctx, `DELETE FROM project_members WHERE project_id = $1`, projectID); err != nil {
 		return err
 	}
@@ -228,6 +263,75 @@ func replaceMembers(ctx context.Context, exec Querier, projectID ProjectID, memb
 		}
 		seen[userID] = struct{}{}
 		if _, err := exec.ExecContext(ctx, `INSERT INTO project_members (project_id, user_id) VALUES ($1, $2)`, projectID, userID); err != nil {
+			return err
+		}
+		if !stampAdditions {
+			continue
+		}
+		if _, existed := previous[userID]; existed {
+			continue
+		}
+		if err := stampGrant(ctx, exec, projectID, userID); err != nil {
+			return err
+		}
+	}
+
+	// A member who was removed is no longer owed anything, and a grant left behind would
+	// make their next pull claim a resync for a project they can no longer read.
+	for userID := range previous {
+		if _, kept := seen[userID]; kept {
+			continue
+		}
+		if _, err := exec.ExecContext(ctx, `DELETE FROM membership_grants WHERE project_id = $1 AND user_id = $2`, projectID, userID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// The change feeds the sync engine serves, spelled as the client's `SyncScope` spells
+// them. A membership is owed a replay on every one of them, and each is a row of its own
+// in membership_grants because each feed keeps its own cursor: a marker consumed by the
+// `projects` pull would leave `workItems` and `attachments` behind theirs with nothing
+// left to say so.
+const (
+	GrantScopeProjects    = "projects"
+	GrantScopeWorkItems   = "workItems"
+	GrantScopeAttachments = "attachments"
+)
+
+var grantScopes = []string{GrantScopeProjects, GrantScopeWorkItems, GrantScopeAttachments}
+
+// memberSet reads the project's current members, as a set.
+func memberSet(ctx context.Context, q Querier, projectID ProjectID) (map[UserID]struct{}, error) {
+	rows, err := q.QueryContext(ctx, `SELECT user_id FROM project_members WHERE project_id = $1`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	members := map[UserID]struct{}{}
+	for rows.Next() {
+		var userID UserID
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		members[userID] = struct{}{}
+	}
+	return members, rows.Err()
+}
+
+// stampGrant records that a member's next pull has to replay the feeds from the start.
+//
+// This is the write half of the membership-replay handshake: the pull reads the same rows
+// (see the sync engine's Pull), answers `resyncRequired` while the caller's cursor is not
+// empty, and deletes them once a pull arrives at cursor zero — the replay that contains
+// the rows that were logged before the membership existed.
+func stampGrant(ctx context.Context, exec Querier, projectID ProjectID, userID UserID) error {
+	for _, scope := range grantScopes {
+		if _, err := exec.ExecContext(ctx, `INSERT INTO membership_grants (project_id, user_id, scope) VALUES ($1, $2, $3)
+	          ON CONFLICT (project_id, user_id, scope) DO NOTHING`,
+			projectID, userID, scope); err != nil {
 			return err
 		}
 	}
