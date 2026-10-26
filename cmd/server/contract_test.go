@@ -1276,3 +1276,61 @@ func TestChangePasswordFlowOverTheMountedRoutes(t *testing.T) {
 		t.Errorf("sign in with the old password = %d, want 401", got)
 	}
 }
+
+// A sprint the app pushed arrives on the same scope the app reads.
+//
+// The client has no `sprints` scope and never asks for one: its `SyncScope` says sprints and
+// comments ride `workItems`. This server, meanwhile, filtered that feed to
+// `entity = 'workItem'`, so a sprint committed to the log was invisible to every other
+// device — the reported symptom was a second sign-in that pulled all the cards and no
+// sprints. This test is the end-to-end shape of that: push like the phone does, pull like
+// the other phone does.
+func TestAPushedSprintArrivesOnTheWorkItemsScope(t *testing.T) {
+	env := newContractEnv(t)
+	tokens := env.signIn(t)
+
+	const sprintID = "d1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1"
+	// Every key here is the spelling `JSONCoding.json.encodeToString(Sprint.serializer(), …)`
+	// produces on the device, not the server struct's tags: `projectID`/`ownerID`, a null
+	// `goal`/`ownerID`/`finishedAt`, and microsecond timestamps. A test that pushed the
+	// server's own shape would pass while the real payload was rejected.
+	sprint := `{"id":"` + sprintID + `","projectID":"` + string(env.project.ID) + `",` +
+		`"name":"Sprint 1","goalStoryPoints":20,"goal":null,` +
+		`"startDate":"2026-09-01T00:00:00Z","endDate":"2026-09-14T00:00:00Z",` +
+		`"ownerID":null,"isFinished":false,"finishedAt":null,"isArchived":false,"isLocked":false,` +
+		`"createdAt":"2026-08-30T10:00:00.123456Z","updatedAt":"2026-08-30T10:00:00.123456Z"}`
+
+	pushed := env.do(t, http.MethodPost, "/v1/sync/push", tokens.AccessToken, clientPushBody{
+		Changes: []clientPushChange{{
+			ID: "sprint-1", Entity: "sprint", EntityID: sprintID, Operation: "upsert", Payload: sprint,
+		}},
+	})
+	if pushed.Code != http.StatusOK {
+		t.Fatalf("push = %d, body = %s", pushed.Code, pushed.Body.String())
+	}
+	var verdicts clientPushResponse
+	if err := json.Unmarshal(pushed.Body.Bytes(), &verdicts); err != nil {
+		t.Fatalf("decode verdicts: %v", err)
+	}
+	if len(verdicts.Results) != 1 || verdicts.Results[0].Status != "accepted" {
+		t.Fatalf("sprint push = %+v, want one accepted change", verdicts.Results)
+	}
+
+	rec := env.do(t, http.MethodGet, "/v1/sync/changes/workItems?limit=50", tokens.AccessToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pull = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	page := decodeInto[clientChangesPage](t, rec)
+
+	for _, change := range page.Changes {
+		if change.Entity == "sprint" && change.EntityID == sprintID {
+			if !strings.Contains(change.Payload, `"name":"Sprint 1"`) {
+				t.Errorf("the sprint came back with payload %q, want the document the client sent",
+					change.Payload)
+			}
+			return
+		}
+	}
+	t.Fatalf("the sprint was not on the workItems feed, so a second device never sees it: %s",
+		rec.Body.String())
+}

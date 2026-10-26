@@ -52,18 +52,18 @@ func (h *Handler) Push(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) PullProject(w http.ResponseWriter, r *http.Request) {
-	h.pull(w, r, entities.OutboxEntityProject)
+	h.pull(w, r, ScopeProjects)
 }
 
 func (h *Handler) PullWorkItem(w http.ResponseWriter, r *http.Request) {
-	h.pull(w, r, entities.OutboxEntityWorkItem)
+	h.pull(w, r, ScopeWorkItems)
 }
 
 func (h *Handler) PullAttachment(w http.ResponseWriter, r *http.Request) {
-	h.pull(w, r, entities.OutboxEntityAttachment)
+	h.pull(w, r, ScopeAttachments)
 }
 
-func (h *Handler) pull(w http.ResponseWriter, r *http.Request, entity entities.OutboxEntity) {
+func (h *Handler) pull(w http.ResponseWriter, r *http.Request, scope Scope) {
 	userID, ok := auth.UserFrom(r.Context())
 	if !ok {
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
@@ -82,7 +82,7 @@ func (h *Handler) pull(w http.ResponseWriter, r *http.Request, entity entities.O
 		limit = parsed
 	}
 
-	page, err := h.engine.Pull(r.Context(), userID, entity, query.Get("cursor"), limit)
+	page, err := h.engine.Pull(r.Context(), userID, scope, query.Get("cursor"), limit)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "sync failed")
 		return

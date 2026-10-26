@@ -76,7 +76,7 @@ func TestPushCreatesAndPullsBack(t *testing.T) {
 		t.Errorf("stored id = %s, want the pushed id %s", stored.ID, project.ID)
 	}
 
-	page, err := engine.Pull(ctx, userID, entities.OutboxEntityProject, "", 0)
+	page, err := engine.Pull(ctx, userID, ScopeProjects, "", 0)
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestPushCreatesAndPullsBack(t *testing.T) {
 		t.Error("pull should return a cursor")
 	}
 
-	empty, err := engine.Pull(ctx, userID, entities.OutboxEntityProject, page.NextCursor, 0)
+	empty, err := engine.Pull(ctx, userID, ScopeProjects, page.NextCursor, 0)
 	if err != nil {
 		t.Fatalf("pull after cursor: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestPullIsScopedToMembership(t *testing.T) {
 	}
 	outsider := createUser(t, users, "outsider@example.com")
 
-	ownerPage, err := engine.Pull(ctx, ownerID, entities.OutboxEntityProject, "", 0)
+	ownerPage, err := engine.Pull(ctx, ownerID, ScopeProjects, "", 0)
 	if err != nil {
 		t.Fatalf("owner pull: %v", err)
 	}
@@ -373,7 +373,7 @@ func TestPullIsScopedToMembership(t *testing.T) {
 		t.Fatalf("owner sees %d changes, want 1", len(ownerPage.Changes))
 	}
 
-	outsiderPage, err := engine.Pull(ctx, string(outsider.ID), entities.OutboxEntityProject, "", 0)
+	outsiderPage, err := engine.Pull(ctx, string(outsider.ID), ScopeProjects, "", 0)
 	if err != nil {
 		t.Fatalf("outsider pull: %v", err)
 	}
@@ -392,7 +392,7 @@ func TestPullDeliversProjectDeletesToEveryone(t *testing.T) {
 	pushOne(t, engine, ownerID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, ""))
 	outsider := createUser(t, users, "outsider@example.com")
 
-	before, err := engine.Pull(ctx, string(outsider.ID), entities.OutboxEntityProject, "", 0)
+	before, err := engine.Pull(ctx, string(outsider.ID), ScopeProjects, "", 0)
 	if err != nil {
 		t.Fatalf("pull before delete: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestPullDeliversProjectDeletesToEveryone(t *testing.T) {
 		t.Fatalf("delete = %s (%s)", res.Status, res.Message)
 	}
 
-	after, err := engine.Pull(ctx, string(outsider.ID), entities.OutboxEntityProject, "", 0)
+	after, err := engine.Pull(ctx, string(outsider.ID), ScopeProjects, "", 0)
 	if err != nil {
 		t.Fatalf("pull after delete: %v", err)
 	}
@@ -496,7 +496,7 @@ func TestPullAsksForAResyncWhenTheCursorIsTooOld(t *testing.T) {
 		t.Fatalf("create = %s (%s)", res.Status, res.Message)
 	}
 
-	fresh, err := engine.Pull(ctx, userID, entities.OutboxEntityProject, "", 0)
+	fresh, err := engine.Pull(ctx, userID, ScopeProjects, "", 0)
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestPullAsksForAResyncWhenTheCursorIsTooOld(t *testing.T) {
 		t.Fatalf("pruned %d rows, want 1", pruned)
 	}
 
-	stale, err := engine.Pull(ctx, userID, entities.OutboxEntityProject, fresh.NextCursor, 0)
+	stale, err := engine.Pull(ctx, userID, ScopeProjects, fresh.NextCursor, 0)
 	if err != nil {
 		t.Fatalf("pull after prune: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestPruneKeepsRecentRows(t *testing.T) {
 		t.Errorf("pruned %d recent rows, want 0", pruned)
 	}
 
-	page, err := engine.Pull(ctx, userID, entities.OutboxEntityProject, "", 0)
+	page, err := engine.Pull(ctx, userID, ScopeProjects, "", 0)
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -817,7 +817,7 @@ func TestApplyAdminProjectEditsAProjectTheAdminIsNotIn(t *testing.T) {
 	}
 
 	// The member pulls the edit: the row and the log committed together.
-	page, err := engine.Pull(ctx, ownerID, entities.OutboxEntityProject, "", 0)
+	page, err := engine.Pull(ctx, ownerID, ScopeProjects, "", 0)
 	if err != nil {
 		t.Fatalf("member pull: %v", err)
 	}
@@ -855,5 +855,153 @@ func TestPushStillRefusesANonMemberAfterTheAdminPathExists(t *testing.T) {
 
 	if res := pushOne(t, engine, string(admin.ID), projectChange(t, "e2", &edited, entities.OutboxOperationUpsert, stored.Version)); res.Status != StatusRejected {
 		t.Errorf("a non-member's push = %s, want rejected: the membership check was weakened", res.Status)
+	}
+}
+
+// A sprint has no feed of its own: it rides `workItems`, which is what the client reads.
+// This server used to filter that feed to exactly `entity = 'workItem'`, so a sprint's log
+// row was written, committed and then served to nobody — a second device pulled every card
+// and no sprint, and the row was behind its cursor before it could ever have learned to
+// look. The same applied to comments.
+//
+// The four assertions are the four things that must stay true together: the sprint and the
+// comment are on the workItems feed, a *second member* of the project receives them (the
+// reported "another account signed in and the sprint screen was empty"), the projects feed is
+// still a projects feed, and membership still governs the sprint rows.
+func TestTheWorkItemsScopeCarriesSprintsAndComments(t *testing.T) {
+	engine, users, projects, _, ownerID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(ownerID, "c1c1c1c1-c1c1-c1c1-c1c1-c1c1c1c1c1c1")
+	if res := pushOne(t, engine, ownerID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create project = %s (%s)", res.Status, res.Message)
+	}
+
+	item := &entities.WorkItem{
+		ID:        entities.WorkItemID("c2c2c2c2-c2c2-c2c2-c2c2-c2c2c2c2c2c2"),
+		ProjectID: project.ID,
+		Key:       "TT-1",
+		Title:     "Task",
+		Status:    entities.WorkItemStatusTodo,
+		Priority:  entities.PriorityMedium,
+	}
+	itemPayload, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal work item: %v", err)
+	}
+	if res := pushOne(t, engine, ownerID, entities.PushChange{
+		ID: "e2", Entity: entities.OutboxEntityWorkItem, EntityID: string(item.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: itemPayload,
+	}); res.Status != StatusAccepted {
+		t.Fatalf("push work item = %s (%s)", res.Status, res.Message)
+	}
+
+	now := entities.Now()
+	sprint := &entities.Sprint{
+		ID:        entities.SprintID("c3c3c3c3-c3c3-c3c3-c3c3-c3c3c3c3c3c3"),
+		ProjectID: project.ID,
+		Name:      "Sprint 1",
+		StartDate: now,
+		EndDate:   now,
+	}
+	sprintPayload, err := json.Marshal(sprint)
+	if err != nil {
+		t.Fatalf("marshal sprint: %v", err)
+	}
+	if res := pushOne(t, engine, ownerID, entities.PushChange{
+		ID: "e3", Entity: entities.OutboxEntitySprint, EntityID: string(sprint.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: sprintPayload,
+	}); res.Status != StatusAccepted {
+		t.Fatalf("push sprint = %s (%s), want accepted", res.Status, res.Message)
+	}
+
+	comment := &entities.Comment{
+		ID:         entities.CommentID("c4c4c4c4-c4c4-c4c4-c4c4-c4c4c4c4c4c4"),
+		WorkItemID: item.ID,
+		AuthorID:   entities.UserID(ownerID),
+		Body:       "On it",
+		CreatedAt:  now,
+	}
+	commentPayload, err := json.Marshal(comment)
+	if err != nil {
+		t.Fatalf("marshal comment: %v", err)
+	}
+	if res := pushOne(t, engine, ownerID, entities.PushChange{
+		ID: "e4", Entity: entities.OutboxEntityComment, EntityID: string(comment.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: commentPayload,
+	}); res.Status != StatusAccepted {
+		t.Fatalf("push comment = %s (%s), want accepted", res.Status, res.Message)
+	}
+
+	page, err := engine.Pull(ctx, ownerID, ScopeWorkItems, "", 0)
+	if err != nil {
+		t.Fatalf("pull workItems: %v", err)
+	}
+	delivered := map[entities.OutboxEntity][]string{}
+	for _, change := range page.Changes {
+		delivered[change.Entity] = append(delivered[change.Entity], change.EntityID)
+	}
+	for _, want := range []struct {
+		entity entities.OutboxEntity
+		id     string
+	}{
+		{entities.OutboxEntityWorkItem, string(item.ID)},
+		{entities.OutboxEntitySprint, string(sprint.ID)},
+		{entities.OutboxEntityComment, string(comment.ID)},
+	} {
+		found := false
+		for _, id := range delivered[want.entity] {
+			if id == want.id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("the %s %s did not come back on the workItems feed, so a client that pulls "+
+				"it never learns the row exists (feed carried: %v)", want.entity, want.id, delivered)
+		}
+	}
+
+	projectsPage, err := engine.Pull(ctx, ownerID, ScopeProjects, "", 0)
+	if err != nil {
+		t.Fatalf("pull projects: %v", err)
+	}
+	for _, change := range projectsPage.Changes {
+		if change.Entity != entities.OutboxEntityProject {
+			t.Errorf("the projects feed carried a %s change: a second copy of every non-project "+
+				"row to every client that already pulls workItems", change.Entity)
+		}
+	}
+
+	// The account that reported the empty sprint screen is a member of someone else's
+	// project, not its owner: the sprint rows must reach them too, because the feed is scoped
+	// by project membership rather than by who pushed the row.
+	member := createUser(t, users, "member@example.com")
+	if err := projects.AddMember(ctx, project.ID, member.ID, "member"); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+	memberPage, err := engine.Pull(ctx, string(member.ID), ScopeWorkItems, "", 0)
+	if err != nil {
+		t.Fatalf("member pull: %v", err)
+	}
+	sawSprint := false
+	for _, change := range memberPage.Changes {
+		if change.Entity == entities.OutboxEntitySprint && change.EntityID == string(sprint.ID) {
+			sawSprint = true
+		}
+	}
+	if !sawSprint {
+		t.Errorf("a member of the project saw %d workItems changes and no sprint %s: the sprint "+
+			"screen on their device stays empty", len(memberPage.Changes), sprint.ID)
+	}
+
+	outsider := createUser(t, users, "outsider@example.com")
+	outsiderPage, err := engine.Pull(ctx, string(outsider.ID), ScopeWorkItems, "", 0)
+	if err != nil {
+		t.Fatalf("outsider pull: %v", err)
+	}
+	if len(outsiderPage.Changes) != 0 {
+		t.Errorf("an outsider sees %d changes on the workItems feed, want 0 — widening the scope "+
+			"must not widen who it is scoped to", len(outsiderPage.Changes))
 	}
 }

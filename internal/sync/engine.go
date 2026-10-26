@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/amirashouri/tasktracker-server/internal/entities"
@@ -571,12 +572,60 @@ func removeAttachmentBlob(root, attachmentID string) {
 	_ = os.Remove(filepath.Join(root, attachmentID+".blob"))
 }
 
-// Pull returns the changes for one entity after the cursor, oldest first,
+// Scope is one change feed: the entities that travel on it.
+//
+// A scope is **not** an entity type, and this type exists because the feed used to be
+// filtered to exactly one entity. `workItems` carries work items, the sprints they belong
+// to and the comments on them — the client has always read that scope that way — so a
+// sprint's log row was written, committed and then served to nobody: a second device pulled
+// every card and no sprint, forever, because the row was behind its cursor by the time it
+// learned to look. The client is the fixed point here; the feed is what was wrong.
+//
+// `projects` and `attachments` are single-entity feeds and stay that way.
+//
+// The values are the singular wire spellings the `sync_log` stores (`entities.OutboxEntity*`),
+// not the plural path segments the client calls.
+type Scope struct {
+	entities []entities.OutboxEntity
+}
+
+// The three feeds the client pulls, named after its own `SyncScope` enum. There is no
+// `sprints` route on purpose: a sprint reaches a client on `workItems`, and a feed of its
+// own would be a second copy of every sprint to every board watcher.
+var (
+	ScopeProjects = Scope{entities: []entities.OutboxEntity{
+		entities.OutboxEntityProject,
+	}}
+	ScopeWorkItems = Scope{entities: []entities.OutboxEntity{
+		entities.OutboxEntityWorkItem,
+		entities.OutboxEntitySprint,
+		entities.OutboxEntityComment,
+	}}
+	ScopeAttachments = Scope{entities: []entities.OutboxEntity{
+		entities.OutboxEntityAttachment,
+	}}
+)
+
+// entityPlaceholders renders one `$n` per entity of the scope, starting at start, and
+// returns the arguments that pair with them. This is what keeps the two queries below
+// dialect-neutral: Postgres and SQLite both take an ordered `IN` list, and neither can bind
+// a slice as a single parameter.
+func (s Scope) entityPlaceholders(start int) (string, []any) {
+	marks := make([]string, len(s.entities))
+	args := make([]any, len(s.entities))
+	for i, entity := range s.entities {
+		marks[i] = "$" + strconv.Itoa(start+i)
+		args[i] = string(entity)
+	}
+	return strings.Join(marks, ", "), args
+}
+
+// Pull returns the changes for one scope after the cursor, oldest first,
 // scoped to the projects the caller is a member of. A project's own delete row
 // is the exception: it is delivered to every authenticated user, so a client
 // that has been removed from a project — or whose project was deleted — still
 // retires it locally instead of keeping it forever.
-func (e *Engine) Pull(ctx context.Context, userID string, entity entities.OutboxEntity, cursor string, limit int) (*entities.PullPage, error) {
+func (e *Engine) Pull(ctx context.Context, userID string, scope Scope, cursor string, limit int) (*entities.PullPage, error) {
 	after, err := parseCursor(cursor)
 	if err != nil {
 		return nil, err
@@ -588,15 +637,22 @@ func (e *Engine) Pull(ctx context.Context, userID string, entity entities.Outbox
 		limit = maxPullLimit
 	}
 
-	rows, err := e.db.QueryContext(ctx, `
+	// The entity list first, then the cursor, the caller and the page size — the
+	// placeholders are numbered off the scope's width rather than spelled out.
+	in, args := scope.entityPlaceholders(1)
+	cursorAt := len(args) + 1
+	// The membership predicate and the `LIMIT` are positional too, so the whole query is
+	// built once instead of being concatenated from two halves that could drift.
+	query := fmt.Sprintf(`
 		SELECT id, entity, entity_id, operation, payload, version
 		  FROM sync_log
-		 WHERE entity = $1 AND id > $2
-		   AND ( project_id IN (SELECT project_id FROM project_members WHERE user_id = $3)
-		         OR ($1 = 'project' AND operation = 'delete') )
+		 WHERE entity IN (%s) AND id > $%d
+		   AND ( project_id IN (SELECT project_id FROM project_members WHERE user_id = $%d)
+		         OR (entity = 'project' AND operation = 'delete') )
 		 ORDER BY id
-		 LIMIT $4`,
-		string(entity), after, userID, limit+1)
+		 LIMIT $%d`, in, cursorAt, cursorAt+1, cursorAt+2)
+
+	rows, err := e.db.QueryContext(ctx, query, append(args, after, userID, limit+1)...)
 	if err != nil {
 		return nil, err
 	}
@@ -638,7 +694,7 @@ func (e *Engine) Pull(ctx context.Context, userID string, entity entities.Outbox
 
 	// A cursor that points before the oldest retained row means rows were
 	// pruned under it: the client has missed changes and must start over.
-	oldest, err := e.oldestCursor(ctx, entity)
+	oldest, err := e.oldestCursor(ctx, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -647,13 +703,18 @@ func (e *Engine) Pull(ctx context.Context, userID string, entity entities.Outbox
 	return page, nil
 }
 
-// oldestCursor is the smallest id still retained for an entity, or 0 when the
+// oldestCursor is the smallest id still retained for a scope, or 0 when the
 // feed is empty. The (entity, created_at, id) index serves this ordering.
-func (e *Engine) oldestCursor(ctx context.Context, entity entities.OutboxEntity) (int64, error) {
+//
+// It spans every entity of the scope on purpose: a pruned sprint under the cursor is just as
+// lost to a client as a pruned work item, and a check that only looked at work items would
+// report a clean sync for a gap it never noticed.
+func (e *Engine) oldestCursor(ctx context.Context, scope Scope) (int64, error) {
+	in, args := scope.entityPlaceholders(1)
 	var oldest int64
 	err := e.db.QueryRowContext(ctx,
-		`SELECT id FROM sync_log WHERE entity = $1 ORDER BY created_at, id LIMIT 1`,
-		string(entity)).Scan(&oldest)
+		fmt.Sprintf(`SELECT id FROM sync_log WHERE entity IN (%s) ORDER BY created_at, id LIMIT 1`, in),
+		args...).Scan(&oldest)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
