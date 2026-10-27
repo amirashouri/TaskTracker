@@ -1,0 +1,12 @@
+-- 0011_password_reset_code_epoch_millis.sqlite.sql
+-- Intentionally empty: SQLite has nothing to repair here.
+--
+-- 0009 has always declared `expires_at BIGINT` / `created_at BIGINT` for this
+-- driver, and SQLite's types are loose enough that an int64 stored into even a
+-- `TIMESTAMP`-declared column reads back as an int64. The mismatch that 0011
+-- repairs is Postgres-only, because Postgres rejects the int64 outright.
+--
+-- The version exists so both dialects stay paired: a number with a file for
+-- only one driver fails TestMigrationsCoverBothDialects, and the runner records
+-- this version on SQLite without executing anything, which is the honest
+-- statement of "there is no work to do on this driver".
