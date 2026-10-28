@@ -23,7 +23,7 @@ internals — just a Linux host and a terminal.
 | `tailscale` | HTTPS via Tailscale Funnel (public) or Serve (tailnet-only). | Free Tailscale account |
 | `cloudflare` | HTTPS via Cloudflare Tunnel on your own domain. | Cloudflare account with a domain |
 
-> **Android note:** The Android client refuses cleartext HTTP to anything except `localhost` and `10.0.2.2`. If your team uses Android phones, you need `tailscale` or `cloudflare` — `lan` will not work.
+> **Mobile note:** All clients — desktop, Android, and iOS — work over `lan`. The first connection from a phone asks one permission (Android: local network; iOS: Local Network prompt), and plain HTTP stays inside your network. If your team also needs access from outside the LAN, use `tailscale` or `cloudflare`, which serve HTTPS.
 
 ## Step 0 — Install the `tt` CLI
 
@@ -223,7 +223,7 @@ Plain HTTP on your local network: trust this network, and do not forward this po
 
 This rewrites the compose file to publish `0.0.0.0:8080:8080` and verifies the LAN address works. **Do not forward this port to the internet.**
 
-> **Android caveat:** The Android client blocks cleartext HTTP to LAN addresses. Phones need a TLS provider (below).
+> **Mobile note:** Desktop and mobile clients all connect over `lan`. On the first connection a phone asks one permission (Android: local network; iOS: the Local Network prompt) — grant it and sign in. Plain HTTP is fine inside a network you trust; for access from outside the LAN use a TLS provider (below).
 
 ### Tailscale (public HTTPS or tailnet-only)
 
@@ -409,7 +409,7 @@ Removed.
 | `not enough free space` | Disk full | Free space or use `--data-dir` on a larger partition |
 | `JWT_SECRET must be set and at least 32 bytes` | Missing/short secret | Generate one: `openssl rand -hex 32` |
 | `server time within 1s of host` failed | Clock drift | Run `sudo systemctl restart systemd-timesyncd` or configure NTP |
-| `android: cleartext HTTP traffic not permitted` | Android blocks plain HTTP | Use `tailscale` or `cloudflare` provider; `lan` is plain HTTP |
+| `android: cleartext HTTP traffic not permitted` | A client build before mobile LAN parity, or a root pointing at a public host | Update the app; the client only allows plain HTTP to local addresses (`validateServerAddress` refuses public `http`) — use `tailscale` or `cloudflare` for public access |
 | `ATTACHMENT_MAX_BYTES exceeds Cloudflare's 100 MiB limit` | Attachment cap too high for Cloudflare | Lower `ATTACHMENT_MAX_BYTES` in `.env` or use `tailscale`/`lan` |
 | `tailscale: funnel: access denied` | Funnel disabled in ACLs | Enable Funnel for this node in Tailscale admin console |
 | `cloudflared: tunnel not found` | Tunnel deleted or wrong token | Re-run `tt expose --provider=cloudflare --domain ...` |

@@ -38,9 +38,10 @@ records system design and rationale; task specs hold the implementation contract
 
 Deliver a customer-run install and a supported way for teams to reach their own
 server. The project owns no infrastructure, hosted relay, domain, or customer
-credentials. `lan` is the default provider; remote access uses a provider the
-customer controls. The Android client's cleartext-HTTP restriction means phones
-need a remote HTTPS provider rather than plain LAN access.
+credentials. `lan` is the default provider and serves every client — desktop,
+Android, and iOS — over plain HTTP on the customer's network; remote access
+uses a provider the customer controls. The client permits plain HTTP only for
+local addresses and refuses a public `http://` root at save time.
 
 | Task | State | Intent | Depends on | Execution details |
 | --- | --- | --- | --- | --- |

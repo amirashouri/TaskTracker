@@ -283,12 +283,14 @@ provider for remote access with TLS.
 `install.json`. `tt install` (including a repair) rewrites the compose file to
 loopback; re-run `tt expose` after a repair.
 
-**Android caveat.** The Android client does not accept cleartext HTTP to an
-arbitrary LAN address; its network security configuration is deliberately not
-widened. A plain-HTTP LAN install therefore does not serve the Android client.
-Use a TLS provider (Tailscale or Cloudflare) for Android. The bare-metal path
-is the same trade-off: set `SERVER_BIND=0.0.0.0` (§4) and restrict the port
-with a firewall, but the traffic is still plain HTTP.
+**Mobile clients.** Desktop, Android, and iOS all connect over `lan`. The first
+connection from a phone asks one permission (Android: local network; iOS: the
+Local Network prompt) — grant it and sign in. The clients accept plain HTTP
+only for local addresses; a public `http://` root is refused by the client's
+own validation. Use a TLS provider (Tailscale or Cloudflare) for access from
+outside the LAN. The bare-metal path is the same trade-off: set
+`SERVER_BIND=0.0.0.0` (§4) and restrict the port with a firewall, but the
+traffic is still plain HTTP.
 
 ### Tailscale exposure (Docker and `tt`)
 

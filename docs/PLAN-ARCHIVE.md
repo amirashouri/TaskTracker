@@ -1207,6 +1207,18 @@ and iOS clients, and a phone needs a remote provider. That is a documentation fa
 a defect to work around; adding a LAN host to the cleartext allow-list at build time
 would put every customer's subnet in the shipped app.
 
+> **Addendum (2026-10-28):** the limitation above was reversed by the client task
+> `mobile-lan-plain-http` (`TaskTrackerKMP/specs/mobile-lan-plain-http.md`), which the
+> product owner requested: mobile devices are to reach the `lan` provider exactly like
+> desktop. The Android transport gate is now open (`<base-config cleartextTrafficPermitted>`)
+> and iOS declares `NSAllowsLocalNetworking` plus a local-network purpose string; the
+> paragraph's own premise was also wrong — iOS never actually worked over `lan`, because
+> ATS blocked it too. The policy did not move: the client's `validateServerAddress` still
+> accepts plain HTTP only for local addresses and refuses a public `http://` root at
+> save time on every platform, so the build-time-subnet objection does not apply to the
+> config-only change. `lan` now serves all three clients; the trusted-LAN warning and
+> the TLS providers for remote access stand.
+
 `tailscale` is not free of caveats and the docs must say so: Funnel is still beta, its
 bandwidth is capped at an unpublished number, and Tailscale describes the Personal plan
 as non-commercial use. It is the right default *remote* answer for a hobby-scale install
