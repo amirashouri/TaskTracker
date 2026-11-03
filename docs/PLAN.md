@@ -33,6 +33,7 @@ records system design and rationale; task specs hold the implementation contract
 | 7 — Client contract | Complete — details in the archive |
 | 8 — Admin management | Complete — details in the archive |
 | 9 — Customer install and exposure | Active; tasks below are pending or deferred |
+| 10 — Agent runs | Active; T10.1 started |
 
 ## Milestone 9 — Customer install and exposure
 
@@ -66,3 +67,29 @@ changes land before the CLI generates connect links. T9.1 and T9.2 are needed
 for remote-provider behavior; T9.9 precedes T9.10. T9.12 is additive to the
 install wizard, and T9.13 is last so it documents working commands. T9.11
 remains explicitly deferred.
+
+## Milestone 10 — Agent runs
+
+A work item in progress can be handed to an LLM agent. The agent runs as a
+worker on the machine that holds the code (`tt agent run`), so this server never
+calls a model, never stores a provider key, and never holds a working copy. It
+owns the queue, the runner credential, and the append-only progress log the app
+polls. Agent state stays outside the sync envelope: it is server-owned,
+time-sensitive, and not mergeable, and a new key on an existing response would
+break installed clients.
+
+| Task | State | Intent | Depends on | Execution details |
+| --- | --- | --- | --- | --- |
+| T10.1 | In progress | Agent-runs schema and lifecycle (migration 0012, repository, lease) | None | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
+| T10.2 | Pending | Runner API: claim, events, heartbeat, finish, token middleware | T10.1 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
+| T10.3 | Pending | App API: dispatch, read, cancel, runner registration | T10.2 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
+| T10.4 | Pending | `tt agent connect`, `status`, `disconnect`; `echo` worker | T10.3 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
+| T10.5 | Pending | `tt agent run`: providers, tool loop, cancel, lease heartbeats | T10.4 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
+
+### Milestone ordering
+
+T10.1 → T10.2 → T10.3 is the server path; the client's `11.1` starts once T10.3's
+contract test is green, because the client never decodes an unpinned server
+stub. T10.4 and T10.5 are the CLI worker and can proceed alongside the client
+work. Provider keys and model choice stay in the runner's own config on the
+developer's machine; nothing in this milestone adds a server secret.
