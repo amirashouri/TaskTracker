@@ -108,13 +108,23 @@ func runServer() {
 	// is the configured window a crashed worker's run survives.
 	agentRepo := entities.NewAgentRepository(database.DB)
 	agentHandler := agent.NewHandler(agentRepo, cfg.AgentLeaseTTL)
+	// The app side checks membership with the same query the change feed and the
+	// attachment API use, so a project member is the one definition of access.
+	agentApp := agent.NewAppHandler(
+		agentRepo,
+		entities.NewWorkItemRepository(database.DB),
+		entities.NewProjectRepository(database.DB),
+		entities.NewCommentRepository(database.DB),
+		userRepo,
+		syncEngine,
+	)
 
 	// Admin project screens read projects through the same engine, so an edit
 	// lands in the change feed the clients pull.
 	projectHandler := admin.NewProjectHandler(entities.NewProjectRepository(database.DB), syncEngine)
 
 	// Setup HTTP handlers
-	mux := mount(authHandler, adminHandler, profileHandler, meHandler, projectHandler, syncHandler, agentHandler, jwtManager, database.DB, syncEngine, cfg.AttachmentRoot, cfg.AttachmentMaxBytes, cfg.AttachmentDeadline())
+	mux := mount(authHandler, adminHandler, profileHandler, meHandler, projectHandler, syncHandler, agentHandler, agentApp, jwtManager, database.DB, syncEngine, cfg.AttachmentRoot, cfg.AttachmentMaxBytes, cfg.AttachmentDeadline())
 
 	// Apply middleware chain
 	handler := middleware.Chain(
@@ -194,10 +204,10 @@ func mount(
 	authHandler *auth.Handler,
 	adminHandler *admin.Handler,
 	profileHandler *profile.Handler,
-	meHandler *me.Handler,
-	projectHandler *admin.ProjectHandler,
+	meHandler *me.Handler, projectHandler *admin.ProjectHandler,
 	syncHandler *sync.Handler,
 	agentHandler *agent.Handler,
+	agentApp *agent.AppHandler,
 	jwtManager *auth.JWTManager,
 	database *sql.DB,
 	syncEngine *sync.Engine,
@@ -248,6 +258,17 @@ func mount(
 	mux.Handle("POST /v1/agent/runs/{id}/events", agentHandler.Authenticate(http.HandlerFunc(agentHandler.AppendEvents)))
 	mux.Handle("POST /v1/agent/runs/{id}/heartbeat", agentHandler.Authenticate(http.HandlerFunc(agentHandler.Heartbeat)))
 	mux.Handle("POST /v1/agent/runs/{id}/finish", agentHandler.Authenticate(http.HandlerFunc(agentHandler.Finish)))
+
+	// Agent app routes. A user JWT, scoped by project membership: dispatch, read
+	// the progress log, cancel, and manage the caller's paired machines.
+	appUser := middleware.Auth(jwtManager)
+	mux.Handle("POST /v1/agent/runs", appUser(http.HandlerFunc(agentApp.Dispatch)))
+	mux.Handle("GET /v1/agent/runs", appUser(http.HandlerFunc(agentApp.ListRuns)))
+	mux.Handle("GET /v1/agent/runs/{id}", appUser(http.HandlerFunc(agentApp.GetRun)))
+	mux.Handle("POST /v1/agent/runs/{id}/cancel", appUser(http.HandlerFunc(agentApp.Cancel)))
+	mux.Handle("POST /v1/agent/runners", appUser(http.HandlerFunc(agentApp.RegisterRunner)))
+	mux.Handle("GET /v1/agent/runners", appUser(http.HandlerFunc(agentApp.ListRunners)))
+	mux.Handle("DELETE /v1/agent/runners/{id}", appUser(http.HandlerFunc(agentApp.RevokeRunner)))
 
 	// Admin routes (admin only)
 	adminMW := func(handler http.HandlerFunc) http.Handler {

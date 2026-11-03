@@ -1,0 +1,618 @@
+package agent
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/amirashouri/tasktracker-server/internal/auth"
+	"github.com/amirashouri/tasktracker-server/internal/entities"
+	"github.com/amirashouri/tasktracker-server/internal/httpx"
+)
+
+const (
+	// defaultRunsPage is how many runs an item's history shows at once.
+	defaultRunsPage = 20
+	maxRunsPage     = 50
+	// eventPageSize is the most progress lines one poll returns. The client
+	// polls with afterSeq, so a long run pages rather than truncating.
+	eventPageSize = 200
+	// maxRunnerNameLength matches the profile fields' limit: a name is a label
+	// on a settings row, not a free-form note.
+	maxRunnerNameLength = 120
+)
+
+// Membership is the one question this surface asks about a project: may this
+// user see and dispatch its work? sync.Engine satisfies it, so the check is the
+// same query the change feed and the attachment API use.
+type Membership interface {
+	IsMember(ctx context.Context, userID, projectID string) (bool, error)
+}
+
+// AppHandler serves the app-facing half of agent runs: dispatching a work item,
+// reading progress, cancelling, and managing the caller's paired machines.
+//
+// Everything here authenticates a user JWT and is scoped by project membership.
+// The worker half lives in Handler and accepts only an opaque runner token; the
+// two credentials are never interchangeable.
+type AppHandler struct {
+	repo      *entities.AgentRepository
+	workItems *entities.WorkItemRepository
+	projects  *entities.ProjectRepository
+	comments  *entities.CommentRepository
+	users     *entities.UserRepository
+	members   Membership
+}
+
+func NewAppHandler(
+	repo *entities.AgentRepository,
+	workItems *entities.WorkItemRepository,
+	projects *entities.ProjectRepository,
+	comments *entities.CommentRepository,
+	users *entities.UserRepository,
+	members Membership,
+) *AppHandler {
+	return &AppHandler{
+		repo:      repo,
+		workItems: workItems,
+		projects:  projects,
+		comments:  comments,
+		users:     users,
+		members:   members,
+	}
+}
+
+// appRunResponse is the run as the app sees it: no task snapshot and no lease,
+// which are the worker's business. The Kotlin DTO declares `runnerId`,
+// `startedAt` and `finishedAt` with defaults, so those keys may be omitted; every
+// other key is required and always present.
+type appRunResponse struct {
+	ID              entities.AgentRunID     `json:"id"`
+	WorkItemID      entities.WorkItemID     `json:"workItemId"`
+	ProjectID       entities.ProjectID      `json:"projectId"`
+	Status          entities.AgentRunStatus `json:"status"`
+	RequestedBy     entities.UserID         `json:"requestedBy"`
+	RunnerID        *entities.AgentRunnerID `json:"runnerId,omitempty"`
+	CancelRequested bool                    `json:"cancelRequested"`
+	CreatedAt       entities.Timestamp      `json:"createdAt"`
+	StartedAt       *entities.Timestamp     `json:"startedAt,omitempty"`
+	FinishedAt      *entities.Timestamp     `json:"finishedAt,omitempty"`
+	Summary         string                  `json:"summary"`
+	Error           string                  `json:"error"`
+}
+
+func appRunFrom(run entities.AgentRun) appRunResponse {
+	return appRunResponse{
+		ID:              run.ID,
+		WorkItemID:      run.WorkItemID,
+		ProjectID:       run.ProjectID,
+		Status:          run.Status,
+		RequestedBy:     run.RequestedBy,
+		RunnerID:        run.RunnerID,
+		CancelRequested: run.CancelRequested,
+		CreatedAt:       run.CreatedAt,
+		StartedAt:       run.StartedAt,
+		FinishedAt:      run.FinishedAt,
+		Summary:         run.Summary,
+		Error:           run.Error,
+	}
+}
+
+type appEventResponse struct {
+	Seq       int64              `json:"seq"`
+	Kind      string             `json:"kind"`
+	Message   string             `json:"message"`
+	Payload   string             `json:"payload"`
+	CreatedAt entities.Timestamp `json:"createdAt"`
+}
+
+type appRunnerResponse struct {
+	ID         entities.AgentRunnerID `json:"id"`
+	Name       string                 `json:"name"`
+	Provider   string                 `json:"provider"`
+	ModelLabel string                 `json:"modelLabel"`
+	LastSeenAt *entities.Timestamp    `json:"lastSeenAt,omitempty"`
+	RevokedAt  *entities.Timestamp    `json:"revokedAt,omitempty"`
+	CreatedAt  entities.Timestamp     `json:"createdAt"`
+}
+
+func appRunnerFrom(runner entities.AgentRunner) appRunnerResponse {
+	return appRunnerResponse{
+		ID:         runner.ID,
+		Name:       runner.Name,
+		Provider:   runner.Provider,
+		ModelLabel: runner.ModelLabel,
+		LastSeenAt: runner.LastSeenAt,
+		RevokedAt:  runner.RevokedAt,
+		CreatedAt:  runner.CreatedAt,
+	}
+}
+
+// dispatchRequest names the item to hand to an agent.
+type dispatchRequest struct {
+	WorkItemID entities.WorkItemID `json:"workItemId"`
+}
+
+type runResponse struct {
+	Run appRunResponse `json:"run"`
+}
+
+// Dispatch queues a work item for an agent.
+//
+// Three preconditions, checked in the order that gives the most useful answer:
+// the item exists, the caller is a member of its project, and it is in progress.
+// A second live run is refused by the repository's partial index rather than by
+// a read here, because two devices can pass a read at the same instant.
+func (h *AppHandler) Dispatch(w http.ResponseWriter, r *http.Request) {
+	userID, ok := callerID(r)
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
+	var req dispatchRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil || req.WorkItemID == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "workItemId is required")
+		return
+	}
+
+	ctx := r.Context()
+	item, err := h.workItems.GetByID(ctx, req.WorkItemID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the work item")
+		return
+	}
+	if item == nil {
+		httpx.WriteError(w, http.StatusNotFound, "work item not found")
+		return
+	}
+	if !h.requireMember(ctx, w, userID, item.ProjectID) {
+		return
+	}
+	if item.Status != entities.WorkItemStatusInProgress {
+		httpx.WriteError(w, http.StatusConflict, "work item is not in progress")
+		return
+	}
+
+	project, err := h.projects.GetByID(ctx, item.ProjectID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the project")
+		return
+	}
+	if project == nil {
+		httpx.WriteError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	document, err := h.buildTaskDocument(ctx, *item, *project)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not prepare the task")
+		return
+	}
+
+	run := &entities.AgentRun{
+		WorkItemID:   item.ID,
+		ProjectID:    item.ProjectID,
+		RequestedBy:  userID,
+		TaskDocument: document,
+	}
+	if err := h.repo.CreateRun(ctx, run); err != nil {
+		if errors.Is(err, entities.ErrAgentRunActive) {
+			httpx.WriteError(w, http.StatusConflict, "an agent run is already active for this work item")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, "could not start the run")
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusCreated, runResponse{Run: appRunFrom(*run)})
+}
+
+type runsResponse struct {
+	Runs []appRunResponse `json:"runs"`
+}
+
+// ListRuns returns an item's recent runs, newest first. The app calls it when the
+// editor opens: a run that finished while the app was closed is normal, and this
+// is how its result is recovered.
+func (h *AppHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
+	userID, ok := callerID(r)
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
+	query := r.URL.Query()
+	workItemID := entities.WorkItemID(strings.TrimSpace(query.Get("workItemId")))
+	if workItemID == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "workItemId is required")
+		return
+	}
+
+	limit := defaultRunsPage
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		if parsed < maxRunsPage {
+			limit = parsed
+		} else {
+			limit = maxRunsPage
+		}
+	}
+
+	ctx := r.Context()
+	item, err := h.workItems.GetByID(ctx, workItemID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the work item")
+		return
+	}
+	if item == nil {
+		httpx.WriteError(w, http.StatusNotFound, "work item not found")
+		return
+	}
+	if !h.requireMember(ctx, w, userID, item.ProjectID) {
+		return
+	}
+
+	runs, err := h.repo.ListRunsByWorkItem(ctx, workItemID, limit)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the runs")
+		return
+	}
+	response := runsResponse{Runs: make([]appRunResponse, 0, len(runs))}
+	for _, run := range runs {
+		response.Runs = append(response.Runs, appRunFrom(*run))
+	}
+	httpx.WriteJSON(w, http.StatusOK, response)
+}
+
+// EventPageSize is exported for the client and its tests: one poll returns at
+// most this many progress lines, and `hasMore` says whether to poll again at once.
+const EventPageSize = eventPageSize
+
+type runDetailResponse struct {
+	Run     appRunResponse     `json:"run"`
+	Events  []appEventResponse `json:"events"`
+	HasMore bool               `json:"hasMore"`
+}
+
+// GetRun is the progress sheet's one round trip: the run's state plus the events
+// after the caller's cursor. `hasMore` is always present — the client does not
+// default it, because a missing value would silently end a page early.
+func (h *AppHandler) GetRun(w http.ResponseWriter, r *http.Request) {
+	userID, ok := callerID(r)
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
+	ctx := r.Context()
+	run, err := h.repo.GetRun(ctx, entities.AgentRunID(r.PathValue("id")))
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the run")
+		return
+	}
+	if run == nil {
+		httpx.WriteError(w, http.StatusNotFound, "agent run not found")
+		return
+	}
+	if !h.requireMember(ctx, w, userID, run.ProjectID) {
+		return
+	}
+
+	afterSeq := int64(0)
+	if raw := r.URL.Query().Get("afterSeq"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			httpx.WriteError(w, http.StatusBadRequest, "invalid afterSeq")
+			return
+		}
+		afterSeq = parsed
+	}
+
+	// One extra row is the answer to "is there another page", rather than a
+	// second COUNT that could disagree with the page it describes.
+	events, err := h.repo.ListEventsAfter(ctx, run.ID, afterSeq, eventPageSize+1)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the run's progress")
+		return
+	}
+	hasMore := len(events) > eventPageSize
+	if hasMore {
+		events = events[:eventPageSize]
+	}
+	page := make([]appEventResponse, 0, len(events))
+	for _, event := range events {
+		page = append(page, appEventResponse{
+			Seq:       event.Seq,
+			Kind:      event.Kind,
+			Message:   event.Message,
+			Payload:   event.Payload,
+			CreatedAt: event.CreatedAt,
+		})
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, runDetailResponse{Run: appRunFrom(*run), Events: page, HasMore: hasMore})
+}
+
+// Cancel asks the runner to stop. It takes effect at the worker's next heartbeat,
+// so the response is "requested", not "stopped".
+func (h *AppHandler) Cancel(w http.ResponseWriter, r *http.Request) {
+	userID, ok := callerID(r)
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
+	ctx := r.Context()
+	existing, err := h.repo.GetRun(ctx, entities.AgentRunID(r.PathValue("id")))
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the run")
+		return
+	}
+	if existing == nil {
+		httpx.WriteError(w, http.StatusNotFound, "agent run not found")
+		return
+	}
+	if !h.requireMember(ctx, w, userID, existing.ProjectID) {
+		return
+	}
+
+	run, err := h.repo.RequestCancel(ctx, existing.ID)
+	if err != nil {
+		if errors.Is(err, entities.ErrAgentRunNotFound) {
+			httpx.WriteError(w, http.StatusNotFound, "agent run not found")
+			return
+		}
+		httpx.WriteError(w, http.StatusInternalServerError, "could not cancel the run")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, runResponse{Run: appRunFrom(*run)})
+}
+
+type registerRunnerRequest struct {
+	Name       string `json:"name"`
+	Provider   string `json:"provider"`
+	ModelLabel string `json:"modelLabel"`
+}
+
+type registerRunnerResponse struct {
+	Runner appRunnerResponse `json:"runner"`
+	// Token is returned exactly once. It is stored as a hash, so a lost response
+	// means registering the machine again, not recovering the value.
+	Token string `json:"token"`
+}
+
+// RegisterRunner pairs a machine. The caller mints nothing: the server generates
+// the token, stores only its hash, and shows the plaintext once.
+func (h *AppHandler) RegisterRunner(w http.ResponseWriter, r *http.Request) {
+	userID, ok := callerID(r)
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
+	var req registerRunnerRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	provider := strings.TrimSpace(req.Provider)
+	modelLabel := strings.TrimSpace(req.ModelLabel)
+	for _, field := range []string{name, provider, modelLabel} {
+		if utf8.RuneCountInString(field) > maxRunnerNameLength {
+			httpx.WriteError(w, http.StatusBadRequest, "name, provider and modelLabel must be at most 120 characters")
+			return
+		}
+	}
+
+	token, err := newRunnerToken()
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create a runner token")
+		return
+	}
+
+	runner := &entities.AgentRunner{
+		UserID:     userID,
+		Name:       name,
+		Provider:   provider,
+		ModelLabel: modelLabel,
+	}
+	if err := h.repo.RegisterRunner(r.Context(), runner, HashRunnerToken(token)); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not register the runner")
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusCreated, registerRunnerResponse{
+		Runner: appRunnerFrom(*runner),
+		Token:  token,
+	})
+}
+
+type runnersResponse struct {
+	Runners []appRunnerResponse `json:"runners"`
+}
+
+// ListRunners returns the caller's machines, revoked ones included, so the
+// settings screen can show history rather than forgetting a machine it retired.
+func (h *AppHandler) ListRunners(w http.ResponseWriter, r *http.Request) {
+	userID, ok := callerID(r)
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
+	runners, err := h.repo.ListRunners(r.Context(), userID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the runners")
+		return
+	}
+	response := runnersResponse{Runners: make([]appRunnerResponse, 0, len(runners))}
+	for _, runner := range runners {
+		response.Runners = append(response.Runners, appRunnerFrom(*runner))
+	}
+	httpx.WriteJSON(w, http.StatusOK, response)
+}
+
+// RevokeRunner retires one of the caller's machines. Revocation is a date on the
+// row, so the runs it reported stay attributed to it.
+func (h *AppHandler) RevokeRunner(w http.ResponseWriter, r *http.Request) {
+	userID, ok := callerID(r)
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
+	err := h.repo.RevokeRunner(r.Context(), entities.AgentRunnerID(r.PathValue("id")), userID)
+	if errors.Is(err, entities.ErrAgentRunnerNotFound) {
+		httpx.WriteError(w, http.StatusNotFound, "agent runner not found")
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke the runner")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// taskDocument is the snapshot a worker receives at claim time. It is stored and
+// re-served as an opaque JSON string, so a field added here never changes a
+// response key set a client pinned.
+type taskDocument struct {
+	Project  taskDocumentProject   `json:"project"`
+	Item     taskDocumentItem      `json:"item"`
+	Comments []taskDocumentComment `json:"comments"`
+}
+
+type taskDocumentProject struct {
+	ID        entities.ProjectID `json:"id"`
+	KeyPrefix string             `json:"keyPrefix"`
+	Name      string             `json:"name"`
+}
+
+type taskDocumentItem struct {
+	ID          entities.WorkItemID `json:"id"`
+	Key         string              `json:"key"`
+	Title       string              `json:"title"`
+	Details     string              `json:"details"`
+	Status      string              `json:"status"`
+	Priority    string              `json:"priority"`
+	StoryPoints *int                `json:"storyPoints,omitempty"`
+	DueDate     *entities.Timestamp `json:"dueDate,omitempty"`
+	Tags        []string            `json:"tags"`
+}
+
+type taskDocumentComment struct {
+	Author    string             `json:"author"`
+	Body      string             `json:"body"`
+	CreatedAt entities.Timestamp `json:"createdAt"`
+}
+
+// buildTaskDocument snapshots the work item as it is at dispatch, plus the
+// project's catalogue and the comment thread. The snapshot is deliberate: a run
+// should implement the task the user handed over, not whatever the item says
+// halfway through the agent working.
+func (h *AppHandler) buildTaskDocument(ctx context.Context, item entities.WorkItem, project entities.Project) (string, error) {
+	catalogue := make(map[entities.TagID]string, len(project.Tags))
+	for _, tag := range project.Tags {
+		catalogue[tag.ID] = tag.Name
+	}
+	tags := make([]string, 0, len(item.TagIDs))
+	for _, id := range item.TagIDs {
+		if name, ok := catalogue[id]; ok {
+			tags = append(tags, name)
+		}
+	}
+
+	comments, err := h.comments.ListByWorkItem(ctx, item.ID)
+	if err != nil {
+		return "", err
+	}
+	authors := make(map[entities.UserID]string, len(comments))
+	snapshotComments := make([]taskDocumentComment, 0, len(comments))
+	for _, comment := range comments {
+		author, seen := authors[comment.AuthorID]
+		if !seen {
+			user, err := h.users.GetByID(ctx, comment.AuthorID)
+			if err != nil {
+				return "", err
+			}
+			if user != nil {
+				author = user.PreferredGreeting()
+			}
+			authors[comment.AuthorID] = author
+		}
+		snapshotComments = append(snapshotComments, taskDocumentComment{
+			Author:    author,
+			Body:      comment.Body,
+			CreatedAt: comment.CreatedAt,
+		})
+	}
+
+	document := taskDocument{
+		Project: taskDocumentProject{ID: project.ID, KeyPrefix: project.KeyPrefix, Name: project.Name},
+		Item: taskDocumentItem{
+			ID:          item.ID,
+			Key:         item.Key,
+			Title:       item.Title,
+			Details:     item.Details,
+			Status:      string(item.Status),
+			Priority:    string(item.Priority),
+			StoryPoints: item.StoryPoints,
+			DueDate:     item.DueDate,
+			Tags:        tags,
+		},
+		Comments: snapshotComments,
+	}
+
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+// requireMember answers the request itself on failure, so every caller writes the
+// same refusal and none of them can forget it.
+func (h *AppHandler) requireMember(ctx context.Context, w http.ResponseWriter, userID entities.UserID, projectID entities.ProjectID) bool {
+	member, err := h.members.IsMember(ctx, string(userID), string(projectID))
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not verify project membership")
+		return false
+	}
+	if !member {
+		httpx.WriteError(w, http.StatusForbidden, "not a member of this project")
+		return false
+	}
+	return true
+}
+
+func callerID(r *http.Request) (entities.UserID, bool) {
+	userID, ok := auth.UserFrom(r.Context())
+	return entities.UserID(userID), ok
+}
+
+// newRunnerToken mints an opaque machine credential. 32 bytes of randomness is
+// the whole secret; the prefix only makes it recognisable in a log.
+func newRunnerToken() (string, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return tokenPrefix + hex.EncodeToString(raw[:]), nil
+}

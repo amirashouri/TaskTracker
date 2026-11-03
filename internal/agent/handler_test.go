@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/amirashouri/tasktracker-server/internal/db"
 	"github.com/amirashouri/tasktracker-server/internal/dbtest"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
 )
@@ -17,14 +18,17 @@ import (
 // smallest state a runner request needs. No run is queued: a test that wants one
 // queues it, so "nothing queued" stays testable.
 type agentEnv struct {
-	handler *Handler
-	repo    *entities.AgentRepository
-	users   *entities.UserRepository
-	user    *entities.User
-	runner  *entities.AgentRunner
-	token   string
-	project *entities.Project
-	item    *entities.WorkItem
+	handler  *Handler
+	app      *AppHandler
+	database *db.DB
+	repo     *entities.AgentRepository
+	users    *entities.UserRepository
+	members  *fakeMembership
+	user     *entities.User
+	runner   *entities.AgentRunner
+	token    string
+	project  *entities.Project
+	item     *entities.WorkItem
 }
 
 func newAgentEnv(t *testing.T) agentEnv {
@@ -57,15 +61,28 @@ func newAgentEnv(t *testing.T) agentEnv {
 
 	runner, token := registerRunner(t, repo, user, "alice-machine", "ttag_alice_token")
 
+	members := &fakeMembership{allow: true}
+	app := NewAppHandler(
+		repo,
+		entities.NewWorkItemRepository(database.DB),
+		entities.NewProjectRepository(database.DB),
+		entities.NewCommentRepository(database.DB),
+		users,
+		members,
+	)
+
 	return agentEnv{
-		handler: handler,
-		repo:    repo,
-		users:   users,
-		user:    user,
-		runner:  runner,
-		token:   token,
-		project: project,
-		item:    item,
+		handler:  handler,
+		app:      app,
+		database: database,
+		repo:     repo,
+		users:    users,
+		members:  members,
+		user:     user,
+		runner:   runner,
+		token:    token,
+		project:  project,
+		item:     item,
 	}
 }
 

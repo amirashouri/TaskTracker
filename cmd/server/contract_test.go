@@ -15,6 +15,7 @@ import (
 	"github.com/amirashouri/tasktracker-server/internal/admin"
 	"github.com/amirashouri/tasktracker-server/internal/agent"
 	"github.com/amirashouri/tasktracker-server/internal/auth"
+	"github.com/amirashouri/tasktracker-server/internal/db"
 	"github.com/amirashouri/tasktracker-server/internal/dbtest"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
 	"github.com/amirashouri/tasktracker-server/internal/me"
@@ -124,9 +125,10 @@ type clientProfile struct {
 }
 
 type contractEnv struct {
-	mux     *http.ServeMux
-	project *entities.Project
-	user    *entities.User
+	mux      *http.ServeMux
+	project  *entities.Project
+	user     *entities.User
+	database *db.DB
 }
 
 func newContractEnv(t *testing.T) *contractEnv {
@@ -166,6 +168,14 @@ func newContractEnv(t *testing.T) *contractEnv {
 			admin.NewProjectHandler(entities.NewProjectRepository(database.DB), sync.NewEngine(database.DB, "")),
 			sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),
 			agent.NewHandler(entities.NewAgentRepository(database.DB), time.Minute),
+			agent.NewAppHandler(
+				entities.NewAgentRepository(database.DB),
+				entities.NewWorkItemRepository(database.DB),
+				entities.NewProjectRepository(database.DB),
+				entities.NewCommentRepository(database.DB),
+				users,
+				sync.NewEngine(database.DB, ""),
+			),
 			jwtManager,
 			database.DB,
 			sync.NewEngine(database.DB, ""),
@@ -173,8 +183,9 @@ func newContractEnv(t *testing.T) *contractEnv {
 			int64(25*1024*1024),
 			30*time.Second,
 		),
-		project: project,
-		user:    user,
+		project:  project,
+		user:     user,
+		database: database,
 	}
 }
 
@@ -318,6 +329,148 @@ func TestARunnerTokenIsRefusedOnAUserRoute(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("a runner token on a user route = %d, want 401; body %s", rec.Code, rec.Body)
+	}
+}
+
+// clientAgentRun mirrors the KMP `AgentRunDto` in specs/11.1-agent-runs.md. The
+// three nullable members have Kotlin defaults, so those keys may be omitted; every
+// other key is required and must always be present.
+type clientAgentRun struct {
+	ID              string  `json:"id"`
+	WorkItemID      string  `json:"workItemId"`
+	ProjectID       string  `json:"projectId"`
+	Status          string  `json:"status"`
+	RequestedBy     string  `json:"requestedBy"`
+	RunnerID        *string `json:"runnerId"`
+	CancelRequested bool    `json:"cancelRequested"`
+	CreatedAt       string  `json:"createdAt"`
+	StartedAt       *string `json:"startedAt"`
+	FinishedAt      *string `json:"finishedAt"`
+	Summary         string  `json:"summary"`
+	Error           string  `json:"error"`
+}
+
+// signInToken signs in over the mounted route, so the test needs no JWT manager.
+func signInToken(t *testing.T, env *contractEnv) string {
+	t.Helper()
+	rec := env.do(t, http.MethodPost, "/v1/auth/login", "", map[string]any{
+		"email": env.user.Email, "password": "correct horse battery",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sign in: status %d; body %s", rec.Code, rec.Body)
+	}
+	var pair struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pair); err != nil {
+		t.Fatalf("decode token pair: %v", err)
+	}
+	return pair.AccessToken
+}
+
+// The agent run and its event page are a new contract, so both key sets are
+// pinned here rather than only decoded into a struct: Go matches JSON keys
+// case-insensitively, so a rename is invisible to a decode.
+func TestTheAgentRunProgressIsWhatTheClientDecodes(t *testing.T) {
+	env := newContractEnv(t)
+	ctx := context.Background()
+	token := signInToken(t, env)
+
+	item := &entities.WorkItem{
+		ProjectID: env.project.ID,
+		Key:       "TT-1",
+		Title:     "Fix the thing",
+		Status:    entities.WorkItemStatusInProgress,
+		Priority:  entities.PriorityHigh,
+	}
+	if err := entities.NewWorkItemRepository(env.database).Create(ctx, item); err != nil {
+		t.Fatalf("create work item: %v", err)
+	}
+
+	rec := env.do(t, http.MethodPost, "/v1/agent/runs", token, map[string]any{"workItemId": item.ID})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("dispatch: status %d; body %s", rec.Code, rec.Body)
+	}
+	var created struct {
+		Run clientAgentRun `json:"run"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	if created.Run.ID == "" || created.Run.WorkItemID != string(item.ID) {
+		t.Errorf("run = %+v, want its id and the work item's", created.Run)
+	}
+	if created.Run.Status != string(entities.AgentRunQueued) {
+		t.Errorf("status = %q, want queued", created.Run.Status)
+	}
+	if created.Run.CreatedAt == "" {
+		t.Error("createdAt is empty; the client declares it without a default")
+	}
+
+	var raw struct {
+		Run map[string]any `json:"run"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw run: %v", err)
+	}
+	for _, key := range []string{"id", "workItemId", "projectId", "status", "requestedBy", "cancelRequested", "createdAt", "summary", "error"} {
+		if _, ok := raw.Run[key]; !ok {
+			t.Errorf("run is missing the required key %q", key)
+		}
+	}
+	allowed := map[string]bool{
+		"id": true, "workItemId": true, "projectId": true, "status": true,
+		"requestedBy": true, "runnerId": true, "cancelRequested": true,
+		"createdAt": true, "startedAt": true, "finishedAt": true,
+		"summary": true, "error": true,
+	}
+	for key := range raw.Run {
+		if !allowed[key] {
+			t.Errorf("run carries an undeclared key %q", key)
+		}
+	}
+
+	repo := entities.NewAgentRepository(env.database)
+	runner := &entities.AgentRunner{UserID: env.user.ID, Name: "contract-machine"}
+	if err := repo.RegisterRunner(ctx, runner, agent.HashRunnerToken("ttag_contract_token")); err != nil {
+		t.Fatalf("register runner: %v", err)
+	}
+	lease := entities.Now() + 60_000
+	if _, err := repo.ClaimRun(ctx, runner.ID, env.user.ID, lease); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := repo.AppendEvents(ctx, entities.AgentRunID(created.Run.ID), runner.ID, lease, []entities.AgentRunEvent{
+		{Kind: "status", Message: "working", Payload: `{}`},
+	}); err != nil {
+		t.Fatalf("append events: %v", err)
+	}
+
+	detail := env.do(t, http.MethodGet, "/v1/agent/runs/"+created.Run.ID+"?afterSeq=0", token, nil)
+	if detail.Code != http.StatusOK {
+		t.Fatalf("detail: status %d; body %s", detail.Code, detail.Body)
+	}
+	var page struct {
+		Run     map[string]any   `json:"run"`
+		Events  []map[string]any `json:"events"`
+		HasMore *bool            `json:"hasMore"`
+	}
+	if err := json.Unmarshal(detail.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode page: %v", err)
+	}
+	// hasMore has no client default: a missing value would silently end a pull.
+	if page.HasMore == nil {
+		t.Error("hasMore is missing from the progress page")
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("events = %v, want one", page.Events)
+	}
+	for _, key := range []string{"seq", "kind", "message", "payload", "createdAt"} {
+		if _, ok := page.Events[0][key]; !ok {
+			t.Errorf("event is missing %q", key)
+		}
+	}
+	if len(page.Events[0]) != 5 {
+		t.Errorf("event has %d keys, want exactly the 5 the client declares", len(page.Events[0]))
 	}
 }
 

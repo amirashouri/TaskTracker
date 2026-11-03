@@ -579,6 +579,87 @@ are push-only**: the server stores them, and no pull returns them to any other
 client. A comment that stays on the device that wrote it is worthless to every
 other member, so this is a gap rather than a design.
 
+## Agent runs
+
+A work item in progress can be handed to an LLM agent. The agent does **not** run
+inside this server: it is a worker on the machine that holds the code
+(`tt agent run`), so the server never calls a model and never stores a provider
+key. It owns the queue, the machine credential, and the progress log.
+
+This half of the API is `camelCase` with ISO-8601 whole-second timestamps, like
+the sync entities and unlike the auth/admin half.
+
+**Two credentials, never interchangeable.** The runner routes accept an opaque
+`ttag_…` token issued by `POST /v1/agent/runners`; every other route in this
+document accepts a user access token. A runner token on a user route is a `401`,
+and a user token on a runner route is a `401`.
+
+Agent state is **not** in the change feed. There is no `agentRun` entity, and no
+existing response gained a field. A run is server-owned, time-sensitive state a
+device cannot produce offline, so it is polled rather than synced.
+
+### App routes — user token, scoped by project membership
+
+| Route | Body / query | Result |
+| --- | --- | --- |
+| `POST /v1/agent/runs` | `{"workItemId": "…"}` | `201` run. `404` unknown item, `403` non-member, `409` not `in_progress`, `409` a live run exists |
+| `GET /v1/agent/runs?workItemId=&limit=` | `limit` default 20, max 50 | `{"runs": [...]}`, newest first |
+| `GET /v1/agent/runs/{id}?afterSeq=` | `afterSeq` default 0 | `{"run": …, "events": [...], "hasMore": bool}` |
+| `POST /v1/agent/runs/{id}/cancel` | — | `{"run": …}` with `cancelRequested` |
+| `POST /v1/agent/runners` | `{"name", "provider", "modelLabel"}` | `201 {"runner": …, "token": "ttag_…"}` — token shown once |
+| `GET /v1/agent/runners` | — | `{"runners": [...]}`, revoked included |
+| `DELETE /v1/agent/runners/{id}` | — | `204`, idempotent; `404` for an unknown or another user's runner |
+
+`hasMore` is always present. The client declares it without a default, so a
+missing value would silently end a progress page.
+
+### Runner routes — opaque runner token
+
+| Route | Body | Result |
+| --- | --- | --- |
+| `POST /v1/agent/runs/claim` | `{"waitSeconds": 25}` (default 25, max 30) | `200 {"run": …}` or `204` when idle |
+| `POST /v1/agent/runs/{id}/events` | `{"events":[{"kind","message","payload"}]}`, max 200 | `200 {"accepted": n, "nextSeq": seq}` |
+| `POST /v1/agent/runs/{id}/heartbeat` | — | `200 {"cancelRequested": bool, "leaseExpiresAt": …}` |
+| `POST /v1/agent/runs/{id}/finish` | `{"outcome":"succeeded"\|"failed"\|"cancelled", "summary", "error"}` | `200 {"run": …}`, idempotent by status |
+
+All four answer `409` when the run is not held by that runner, so a stale worker
+cannot report on work that was reassigned. If a worker stops heartbeating, the
+server fails the run with `"runner lost"` and frees the item's live slot.
+
+### Objects
+
+Run, app shape:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "workItemId": "44444444-4444-4444-4444-444444444444",
+  "projectId": "22222222-2222-2222-2222-222222222222",
+  "status": "queued",
+  "requestedBy": "550e8400-e29b-41d4-a716-446655440000",
+  "cancelRequested": false,
+  "createdAt": "2026-11-03T12:00:00Z",
+  "summary": "",
+  "error": ""
+}
+```
+
+`runnerId`, `startedAt` and `finishedAt` are omitted until they exist, and the
+client declares them with defaults. `status` is `queued`, `claimed`, `running`,
+`succeeded`, `failed` or `cancelled`. `cancelRequested` is a request, not a
+result: the worker stops at its next heartbeat.
+
+Event:
+
+```json
+{ "seq": 41, "kind": "status", "message": "Editing TT-12", "payload": "{}", "createdAt": "2026-11-03T12:00:09Z" }
+```
+
+`payload` is an opaque JSON **string**, so a new event kind never changes this key
+set. The claim response additionally carries `taskDocument`, also an opaque JSON
+string: the task snapshot taken at dispatch, which the server stores and
+re-serves verbatim.
+
 ## Compatibility
 
 The client is an installed mobile app that syncs offline and cannot be updated on
@@ -605,7 +686,7 @@ A breaking change that cannot follow that order is a new `/v1` version and a
 migration path. The full policy is in [`AGENTS.md`](../AGENTS.md).
 
 `cmd/server/contract_test.go` holds the request and response pairs that pin this
-document to the code. It compares **key names**, not just decoded values, because
+document to the code, including the agent run and event key sets. It compares **key names**, not just decoded values, because
 Go matches JSON keys case-insensitively and a decode-based check cannot see a
 rename like `entityId` → `entityID`.
 
