@@ -150,11 +150,17 @@ Usage:
   tt logs
   tt uninstall
   tt agent connect [--server URL] [--email EMAIL] [--name NAME]
-                   [--provider echo] [--model MODEL] [--force]
-  tt agent run [--provider echo] [--once] [--wait SECONDS]
+                   [--provider PROVIDER] [--model MODEL] [--base-url URL]
+                   [--api-key KEY] [--force]
+  tt agent run [--provider PROVIDER] [--model MODEL] [--base-url URL]
+               [--api-key KEY] [--workspace DIR] [--max-steps N]
+               [--once] [--wait SECONDS] [--heartbeat DURATION]
   tt agent status
   tt agent disconnect
   tt version
+
+tt agent pairs the machine that holds the code, not the server host: the model
+and its key stay there, and the server only queues the work.
 
 tt never phones home and owns no infrastructure: a provider is an account the
 customer holds, or no provider at all.

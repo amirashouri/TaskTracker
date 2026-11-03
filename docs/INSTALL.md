@@ -398,6 +398,93 @@ This will stop and remove the "tasktracker" instance. Type the instance name to 
 Removed.
 ```
 
+## Delegating a task to an agent
+
+A work item in **In Progress** can be handed to an LLM agent that runs on the
+machine holding the code. The server never calls a model and never stores a
+provider key: it queues the run, the machine claims it, and the app shows the
+progress while the item's editor is open.
+
+You need the `tt` CLI on the developer machine, a checkout of the project, and
+either a local model server or an API key for a hosted one.
+
+### 1. Pair the machine
+
+```bash
+tt agent connect \
+  --server http://192.168.1.20:8080 \
+  --email you@example.com \
+  --name workstation \
+  --provider openai-compatible \
+  --model llama3.1 \
+  --base-url http://localhost:11434/v1
+```
+
+It signs in once, registers this machine, and writes the runner credential to
+`~/.config/tasktracker/agent.json` (mode `0600`), or to `$TT_AGENT_CONFIG` when
+that is set. The password is used once and is not stored. Run
+`tt agent connect --force` to replace an existing pairing.
+
+| Provider | Reaches | Needs |
+| --- | --- | --- |
+| `openai-compatible` | Ollama (default `http://localhost:11434/v1`), LM Studio, llama.cpp, vLLM, OpenAI | `--model`; `--base-url` for anything but local Ollama; `--api-key` for a hosted endpoint |
+| `anthropic` | Anthropic's Messages API | `--model` and `--api-key` (or `TT_AGENT_API_KEY`) |
+| `echo` | No model; reports the task back | Nothing — useful to prove the wiring |
+
+A provider key stays on the developer machine. Do not put one in the server's
+`.env`: the server has no field for it and would not use it.
+
+### 2. Check the pairing
+
+```bash
+tt agent status
+```
+
+Prints the server, runner, provider and model, then probes `/healthz`. It shows
+that a token is stored but never prints the token itself.
+
+### 3. Run the worker
+
+```bash
+tt agent run --workspace ~/code/your-project
+```
+
+`--workspace` is the directory the agent may read and edit, and the directory
+its commands run in; paths outside it are refused. Use `--once` to take at most
+one run, `--max-steps` (default 25) to bound a run that never finishes, and
+`--provider` / `--model` / `--base-url` / `--api-key` to override the paired
+configuration. Without `--api-key`, `TT_AGENT_API_KEY` is used.
+
+While the worker is connected, a task in progress in the app offers **Send to
+agent**. The editor then shows the run's status, its latest step, the event log,
+and **Cancel run**. Cancel is cooperative: the runner observes it at its next
+heartbeat (20 s by default), so the status stays live for a moment after the tap.
+
+Review the diff before committing. The agent writes real files and runs real
+commands in the workspace; treat it as a colleague's uncommitted branch, not as
+a trusted build step.
+
+### 4. Stop or unpair
+
+```bash
+tt agent disconnect
+```
+
+Revokes this machine on the server, then deletes the local config. If the server
+is unreachable the local file is still removed and the command says the machine
+could not be retired; use **Revoke** in the app once it is back.
+
+### If it does not work
+
+| Symptom | Cause | Fix |
+| --- | --- |
+| `tt agent run: not connected` | No pairing on this machine | `tt agent connect` |
+| `unknown provider` | A provider name this build does not run | Use `openai-compatible`, `anthropic` or `echo` |
+| `provider … needs a model` | No `--model` at connect or run time | Pass `--model`, or `tt agent connect --force --model …` |
+| `model endpoint answered 404` | `--base-url` is not the API root | Ollama is `http://localhost:11434/v1`; OpenAI is `https://api.openai.com/v1` |
+| `an agent run is already in progress` | One live run per item | Wait for it to finish, or cancel it in the app |
+| `unauthenticated` after re-pairing | The old token was revoked | `tt agent connect --force` |
+
 ## Troubleshooting
 
 | Message | Cause | Fix |
