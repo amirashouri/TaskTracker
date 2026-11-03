@@ -381,6 +381,40 @@ func (r *AgentRepository) RequestCancel(ctx context.Context, runID AgentRunID) (
 	return stored, nil
 }
 
+// ReapExpiredRuns fails every run whose lease has lapsed and returns the ids it
+// failed.
+//
+// One statement rather than a select followed by updates: a worker that
+// heartbeats between the read and the write would be failed by the update, and
+// the run it is still working on would lose its slot. With the lease conditions
+// inside the same UPDATE that clears the lease, only a run that is still stale at
+// the moment of the write can be closed.
+//
+// A queued run has no lease and is never reaped: nobody has taken it yet, and the
+// dispatch waiting there is the user's, not a dead worker's.
+func (r *AgentRepository) ReapExpiredRuns(ctx context.Context, now Timestamp, detail string) ([]AgentRunID, error) {
+	rows, err := r.db.QueryContext(ctx, `UPDATE agent_runs
+	          SET finished_at = $1, status = 'failed', error = $2, lease_expires_at = NULL
+	          WHERE status IN ('claimed', 'running')
+	            AND lease_expires_at IS NOT NULL
+	            AND lease_expires_at < $1
+	          RETURNING id`, now, detail)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []AgentRunID
+	for rows.Next() {
+		var id AgentRunID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // GetRun reads one run. It returns (nil, nil) when there is no such row, the
 // contract the rest of this package's GetByID methods offer.
 func (r *AgentRepository) GetRun(ctx context.Context, id AgentRunID) (*AgentRun, error) {

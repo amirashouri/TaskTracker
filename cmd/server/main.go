@@ -106,7 +106,8 @@ func runServer() {
 	// The runner API. It authenticates a per-machine token rather than a user JWT,
 	// so it does not share the sync handler's middleware, and the lease it issues
 	// is the configured window a crashed worker's run survives.
-	agentHandler := agent.NewHandler(entities.NewAgentRepository(database.DB), cfg.AgentLeaseTTL)
+	agentRepo := entities.NewAgentRepository(database.DB)
+	agentHandler := agent.NewHandler(agentRepo, cfg.AgentLeaseTTL)
 
 	// Admin project screens read projects through the same engine, so an edit
 	// lands in the change feed the clients pull.
@@ -132,6 +133,14 @@ func runServer() {
 	if cfg.SyncLogRetention > 0 {
 		go pruneChangeFeed(pruneCtx, syncEngine, cfg.SyncLogRetention)
 	}
+
+	// The lease is what stops a crashed runner holding its work item's one live
+	// slot forever: a run whose lease lapsed is failed here, not by the worker.
+	// Half a lease is the tick, so a stale run is closed within one and a half
+	// lease periods of its last heartbeat.
+	reapCtx, stopReaping := context.WithCancel(context.Background())
+	defer stopReaping()
+	go agent.RunLeaseReaper(reapCtx, agentRepo, cfg.AgentLeaseTTL/2)
 
 	server := &http.Server{
 		Addr:         listenAddr(cfg.ServerBind, cfg.ServerPort),

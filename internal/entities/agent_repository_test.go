@@ -438,6 +438,92 @@ func TestRunnerTokensAreOwnerScopedAndRevocable(t *testing.T) {
 	}
 }
 
+// The reaper closes only runs whose lease actually lapsed: a live worker's run, a
+// run nobody has claimed, and an already-terminal run are all left alone.
+func TestReapExpiredRunsFailsOnlyStaleLiveRuns(t *testing.T) {
+	f := newAgentFixture(t)
+	ctx := context.Background()
+	workItems := NewWorkItemRepository(f.database.DB)
+	runner := f.mustRegisterRunner(t, f.user, "dev-machine", "hash-reap")
+
+	stale := f.mustQueueRun(t, f.item.ID, 0)
+	if _, err := f.repo.ClaimRun(ctx, runner.ID, f.user.ID, Timestamp(1_000)); err != nil {
+		t.Fatalf("claim with a lapsed lease: %v", err)
+	}
+
+	freshItem := &WorkItem{ProjectID: f.project.ID, Key: "TT-2", Title: "Fresh", Status: WorkItemStatusInProgress, Priority: PriorityLow}
+	if err := workItems.Create(ctx, freshItem); err != nil {
+		t.Fatalf("create fresh item: %v", err)
+	}
+	fresh := f.mustQueueRun(t, freshItem.ID, 0)
+	if _, err := f.repo.ClaimRun(ctx, runner.ID, f.user.ID, lease()); err != nil {
+		t.Fatalf("claim with a live lease: %v", err)
+	}
+
+	queuedItem := &WorkItem{ProjectID: f.project.ID, Key: "TT-3", Title: "Queued", Status: WorkItemStatusInProgress, Priority: PriorityLow}
+	if err := workItems.Create(ctx, queuedItem); err != nil {
+		t.Fatalf("create queued item: %v", err)
+	}
+	queued := f.mustQueueRun(t, queuedItem.ID, 0)
+
+	reaped, err := f.repo.ReapExpiredRuns(ctx, Now(), "runner lost")
+	if err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if len(reaped) != 1 || reaped[0] != stale.ID {
+		t.Fatalf("reaped %v, want just %s", reaped, stale.ID)
+	}
+
+	stored, err := f.repo.GetRun(ctx, stale.ID)
+	if err != nil {
+		t.Fatalf("get stale: %v", err)
+	}
+	if stored.Status != AgentRunFailed {
+		t.Errorf("status = %q, want failed", stored.Status)
+	}
+	if stored.Error != "runner lost" {
+		t.Errorf("error = %q, want runner lost", stored.Error)
+	}
+	if stored.FinishedAt == nil {
+		t.Error("a reaped run has no finishedAt")
+	}
+	if stored.LeaseExpiresAt != nil {
+		t.Error("a reaped run kept its lease")
+	}
+
+	// The slot the dead worker held has to be usable again, or the user cannot retry.
+	if err := f.repo.CreateRun(ctx, &AgentRun{
+		WorkItemID: f.item.ID, ProjectID: f.project.ID, RequestedBy: f.user.ID, TaskDocument: `{}`,
+	}); err != nil {
+		t.Fatalf("create after the reap = %v, want the slot freed", err)
+	}
+
+	untouched := map[string]struct {
+		id   AgentRunID
+		want AgentRunStatus
+	}{
+		"fresh":  {fresh.ID, AgentRunClaimed},
+		"queued": {queued.ID, AgentRunQueued},
+	}
+	for name, tc := range untouched {
+		got, err := f.repo.GetRun(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("get %s: %v", name, err)
+		}
+		if got.Status != tc.want {
+			t.Errorf("%s run status = %q, want %q: the reaper touched a run it should not have", name, got.Status, tc.want)
+		}
+	}
+
+	again, err := f.repo.ReapExpiredRuns(ctx, Now(), "runner lost")
+	if err != nil {
+		t.Fatalf("second reap: %v", err)
+	}
+	if len(again) != 0 {
+		t.Errorf("second reap closed %v; a reaped run must not be closed twice", again)
+	}
+}
+
 func TestListRunsByWorkItemReturnsNewestFirst(t *testing.T) {
 	f := newAgentFixture(t)
 	ctx := context.Background()
