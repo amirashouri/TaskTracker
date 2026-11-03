@@ -378,6 +378,86 @@ func TestValidateForCloudflareAcceptsUnderLimit(t *testing.T) {
 	}
 }
 
+// loadConfigWithAgent loads a minimal config, with the two agent settings set to
+// the given values. An empty value means "leave it unset so the default applies".
+func loadConfigWithAgent(t *testing.T, lease, retention string) (*Config, error) {
+	t.Helper()
+	isolate(t, testKeyJWT)
+	isolate(t, "AGENT_LEASE_TTL")
+	isolate(t, "AGENT_EVENT_RETENTION")
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "absent.env"))
+	t.Setenv(testKeyJWT, strings.Repeat("a", 32))
+	if lease != "" {
+		t.Setenv("AGENT_LEASE_TTL", lease)
+	}
+	if retention != "" {
+		t.Setenv("AGENT_EVENT_RETENTION", retention)
+	}
+	return Load()
+}
+
+// The defaults are the documented ones: a lease short enough that a crashed
+// runner's run is recovered in a minute, and a log retention matching the change
+// feed's.
+func TestLoadDefaultsAgentRunSettings(t *testing.T) {
+	cfg, err := loadConfigWithAgent(t, "", "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AgentLeaseTTL != time.Minute {
+		t.Errorf("AgentLeaseTTL = %v, want 1m", cfg.AgentLeaseTTL)
+	}
+	if cfg.AgentEventRetention != 720*time.Hour {
+		t.Errorf("AgentEventRetention = %v, want 720h", cfg.AgentEventRetention)
+	}
+}
+
+func TestLoadReadsAgentRunSettings(t *testing.T) {
+	cfg, err := loadConfigWithAgent(t, "90s", "24h")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AgentLeaseTTL != 90*time.Second {
+		t.Errorf("AgentLeaseTTL = %v, want 90s", cfg.AgentLeaseTTL)
+	}
+	if cfg.AgentEventRetention != 24*time.Hour {
+		t.Errorf("AgentEventRetention = %v, want 24h", cfg.AgentEventRetention)
+	}
+}
+
+// A zero or negative lease would expire every claim before its worker could
+// report, so it stops startup instead of being silently floored.
+func TestLoadRejectsNonPositiveAgentLease(t *testing.T) {
+	for _, value := range []string{"0", "0s", "-1m"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := loadConfigWithAgent(t, value, "")
+			if err == nil {
+				t.Fatalf("Load with AGENT_LEASE_TTL=%q succeeded, want an error", value)
+			}
+			if !strings.Contains(err.Error(), "AGENT_LEASE_TTL") {
+				t.Errorf("error %q does not name AGENT_LEASE_TTL", err)
+			}
+		})
+	}
+}
+
+// Retention follows SYNC_LOG_RETENTION: negative is a mistake, zero means keep.
+func TestLoadRejectsNegativeAgentEventRetention(t *testing.T) {
+	if _, err := loadConfigWithAgent(t, "", "-1h"); err == nil {
+		t.Fatal("Load with a negative AGENT_EVENT_RETENTION succeeded, want an error")
+	} else if !strings.Contains(err.Error(), "AGENT_EVENT_RETENTION") {
+		t.Errorf("error %q does not name AGENT_EVENT_RETENTION", err)
+	}
+
+	cfg, err := loadConfigWithAgent(t, "", "0")
+	if err != nil {
+		t.Fatalf("Load with AGENT_EVENT_RETENTION=0: %v", err)
+	}
+	if cfg.AgentEventRetention != 0 {
+		t.Errorf("AgentEventRetention = %v, want 0 (keep forever)", cfg.AgentEventRetention)
+	}
+}
+
 func TestSlogLevelMapsTheConfiguredName(t *testing.T) {
 	cases := map[string]slog.Level{
 		"debug":   slog.LevelDebug,
