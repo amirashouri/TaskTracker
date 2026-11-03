@@ -18,8 +18,10 @@ func runAgentConnect(ctx context.Context, args []string, stdin io.Reader, stdout
 	server := fs.String("server", "", "TaskTracker server URL")
 	email := fs.String("email", "", "account email")
 	name := fs.String("name", "", "this machine's name (default: hostname)")
-	provider := fs.String("provider", "echo", "provider advertised to the server")
-	model := fs.String("model", "", "model label advertised to the server")
+	provider := fs.String("provider", "echo", "echo, openai-compatible or anthropic")
+	model := fs.String("model", "", "model name, for a provider that needs one")
+	baseURL := fs.String("base-url", "", "model endpoint, stored with the provider")
+	apiKey := fs.String("api-key", "", "provider API key, stored in the 0600 config (TT_AGENT_API_KEY also works)")
 	force := fs.Bool("force", false, "replace an existing connection")
 	if code, done := parseFlags(fs, args, stderr); done {
 		return code
@@ -32,6 +34,23 @@ func runAgentConnect(ctx context.Context, args []string, stdin io.Reader, stdout
 	if _, err := runner.LoadConfig(configPath); err == nil && !*force {
 		fmt.Fprintf(stderr, "tt agent connect: already connected (%s); run tt agent disconnect first, or pass --force\n", configPath)
 		return 1
+	}
+
+	providerName := strings.TrimSpace(*provider)
+	if providerName == "" {
+		providerName = runner.ProviderEcho
+	}
+	if !runner.KnownProvider(providerName) {
+		fmt.Fprintf(stderr, "tt agent connect: unknown provider %q; this build supports %s\n", providerName, runner.ProviderList)
+		return 2
+	}
+	if providerName != runner.ProviderEcho && strings.TrimSpace(*model) == "" {
+		fmt.Fprintf(stderr, "tt agent connect: provider %s needs --model\n", providerName)
+		return 2
+	}
+	if providerName == runner.ProviderAnthropic && firstNonEmpty(*apiKey, os.Getenv("TT_AGENT_API_KEY")) == "" {
+		fmt.Fprintln(stderr, "tt agent connect: provider anthropic needs --api-key or TT_AGENT_API_KEY")
+		return 2
 	}
 
 	p := newPrompter(ctx, stdin, stdout)
@@ -76,7 +95,7 @@ func runAgentConnect(ctx context.Context, args []string, stdin io.Reader, stdout
 		}
 	}
 
-	registration, err := runner.Register(ctx, serverURL, accessToken, machineName, strings.TrimSpace(*provider), strings.TrimSpace(*model))
+	registration, err := runner.Register(ctx, serverURL, accessToken, machineName, providerName, strings.TrimSpace(*model))
 	if err != nil {
 		return fail(ctx, stderr, "tt agent connect", err)
 	}
@@ -86,11 +105,10 @@ func runAgentConnect(ctx context.Context, args []string, stdin io.Reader, stdout
 		RunnerID:   registration.RunnerID,
 		RunnerName: registration.Name,
 		Token:      registration.Token,
-		Provider:   strings.TrimSpace(*provider),
+		Provider:   providerName,
 		Model:      strings.TrimSpace(*model),
-	}
-	if cfg.Provider == "" {
-		cfg.Provider = "echo"
+		BaseURL:    strings.TrimRight(strings.TrimSpace(*baseURL), "/"),
+		APIKey:     strings.TrimSpace(*apiKey),
 	}
 	if err := runner.SaveConfig(configPath, cfg); err != nil {
 		return fail(ctx, stderr, "tt agent connect", err)
@@ -99,6 +117,12 @@ func runAgentConnect(ctx context.Context, args []string, stdin io.Reader, stdout
 	fmt.Fprintf(stdout, "connected %s to %s\n", cfg.RunnerName, serverURL)
 	fmt.Fprintf(stdout, "runner: %s\n", cfg.RunnerID)
 	fmt.Fprintf(stdout, "provider: %s\n", cfg.Provider)
+	if cfg.Model != "" {
+		fmt.Fprintf(stdout, "model: %s\n", cfg.Model)
+	}
+	if cfg.BaseURL != "" {
+		fmt.Fprintf(stdout, "endpoint: %s\n", cfg.BaseURL)
+	}
 	fmt.Fprintf(stdout, "config: %s\n", configPath)
 	fmt.Fprintln(stdout, "next: tt agent run")
 	return 0

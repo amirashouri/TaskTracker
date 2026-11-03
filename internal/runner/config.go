@@ -33,6 +33,10 @@ type Config struct {
 	Token      string `json:"token"`
 	Provider   string `json:"provider"`
 	Model      string `json:"model"`
+	// BaseURL and APIKey are the model endpoint and its key. They stay on this
+	// machine: the server registers the provider name and model label, never these.
+	BaseURL string `json:"baseUrl,omitempty"`
+	APIKey  string `json:"apiKey,omitempty"`
 }
 
 // DefaultConfigPath resolves TT_AGENT_CONFIG, or the per-user config directory.
@@ -70,8 +74,12 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, fmt.Errorf("%s is incomplete; run tt agent connect", path)
 	}
 	cfg.ServerURL = strings.TrimRight(cfg.ServerURL, "/")
+	cfg.Provider = strings.TrimSpace(cfg.Provider)
+	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	if cfg.Provider == "" {
-		cfg.Provider = "echo"
+		cfg.Provider = ProviderEcho
 	}
 	return cfg, nil
 }

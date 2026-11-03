@@ -15,9 +15,9 @@ const (
 	defaultBatchSize   = 20
 )
 
-// Provider is one way of doing the work. The echo provider exists so the claim →
-// event → finish loop can be exercised before a model is involved; T10.5 adds the
-// real adapters behind this same interface.
+// Provider is one way of doing the work. `echo` exists so the claim → event →
+// finish loop can be exercised without a model; the two model adapters live in
+// openai.go and anthropic.go and share the tool loop in loop.go.
 type Provider interface {
 	Name() string
 	Execute(ctx context.Context, run Run, emit func(Event)) Result
@@ -58,18 +58,6 @@ func (EchoProvider) Execute(ctx context.Context, run Run, emit func(Event)) Resu
 	})
 
 	return Result{Outcome: "succeeded", Summary: "Echo worker finished the run"}
-}
-
-// ProviderByName is the registry. Only echo exists in this build: a provider name
-// that answers nothing is a clearer failure than a worker that claims work and
-// then cannot do it.
-func ProviderByName(name string) (Provider, bool) {
-	switch strings.TrimSpace(name) {
-	case "", "echo":
-		return EchoProvider{}, true
-	default:
-		return nil, false
-	}
 }
 
 // Worker claims runs and reports on them until its context is cancelled.

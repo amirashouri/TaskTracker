@@ -142,6 +142,23 @@ func TestAgentConnectStatusAndDisconnect(t *testing.T) {
 	}
 }
 
+func TestAgentConnectRefusesAnUnknownProvider(t *testing.T) {
+	t.Setenv("TT_AGENT_CONFIG", filepath.Join(t.TempDir(), "agent.json"))
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(),
+		[]string{"agent", "connect", "--server", "http://127.0.0.1:1", "--email", "dev@example.com", "--provider", "gpt"},
+		strings.NewReader("secret\n"), &stdout, &stderr,
+		filepath.Join(t.TempDir(), "install.json"), "dev", install.ExecRunner{Stdout: &stdout, Stderr: &stderr})
+
+	if code != 2 {
+		t.Fatalf("connect = %d, want 2; stderr %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "unknown provider") || !strings.Contains(stderr.String(), "openai-compatible") {
+		t.Errorf("error = %q, want the refusal and the supported list", stderr.String())
+	}
+}
+
 func TestAgentConnectRefusesAMalformedServerURL(t *testing.T) {
 	t.Setenv("TT_AGENT_CONFIG", filepath.Join(t.TempDir(), "agent.json"))
 

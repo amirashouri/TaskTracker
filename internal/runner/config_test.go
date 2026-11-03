@@ -15,8 +15,10 @@ func TestConfigRoundTripIsPrivateAndNormalised(t *testing.T) {
 		RunnerID:   "runner-1",
 		RunnerName: "box",
 		Token:      "ttag_secret",
-		Provider:   "echo",
+		Provider:   "openai-compatible",
 		Model:      "llama3.1",
+		BaseURL:    "http://192.168.1.20:11434/v1/",
+		APIKey:     "sk-local",
 	}
 	if err := SaveConfig(path, cfg); err != nil {
 		t.Fatalf("save: %v", err)
@@ -44,6 +46,12 @@ func TestConfigRoundTripIsPrivateAndNormalised(t *testing.T) {
 	}
 	if loaded.Token != "ttag_secret" || loaded.RunnerID != "runner-1" || loaded.Model != "llama3.1" {
 		t.Errorf("loaded = %+v, want the saved values", loaded)
+	}
+	if loaded.BaseURL != "http://192.168.1.20:11434/v1" {
+		t.Errorf("BaseURL = %q, want the trailing slash trimmed", loaded.BaseURL)
+	}
+	if loaded.APIKey != "sk-local" {
+		t.Errorf("APIKey = %q, want it kept with the provider", loaded.APIKey)
 	}
 }
 

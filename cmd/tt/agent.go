@@ -39,10 +39,19 @@ func agentUsage(w io.Writer) {
 
 Usage:
   tt agent connect [--server URL] [--email EMAIL] [--name NAME]
-                   [--provider echo] [--model MODEL] [--force]
-  tt agent run [--provider echo] [--once] [--wait SECONDS]
+                   [--provider PROVIDER] [--model MODEL] [--base-url URL]
+                   [--api-key KEY] [--force]
+  tt agent run [--provider PROVIDER] [--model MODEL] [--base-url URL]
+               [--api-key KEY] [--workspace DIR] [--max-steps N]
+               [--once] [--wait SECONDS] [--heartbeat DURATION]
   tt agent status
   tt agent disconnect
+
+Providers: echo runs no model; openai-compatible reaches Ollama, LM Studio,
+llama.cpp, vLLM and OpenAI at one endpoint; anthropic speaks the Messages API.
+
+tt agent run edits the directory named by --workspace and runs commands there.
+Run it on the checkout the task is about, and review its diff before you commit.
 
 The runner talks to your TaskTracker server; the model it uses is reached from
 this machine. No provider key is ever sent to the server.
