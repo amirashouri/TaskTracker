@@ -60,6 +60,8 @@ func run(
 		return runStatus(ctx, args[1:], stdout, stderr, statePath)
 	case "doctor":
 		return runDoctor(ctx, args[1:], stdout, stderr, statePath)
+	case "agent":
+		return runAgent(ctx, args[1:], stdin, stdout, stderr)
 	case "logs":
 		return runLogs(ctx, args[1:], stdout, stderr, statePath, runner)
 	case "uninstall":
@@ -147,6 +149,11 @@ Usage:
   tt doctor
   tt logs
   tt uninstall
+  tt agent connect [--server URL] [--email EMAIL] [--name NAME]
+                   [--provider echo] [--model MODEL] [--force]
+  tt agent run [--provider echo] [--once] [--wait SECONDS]
+  tt agent status
+  tt agent disconnect
   tt version
 
 tt never phones home and owns no infrastructure: a provider is an account the

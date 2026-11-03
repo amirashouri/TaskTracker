@@ -1,0 +1,53 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"io"
+)
+
+// runAgent is the command group for the machine that runs agent work. It is
+// deliberately independent of the install state: a runner lives wherever the code
+// is, which is usually a developer machine rather than the server host.
+func runAgent(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		agentUsage(stderr)
+		return 2
+	}
+
+	switch args[0] {
+	case "connect":
+		return runAgentConnect(ctx, args[1:], stdin, stdout, stderr)
+	case "run":
+		return runAgentRun(ctx, args[1:], stdout, stderr)
+	case "status":
+		return runAgentStatus(ctx, args[1:], stdout, stderr)
+	case "disconnect":
+		return runAgentDisconnect(ctx, args[1:], stdout, stderr)
+	case "help", "--help", "-h":
+		agentUsage(stdout)
+		return 0
+	default:
+		fmt.Fprintf(stderr, "tt agent: unknown command %q\n", args[0])
+		agentUsage(stderr)
+		return 2
+	}
+}
+
+func agentUsage(w io.Writer) {
+	fmt.Fprint(w, `tt agent — connect this machine to a server and run agent work
+
+Usage:
+  tt agent connect [--server URL] [--email EMAIL] [--name NAME]
+                   [--provider echo] [--model MODEL] [--force]
+  tt agent run [--provider echo] [--once] [--wait SECONDS]
+  tt agent status
+  tt agent disconnect
+
+The runner talks to your TaskTracker server; the model it uses is reached from
+this machine. No provider key is ever sent to the server.
+
+Config lives in $TT_AGENT_CONFIG, or the per-user config directory as
+tasktracker/agent.json, and is written 0600.
+`)
+}

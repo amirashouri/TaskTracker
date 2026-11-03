@@ -33,7 +33,7 @@ records system design and rationale; task specs hold the implementation contract
 | 7 — Client contract | Complete — details in the archive |
 | 8 — Admin management | Complete — details in the archive |
 | 9 — Customer install and exposure | Active; tasks below are pending or deferred |
-| 10 — Agent runs | Active; T10.1–T10.3 complete |
+| 10 — Agent runs | Active; T10.1–T10.4 complete |
 
 ## Milestone 9 — Customer install and exposure
 
@@ -83,7 +83,7 @@ break installed clients.
 | T10.1 | Complete | Agent-runs schema and lifecycle (migration 0012, repository, lease) | None | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
 | T10.2 | Complete | Runner API: claim, events, heartbeat, finish, token middleware | T10.1 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
 | T10.3 | Complete | App API: dispatch, read, cancel, runner registration | T10.2 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
-| T10.4 | Pending | `tt agent connect`, `status`, `disconnect`; `echo` worker | T10.3 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
+| T10.4 | Complete | `tt agent connect`, `status`, `disconnect`; `echo` worker | T10.3 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
 | T10.5 | Pending | `tt agent run`: providers, tool loop, cancel, lease heartbeats | T10.4 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
 
 ### Milestone ordering

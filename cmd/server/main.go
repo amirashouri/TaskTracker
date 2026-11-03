@@ -258,6 +258,9 @@ func mount(
 	mux.Handle("POST /v1/agent/runs/{id}/events", agentHandler.Authenticate(http.HandlerFunc(agentHandler.AppendEvents)))
 	mux.Handle("POST /v1/agent/runs/{id}/heartbeat", agentHandler.Authenticate(http.HandlerFunc(agentHandler.Heartbeat)))
 	mux.Handle("POST /v1/agent/runs/{id}/finish", agentHandler.Authenticate(http.HandlerFunc(agentHandler.Finish)))
+	// A machine may retire itself; the app route revokes by id with a user JWT,
+	// which the CLI does not hold.
+	mux.Handle("POST /v1/agent/runners/self/revoke", agentHandler.Authenticate(http.HandlerFunc(agentHandler.RevokeSelf)))
 
 	// Agent app routes. A user JWT, scoped by project membership: dispatch, read
 	// the progress log, cancel, and manage the caller's paired machines.

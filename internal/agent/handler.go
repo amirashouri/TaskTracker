@@ -308,6 +308,26 @@ func (h *Handler) Finish(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, finishResponse{Run: newRunnerRun(*run, false)})
 }
 
+// RevokeSelf lets a machine retire itself.
+//
+// The app route revokes by id with a user JWT, which `tt agent disconnect` does
+// not have: the CLI stores a runner token, not a password. This is the one
+// revocation a runner token may perform, and it can only ever name the machine
+// that presented it.
+func (h *Handler) RevokeSelf(w http.ResponseWriter, r *http.Request) {
+	runner, ok := RunnerFrom(r.Context())
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
+	if err := h.repo.RevokeRunner(r.Context(), runner.ID, runner.UserID); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not revoke the runner")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // finishStatus maps the worker's outcome word to the stored status. The closed
 // vocabulary is the same one the column's CHECK accepts.
 func finishStatus(outcome string) (entities.AgentRunStatus, bool) {

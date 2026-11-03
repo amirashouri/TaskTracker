@@ -621,6 +621,7 @@ missing value would silently end a progress page.
 | `POST /v1/agent/runs/{id}/events` | `{"events":[{"kind","message","payload"}]}`, max 200 | `200 {"accepted": n, "nextSeq": seq}` |
 | `POST /v1/agent/runs/{id}/heartbeat` | — | `200 {"cancelRequested": bool, "leaseExpiresAt": …}` |
 | `POST /v1/agent/runs/{id}/finish` | `{"outcome":"succeeded"\|"failed"\|"cancelled", "summary", "error"}` | `200 {"run": …}`, idempotent by status |
+| `POST /v1/agent/runners/self/revoke` | — | `204`; retires the machine that presented the token, and only that one. This is what `tt agent disconnect` calls, because the CLI holds a runner token rather than a user JWT |
 
 All four answer `409` when the run is not held by that runner, so a stale worker
 cannot report on work that was reassigned. If a worker stops heartbeating, the

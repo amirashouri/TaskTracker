@@ -369,6 +369,28 @@ func TestClaimLongPollsUntilARunArrives(t *testing.T) {
 	}
 }
 
+// A machine retires itself with its own token, and only itself: the CLI holds no
+// user JWT, so this is the one revocation it can perform.
+func TestRevokeSelfRetiresOnlyTheCallingMachine(t *testing.T) {
+	e := newAgentEnv(t)
+	_, otherToken := registerRunner(t, e.repo, e.user, "second-machine", "ttag_second")
+
+	rec := e.do(t, e.authed(e.handler.RevokeSelf), http.MethodPost, "/v1/agent/runners/self/revoke", e.token, "", nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke self = %d, want 204; body %s", rec.Code, rec.Body)
+	}
+
+	retired := e.do(t, e.authed(e.handler.Claim), http.MethodPost, "/v1/agent/runs/claim", e.token, "", map[string]any{"waitSeconds": 0})
+	if retired.Code != http.StatusUnauthorized {
+		t.Errorf("the retired token got %d, want 401", retired.Code)
+	}
+
+	other := e.do(t, e.authed(e.handler.Claim), http.MethodPost, "/v1/agent/runs/claim", otherToken, "", map[string]any{"waitSeconds": 0})
+	if other.Code != http.StatusNoContent {
+		t.Errorf("the other machine got %d, want 204: self-revoke must not touch it", other.Code)
+	}
+}
+
 // A finish is chosen from a closed vocabulary, and one worker cannot finish a run
 // another worker holds.
 func TestFinishChoosesTheStatusAndRefusesAForeignRunner(t *testing.T) {
