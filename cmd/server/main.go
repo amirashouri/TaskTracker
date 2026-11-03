@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/amirashouri/tasktracker-server/internal/admin"
+	"github.com/amirashouri/tasktracker-server/internal/agent"
 	"github.com/amirashouri/tasktracker-server/internal/attachments"
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/config"
@@ -102,12 +103,17 @@ func runServer() {
 	// Initialize sync handler
 	syncHandler := sync.NewHandler(syncEngine, jwtManager)
 
+	// The runner API. It authenticates a per-machine token rather than a user JWT,
+	// so it does not share the sync handler's middleware, and the lease it issues
+	// is the configured window a crashed worker's run survives.
+	agentHandler := agent.NewHandler(entities.NewAgentRepository(database.DB), cfg.AgentLeaseTTL)
+
 	// Admin project screens read projects through the same engine, so an edit
 	// lands in the change feed the clients pull.
 	projectHandler := admin.NewProjectHandler(entities.NewProjectRepository(database.DB), syncEngine)
 
 	// Setup HTTP handlers
-	mux := mount(authHandler, adminHandler, profileHandler, meHandler, projectHandler, syncHandler, jwtManager, database.DB, syncEngine, cfg.AttachmentRoot, cfg.AttachmentMaxBytes, cfg.AttachmentDeadline())
+	mux := mount(authHandler, adminHandler, profileHandler, meHandler, projectHandler, syncHandler, agentHandler, jwtManager, database.DB, syncEngine, cfg.AttachmentRoot, cfg.AttachmentMaxBytes, cfg.AttachmentDeadline())
 
 	// Apply middleware chain
 	handler := middleware.Chain(
@@ -182,6 +188,7 @@ func mount(
 	meHandler *me.Handler,
 	projectHandler *admin.ProjectHandler,
 	syncHandler *sync.Handler,
+	agentHandler *agent.Handler,
 	jwtManager *auth.JWTManager,
 	database *sql.DB,
 	syncEngine *sync.Engine,
@@ -224,6 +231,14 @@ func mount(
 	pullAttachments := middleware.Auth(jwtManager)(http.HandlerFunc(syncHandler.PullAttachment))
 	mux.Handle("GET /v1/sync/changes/attachments", pullAttachments)
 	mux.Handle("GET /v1/sync/changes/attachment", pullAttachments)
+
+	// Agent runner routes. An opaque `ttag_…` token authenticates these, never a
+	// user JWT; the app-facing agent routes (dispatch, read, cancel) are a separate
+	// surface and live behind the ordinary Auth middleware.
+	mux.Handle("POST /v1/agent/runs/claim", agentHandler.Authenticate(http.HandlerFunc(agentHandler.Claim)))
+	mux.Handle("POST /v1/agent/runs/{id}/events", agentHandler.Authenticate(http.HandlerFunc(agentHandler.AppendEvents)))
+	mux.Handle("POST /v1/agent/runs/{id}/heartbeat", agentHandler.Authenticate(http.HandlerFunc(agentHandler.Heartbeat)))
+	mux.Handle("POST /v1/agent/runs/{id}/finish", agentHandler.Authenticate(http.HandlerFunc(agentHandler.Finish)))
 
 	// Admin routes (admin only)
 	adminMW := func(handler http.HandlerFunc) http.Handler {

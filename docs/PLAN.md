@@ -81,7 +81,7 @@ break installed clients.
 | Task | State | Intent | Depends on | Execution details |
 | --- | --- | --- | --- | --- |
 | T10.1 | In progress | Agent-runs schema and lifecycle (migration 0012, repository, lease) | None | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
-| T10.2 | Pending | Runner API: claim, events, heartbeat, finish, token middleware | T10.1 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
+| T10.2 | Complete | Runner API: claim, events, heartbeat, finish, token middleware | T10.1 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
 | T10.3 | Pending | App API: dispatch, read, cancel, runner registration | T10.2 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
 | T10.4 | Pending | `tt agent connect`, `status`, `disconnect`; `echo` worker | T10.3 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
 | T10.5 | Pending | `tt agent run`: providers, tool loop, cancel, lease heartbeats | T10.4 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |

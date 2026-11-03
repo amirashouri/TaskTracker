@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"github.com/amirashouri/tasktracker-server/internal/admin"
+	"github.com/amirashouri/tasktracker-server/internal/agent"
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/dbtest"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
 	"github.com/amirashouri/tasktracker-server/internal/me"
+	"github.com/amirashouri/tasktracker-server/internal/middleware"
 	"github.com/amirashouri/tasktracker-server/internal/profile"
 	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
 	"github.com/amirashouri/tasktracker-server/internal/sync"
@@ -163,6 +165,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 			me.NewHandler(users),
 			admin.NewProjectHandler(entities.NewProjectRepository(database.DB), sync.NewEngine(database.DB, "")),
 			sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),
+			agent.NewHandler(entities.NewAgentRepository(database.DB), time.Minute),
 			jwtManager,
 			database.DB,
 			sync.NewEngine(database.DB, ""),
@@ -284,6 +287,38 @@ func keysOf(fields map[string]json.RawMessage) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// The two credentials are not interchangeable: a paired machine's token opens the
+// runner routes and nothing else, and a user's JWT never opens the runner routes.
+// The second half is tested in internal/agent; this is the first.
+func TestARunnerTokenIsRefusedOnAUserRoute(t *testing.T) {
+	database := dbtest.NewDatabase(t)
+	ctx := context.Background()
+
+	owner := &entities.User{Email: "runner-owner@example.com", PasswordHash: "secret"}
+	if err := entities.NewUserRepository(database.DB).Create(ctx, owner); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	repo := entities.NewAgentRepository(database.DB)
+	const token = "ttag_route_probe"
+	if err := repo.RegisterRunner(ctx, &entities.AgentRunner{UserID: owner.ID, Name: "dev-machine"}, agent.HashRunnerToken(token)); err != nil {
+		t.Fatalf("register runner: %v", err)
+	}
+
+	jwtManager := auth.NewJWTManager(strings.Repeat("s", 32), time.Hour, time.Hour)
+	protected := middleware.Auth(jwtManager)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/sync/changes/projects", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	protected.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a runner token on a user route = %d, want 401; body %s", rec.Code, rec.Body)
+	}
 }
 
 func TestTheLoginResponseIsWhatTheClientDecodes(t *testing.T) {

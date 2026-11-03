@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/amirashouri/tasktracker-server/internal/admin"
+	"github.com/amirashouri/tasktracker-server/internal/agent"
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/dbtest"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
@@ -190,6 +191,7 @@ func newTestMux(t *testing.T) *http.ServeMux {
 		me.NewHandler(users),
 		admin.NewProjectHandler(entities.NewProjectRepository(database.DB), sync.NewEngine(database.DB, "")),
 		sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),
+		agent.NewHandler(entities.NewAgentRepository(database.DB), time.Minute),
 		jwtManager,
 		database.DB,
 		sync.NewEngine(database.DB, ""),
