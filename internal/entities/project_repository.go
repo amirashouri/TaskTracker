@@ -16,13 +16,13 @@ func NewProjectRepository(db Querier) *ProjectRepository {
 	return &ProjectRepository{db: db}
 }
 
-const projectColumns = `id, key_prefix, name, details, tags, is_archived, next_item_number, created_at, updated_at, version`
+const projectColumns = `id, key_prefix, name, details, tags, is_archived, next_item_number, created_at, updated_at, version, agent_enabled`
 
 // scanProject reads one row selected with projectColumns. MemberIDs is not a
 // column: membership lives in project_members and is loaded separately.
 func scanProject(row scanner, p *Project) error {
 	var tagsJSON []byte
-	if err := row.Scan(&p.ID, &p.KeyPrefix, &p.Name, &p.Details, &tagsJSON, &p.IsArchived, &p.NextItemNumber, &p.CreatedAt, &p.UpdatedAt, &p.Version); err != nil {
+	if err := row.Scan(&p.ID, &p.KeyPrefix, &p.Name, &p.Details, &tagsJSON, &p.IsArchived, &p.NextItemNumber, &p.CreatedAt, &p.UpdatedAt, &p.Version, &p.AgentEnabled); err != nil {
 		return err
 	}
 	// A malformed blob costs the project its tags, not the row: the rest of the
@@ -68,8 +68,8 @@ func (r *ProjectRepository) Create(ctx context.Context, p *Project) error {
 	return inTx(ctx, r.db, func(q Querier) error {
 		tagsJSON, _ := json.Marshal(normalisedTags(p.Tags))
 		if _, err := q.ExecContext(ctx, `INSERT INTO projects (`+projectColumns+`)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-			p.ID, p.KeyPrefix, p.Name, p.Details, tagsJSON, p.IsArchived, p.NextItemNumber, p.CreatedAt, p.UpdatedAt, p.Version); err != nil {
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			p.ID, p.KeyPrefix, p.Name, p.Details, tagsJSON, p.IsArchived, p.NextItemNumber, p.CreatedAt, p.UpdatedAt, p.Version, p.AgentEnabled); err != nil {
 			return err
 		}
 		// No replay is owed here: a brand-new project has no history behind anyone's
@@ -103,9 +103,9 @@ func (r *ProjectRepository) Update(ctx context.Context, p *Project) error {
 	return inTx(ctx, r.db, func(q Querier) error {
 		// Placeholders ascend in text order: SQLite numbers them by appearance.
 		tagsJSON, _ := json.Marshal(normalisedTags(p.Tags))
-		if err := execOneRow(ctx, q, conflict("project", p.ID), `UPDATE projects SET key_prefix=$1, name=$2, details=$3, tags=$4, is_archived=$5, next_item_number=$6, updated_at=$7, version=$8
-	          WHERE id=$9 AND version=$10`,
-			p.KeyPrefix, p.Name, p.Details, tagsJSON, p.IsArchived, p.NextItemNumber, p.UpdatedAt, p.Version, p.ID, previous); err != nil {
+		if err := execOneRow(ctx, q, conflict("project", p.ID), `UPDATE projects SET key_prefix=$1, name=$2, details=$3, tags=$4, is_archived=$5, next_item_number=$6, updated_at=$7, version=$8, agent_enabled=$9
+          WHERE id=$10 AND version=$11`,
+			p.KeyPrefix, p.Name, p.Details, tagsJSON, p.IsArchived, p.NextItemNumber, p.UpdatedAt, p.Version, p.AgentEnabled, p.ID, previous); err != nil {
 			return err
 		}
 		// This project has a history, so a member who is new to it is owed a replay.

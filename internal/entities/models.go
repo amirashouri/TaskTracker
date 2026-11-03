@@ -131,6 +131,9 @@ type Project struct {
 	Tags           []ProjectTag `json:"tags"`
 	MemberIDs      []UserID     `json:"memberIds"`
 	IsArchived     bool         `json:"isArchived"`
+	// AgentEnabled is the admin's per-project switch for whether a work item here
+	// may be dispatched to an agent. It is project-scoped, not server-scoped.
+	AgentEnabled bool `json:"agentEnabled"`
 	NextItemNumber int          `json:"nextItemNumber"`
 	CreatedAt      Timestamp    `json:"createdAt"`
 	UpdatedAt      Timestamp    `json:"updatedAt"`
