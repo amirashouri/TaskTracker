@@ -330,3 +330,50 @@ func TestRunnerRegistrationReturnsAOneTimeUsableToken(t *testing.T) {
 		t.Errorf("registering without a name = %d, want 400", bad.Code)
 	}
 }
+
+// Stop and start are the settings screen's two commands. The route is what
+// requires an admin; this exercises the handler's own contract - the state
+// changes and comes back on the runner the client renders.
+func TestStopAndStartPauseARunner(t *testing.T) {
+	e := newAgentEnv(t)
+
+	stop := doAs(t, e.app.StopRunner, e.user, http.MethodPost,
+		"/v1/agent/runners/"+string(e.runner.ID)+"/stop", string(e.runner.ID), nil)
+	if stop.Code != http.StatusOK {
+		t.Fatalf("stop: status %d; body %s", stop.Code, stop.Body)
+	}
+	var stopped runnerResponse
+	if err := json.Unmarshal(stop.Body.Bytes(), &stopped); err != nil {
+		t.Fatalf("decode stop: %v", err)
+	}
+	if stopped.Runner.PausedAt == nil {
+		t.Error("the stop response carries no pausedAt; the screen cannot show it as stopped")
+	}
+	if stopped.Runner.RevokedAt != nil {
+		t.Error("a stop revoked the machine; stop must be reversible")
+	}
+
+	start := doAs(t, e.app.StartRunner, e.user, http.MethodPost,
+		"/v1/agent/runners/"+string(e.runner.ID)+"/start", string(e.runner.ID), nil)
+	if start.Code != http.StatusOK {
+		t.Fatalf("start: status %d; body %s", start.Code, start.Body)
+	}
+	var started runnerResponse
+	if err := json.Unmarshal(start.Body.Bytes(), &started); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	if started.Runner.PausedAt != nil {
+		t.Error("pausedAt is still set after a start")
+	}
+
+	unknown := doAs(t, e.app.StopRunner, e.user, http.MethodPost,
+		"/v1/agent/runners/00000000-0000-0000-0000-000000000000/stop",
+		"00000000-0000-0000-0000-000000000000", nil)
+	if unknown.Code != http.StatusNotFound {
+		t.Errorf("stopping an unknown runner = %d, want 404", unknown.Code)
+	}
+	missing := doAs(t, e.app.StartRunner, e.user, http.MethodPost, "/v1/agent/runners//start", "", nil)
+	if missing.Code != http.StatusBadRequest {
+		t.Errorf("starting without an id = %d, want 400", missing.Code)
+	}
+}

@@ -607,11 +607,33 @@ device cannot produce offline, so it is polled rather than synced.
 | `GET /v1/agent/runs/{id}?afterSeq=` | `afterSeq` default 0 | `{"run": …, "events": [...], "hasMore": bool}` |
 | `POST /v1/agent/runs/{id}/cancel` | — | `{"run": …}` with `cancelRequested` |
 | `POST /v1/agent/runners` | `{"name", "provider", "modelLabel"}` | `201 {"runner": …, "token": "ttag_…"}` — token shown once |
-| `GET /v1/agent/runners` | — | `{"runners": [...]}`, revoked included |
+| `GET /v1/agent/runners` | — | `{"runners": [...]}`, revoked and paused included |
 | `DELETE /v1/agent/runners/{id}` | — | `204`, idempotent; `404` for an unknown or another user's runner |
 
 `hasMore` is always present. The client declares it without a default, so a
 missing value would silently end a progress page.
+
+### Fleet controls — admin token
+
+The Settings screen's Agent block shows the caller's paired machines and, for an
+administrator, stops or starts one. These two routes are `POST` under the admin
+chain, because changing what the whole account's fleet will do is an
+administrative act rather than a member's own.
+
+| Route | Body | Result |
+| --- | --- | --- |
+| `POST /v1/agent/runners/{id}/stop` | — | `200 {"runner": …}` with `pausedAt` set; live runs held by that machine are flagged for cancel |
+| `POST /v1/agent/runners/{id}/start` | — | `200 {"runner": …}` with `pausedAt` cleared |
+
+A stop is **not** a revocation. The token stays valid, the row stays in the
+caller's list, and a start restores the same machine without re-pairing. What a
+stop actually does is refuse new claims: the claim query ignores a paused runner,
+so a machine that is still running `tt agent run` simply receives no work. The
+server cannot end a process on a customer's machine, and cancel remains
+cooperative — the worker sees `cancelRequested` on its next heartbeat.
+
+A revoked machine cannot be started: both routes answer `404` for a revoked or
+unknown runner, so a stop cannot be used to probe for ids.
 
 ### Runner routes — opaque runner token
 
@@ -660,6 +682,26 @@ Event:
 set. The claim response additionally carries `taskDocument`, also an opaque JSON
 string: the task snapshot taken at dispatch, which the server stores and
 re-serves verbatim.
+
+Runner, app shape:
+
+```json
+{
+  "id": "66666666-6666-6666-6666-666666666666",
+  "name": "dev-machine",
+  "provider": "openai-compatible",
+  "modelLabel": "llama3.1",
+  "lastSeenAt": "2026-11-03T12:00:00Z",
+  "pausedAt": "2026-11-03T12:05:00Z",
+  "createdAt": "2026-11-03T11:00:00Z"
+}
+```
+
+`lastSeenAt`, `revokedAt` and `pausedAt` are omitted until they exist, and the
+client declares them with defaults. `pausedAt` is the reversible stop;
+`revokedAt` is retirement. The client derives "running" from `lastSeenAt`
+against its own read time (two minutes), because the server touches that column
+on every claim long poll and does not answer freshness itself.
 
 ## Compatibility
 

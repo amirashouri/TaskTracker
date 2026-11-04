@@ -80,11 +80,18 @@ type AgentRunner struct {
 	ModelLabel string        `json:"modelLabel"`
 	LastSeenAt *Timestamp    `json:"lastSeenAt,omitempty"`
 	RevokedAt  *Timestamp    `json:"revokedAt,omitempty"`
-	CreatedAt  Timestamp     `json:"createdAt"`
+	// PausedAt is the reversible stop. A paused machine keeps its token and can
+	// be started again; RevokedAt is the permanent retirement.
+	PausedAt  *Timestamp `json:"pausedAt,omitempty"`
+	CreatedAt Timestamp  `json:"createdAt"`
 }
 
 // Revoked reports whether the runner may no longer claim or report.
 func (r *AgentRunner) Revoked() bool { return r.RevokedAt != nil }
+
+// Paused reports whether the runner is stopped: it may not claim new work,
+// though it may still finish the run it already holds.
+func (r *AgentRunner) Paused() bool { return r.PausedAt != nil }
 
 // AgentRun is one dispatch of a work item to an agent.
 //
@@ -153,17 +160,18 @@ func scanAgentRun(row scanner, run *AgentRun) error {
 	return nil
 }
 
-const agentRunnerColumns = `id, user_id, name, provider, model_label, last_seen_at, revoked_at, created_at`
+const agentRunnerColumns = `id, user_id, name, provider, model_label, last_seen_at, revoked_at, created_at, paused_at`
 
 func scanAgentRunner(row scanner, runner *AgentRunner) error {
-	var lastSeen, revoked sql.NullInt64
+	var lastSeen, revoked, paused sql.NullInt64
 
 	if err := row.Scan(&runner.ID, &runner.UserID, &runner.Name, &runner.Provider, &runner.ModelLabel,
-		&lastSeen, &revoked, &runner.CreatedAt); err != nil {
+		&lastSeen, &revoked, &runner.CreatedAt, &paused); err != nil {
 		return err
 	}
 	runner.LastSeenAt = timestampOrNil(lastSeen)
 	runner.RevokedAt = timestampOrNil(revoked)
+	runner.PausedAt = timestampOrNil(paused)
 	return nil
 }
 
@@ -214,8 +222,7 @@ func (r *AgentRepository) ClaimRun(ctx context.Context, runnerID AgentRunnerID, 
 	          SET status = 'claimed',
 	              runner_id = $1,
 	              lease_expires_at = $2,
-	              started_at = COALESCE(started_at, $3)
-	          WHERE id = (
+	              started_at = COALESCE(started_at, $3)		          WHERE id = (
 	                  SELECT id FROM agent_runs
 	                   WHERE status = 'queued'
 	                     AND requested_by = $4
@@ -224,6 +231,8 @@ func (r *AgentRepository) ClaimRun(ctx context.Context, runnerID AgentRunnerID, 
 	                   LIMIT 1
 	                )
 	            AND status = 'queued'
+	            -- A stopped machine keeps its token but is owed no new work.
+	            AND NOT EXISTS (SELECT 1 FROM agent_runners WHERE id = $1 AND paused_at IS NOT NULL)
 	          RETURNING `+agentRunColumns,
 		runnerID, leaseUntil, Now(), userID)
 
@@ -475,10 +484,10 @@ func (r *AgentRepository) RegisterRunner(ctx context.Context, runner *AgentRunne
 	// The write names token_hash explicitly: agentRunnerColumns is the read
 	// projection, and that deliberately never carries the hash out of the table.
 	_, err := r.db.ExecContext(ctx, `INSERT INTO agent_runners
-	          (id, user_id, name, token_hash, provider, model_label, last_seen_at, revoked_at, created_at)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+	          (id, user_id, name, token_hash, provider, model_label, last_seen_at, revoked_at, created_at, paused_at)
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		runner.ID, runner.UserID, runner.Name, tokenHash, runner.Provider, runner.ModelLabel,
-		runner.LastSeenAt, runner.RevokedAt, runner.CreatedAt)
+		runner.LastSeenAt, runner.RevokedAt, runner.CreatedAt, runner.PausedAt)
 	return err
 }
 
@@ -503,6 +512,51 @@ func (r *AgentRepository) ListRunners(ctx context.Context, userID UserID) ([]*Ag
 	defer rows.Close()
 
 	return collectRows(rows, scanAgentRunner)
+}
+
+// SetRunnerPaused stops or restarts a paired machine.
+//
+// Pausing is not revocation: the token stays valid and the same machine can be
+// started again, which is what makes this a switch rather than a retirement.
+// The claim query is what enforces the stop, so a paused machine that is still
+// running `tt agent run` simply receives no work.
+//
+// A live run is flagged for cancel in the same transaction, because a stop that
+// let the current task finish would report the agent as stopped while it was
+// still editing files. Cancel is cooperative — the worker observes the flag on
+// its next heartbeat — which is the most this server can do to a process it does
+// not own.
+func (r *AgentRepository) SetRunnerPaused(ctx context.Context, id AgentRunnerID, paused bool) (*AgentRunner, error) {
+	var runner *AgentRunner
+	err := inTx(ctx, r.db, func(q Querier) error {
+		// Placeholders ascend in text order: SQLite numbers them by appearance.
+		row := q.QueryRowContext(ctx, `UPDATE agent_runners
+		          SET paused_at = CASE WHEN $1 THEN COALESCE(paused_at, $2) ELSE NULL END
+		          WHERE id = $3 AND revoked_at IS NULL
+		          RETURNING `+agentRunnerColumns,
+			paused, Now(), id)
+		updated, err := oneOrNil(row, scanAgentRunner)
+		if err != nil {
+			return err
+		}
+		if updated == nil {
+			return ErrAgentRunnerNotFound
+		}
+
+		if paused {
+			if _, err := q.ExecContext(ctx, `UPDATE agent_runs
+			          SET cancel_requested = TRUE
+			          WHERE runner_id = $1 AND status IN ('claimed', 'running')`, id); err != nil {
+				return err
+			}
+		}
+		runner = updated
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return runner, nil
 }
 
 // RevokeRunner stops a machine from claiming or reporting work.

@@ -553,3 +553,70 @@ func TestListRunsByWorkItemReturnsNewestFirst(t *testing.T) {
 		}
 	}
 }
+
+// Stop is a reversible pause, not a revocation: the machine keeps its token but
+// is owed no work, and the run it already holds is asked to cancel. Starting the
+// same row is what makes this a switch rather than a retirement.
+func TestPausingARunnerStopsClaimsAndFlagsTheLiveRun(t *testing.T) {
+	f := newAgentFixture(t)
+	ctx := context.Background()
+
+	runner := f.mustRegisterRunner(t, f.user, "dev-machine", "hash-pause")
+	run := f.mustQueueRun(t, f.item.ID, 0)
+	if _, err := f.repo.ClaimRun(ctx, runner.ID, f.user.ID, lease()); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	paused, err := f.repo.SetRunnerPaused(ctx, runner.ID, true)
+	if err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	if paused.PausedAt == nil {
+		t.Error("pausedAt is nil after a stop")
+	}
+	if !paused.Paused() {
+		t.Error("Paused() is false after a stop")
+	}
+
+	// Cancel is cooperative, so the stop is visible on the run the worker holds
+	// rather than as a deleted row.
+	stored, err := f.repo.GetRun(ctx, run.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("read run: %v", err)
+	}
+	if !stored.CancelRequested {
+		t.Error("the live run was not flagged for cancel by the stop")
+	}
+
+	if _, err := f.repo.FinishRun(ctx, run.ID, runner.ID, AgentRunCancelled, "stopped", ""); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	next := f.mustQueueRun(t, f.item.ID, 0)
+	if claimed, err := f.repo.ClaimRun(ctx, runner.ID, f.user.ID, lease()); err != nil || claimed != nil {
+		t.Fatalf("a stopped runner claimed %v (err %v); it must claim nothing", claimed, err)
+	}
+
+	started, err := f.repo.SetRunnerPaused(ctx, runner.ID, false)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if started.PausedAt != nil {
+		t.Error("pausedAt is set after a start")
+	}
+	claimed, err := f.repo.ClaimRun(ctx, runner.ID, f.user.ID, lease())
+	if err != nil || claimed == nil || claimed.ID != next.ID {
+		t.Fatalf("claim after start = %v (err %v), want run %s", claimed, err, next.ID)
+	}
+
+	// A revoked machine cannot be started back into service, and an unknown id is
+	// the same answer, so a stop cannot probe for rows.
+	if err := f.repo.RevokeRunner(ctx, runner.ID, f.user.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if _, err := f.repo.SetRunnerPaused(ctx, runner.ID, false); !errors.Is(err, ErrAgentRunnerNotFound) {
+		t.Errorf("starting a revoked runner = %v, want ErrAgentRunnerNotFound", err)
+	}
+	if _, err := f.repo.SetRunnerPaused(ctx, "00000000-0000-0000-0000-000000000000", true); !errors.Is(err, ErrAgentRunnerNotFound) {
+		t.Errorf("pausing an unknown runner = %v, want ErrAgentRunnerNotFound", err)
+	}
+}

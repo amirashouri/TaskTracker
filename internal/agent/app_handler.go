@@ -119,7 +119,11 @@ type appRunnerResponse struct {
 	ModelLabel string                 `json:"modelLabel"`
 	LastSeenAt *entities.Timestamp    `json:"lastSeenAt,omitempty"`
 	RevokedAt  *entities.Timestamp    `json:"revokedAt,omitempty"`
-	CreatedAt  entities.Timestamp     `json:"createdAt"`
+	// PausedAt is the settings screen's stop state. It is additive: the client
+	// that reads this route declares it with a default, and the build shipped
+	// before this key never called the route at all.
+	PausedAt  *entities.Timestamp `json:"pausedAt,omitempty"`
+	CreatedAt entities.Timestamp  `json:"createdAt"`
 }
 
 func appRunnerFrom(runner entities.AgentRunner) appRunnerResponse {
@@ -130,6 +134,7 @@ func appRunnerFrom(runner entities.AgentRunner) appRunnerResponse {
 		ModelLabel: runner.ModelLabel,
 		LastSeenAt: runner.LastSeenAt,
 		RevokedAt:  runner.RevokedAt,
+		PausedAt:   runner.PausedAt,
 		CreatedAt:  runner.CreatedAt,
 	}
 }
@@ -467,6 +472,43 @@ func (h *AppHandler) ListRunners(w http.ResponseWriter, r *http.Request) {
 		response.Runners = append(response.Runners, appRunnerFrom(*runner))
 	}
 	httpx.WriteJSON(w, http.StatusOK, response)
+}
+
+type runnerResponse struct {
+	Runner appRunnerResponse `json:"runner"`
+}
+
+// StopRunner pauses a machine: it keeps its token, claims no new work, and has
+// its live run asked to cancel. The route is admin-gated in main.go, because
+// stopping the fleet is an administrative action rather than a member's own.
+func (h *AppHandler) StopRunner(w http.ResponseWriter, r *http.Request) {
+	h.setRunnerPaused(w, r, true)
+}
+
+// StartRunner is the reversible half: the same machine begins claiming again.
+// The worker must still be running `tt agent run` — this switch gates the queue,
+// it cannot launch a process on somebody else's computer.
+func (h *AppHandler) StartRunner(w http.ResponseWriter, r *http.Request) {
+	h.setRunnerPaused(w, r, false)
+}
+
+func (h *AppHandler) setRunnerPaused(w http.ResponseWriter, r *http.Request, paused bool) {
+	id := entities.AgentRunnerID(strings.TrimSpace(r.PathValue("id")))
+	if id == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "runner id is required")
+		return
+	}
+
+	runner, err := h.repo.SetRunnerPaused(r.Context(), id, paused)
+	if errors.Is(err, entities.ErrAgentRunnerNotFound) {
+		httpx.WriteError(w, http.StatusNotFound, "agent runner not found")
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not update the runner")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, runnerResponse{Runner: appRunnerFrom(*runner)})
 }
 
 // RevokeRunner retires one of the caller's machines. Revocation is a date on the

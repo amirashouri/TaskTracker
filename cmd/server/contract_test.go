@@ -1522,3 +1522,95 @@ func TestAPushedSprintArrivesOnTheWorkItemsScope(t *testing.T) {
 	t.Fatalf("the sprint was not on the workItems feed, so a second device never sees it: %s",
 		rec.Body.String())
 }
+
+// The settings screen's stop/start pair is a new response key set, so it is
+// pinned here: `pausedAt` is the state the client renders, and the two prefixes
+// that share a path must not be confused. A member is refused by the route, not
+// by a check inside the handler.
+func TestTheAdminCanStopAndStartAPairedMachine(t *testing.T) {
+	env := newContractEnv(t)
+	adminToken := signInToken(t, env)
+
+	registered := env.do(t, http.MethodPost, "/v1/agent/runners", adminToken, map[string]any{
+		"name": "settings-machine", "provider": "echo", "modelLabel": "test",
+	})
+	if registered.Code != http.StatusCreated {
+		t.Fatalf("register: status %d; body %s", registered.Code, registered.Body)
+	}
+	var created struct {
+		Runner map[string]any `json:"runner"`
+	}
+	if err := json.Unmarshal(registered.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode register: %v", err)
+	}
+	runnerID, _ := created.Runner["id"].(string)
+	if runnerID == "" {
+		t.Fatal("registered runner has no id")
+	}
+	for _, key := range []string{"id", "name", "provider", "modelLabel", "createdAt"} {
+		if _, ok := created.Runner[key]; !ok {
+			t.Errorf("runner is missing the required key %q", key)
+		}
+	}
+
+	stopped := env.do(t, http.MethodPost, "/v1/agent/runners/"+runnerID+"/stop", adminToken, nil)
+	if stopped.Code != http.StatusOK {
+		t.Fatalf("stop: status %d; body %s", stopped.Code, stopped.Body)
+	}
+	var pauseBody struct {
+		Runner map[string]any `json:"runner"`
+	}
+	if err := json.Unmarshal(stopped.Body.Bytes(), &pauseBody); err != nil {
+		t.Fatalf("decode stop: %v", err)
+	}
+	if _, ok := pauseBody.Runner["pausedAt"]; !ok {
+		t.Error("stop did not carry pausedAt; the screen has no state to show")
+	}
+	allowed := map[string]bool{
+		"id": true, "name": true, "provider": true, "modelLabel": true,
+		"lastSeenAt": true, "revokedAt": true, "pausedAt": true, "createdAt": true,
+	}
+	for key := range pauseBody.Runner {
+		if !allowed[key] {
+			t.Errorf("runner carries an undeclared key %q", key)
+		}
+	}
+
+	started := env.do(t, http.MethodPost, "/v1/agent/runners/"+runnerID+"/start", adminToken, nil)
+	if started.Code != http.StatusOK {
+		t.Fatalf("start: status %d; body %s", started.Code, started.Body)
+	}
+	var startBody struct {
+		Runner map[string]any `json:"runner"`
+	}
+	if err := json.Unmarshal(started.Body.Bytes(), &startBody); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	if _, ok := startBody.Runner["pausedAt"]; ok {
+		t.Error("start left pausedAt on the runner; the screen would still show it as stopped")
+	}
+
+	// A member may not stop the fleet. The refusal is the route's, because an
+	// admin action must not depend on a check the handler could forget.
+	member := &entities.User{
+		Email: "member@example.com", PasswordHash: "correct horse battery", Role: entities.RoleMember,
+	}
+	if err := entities.NewUserRepository(env.database).Create(context.Background(), member); err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	login := env.do(t, http.MethodPost, "/v1/auth/login", "", map[string]string{
+		"email": member.Email, "password": "correct horse battery",
+	})
+	if login.Code != http.StatusOK {
+		t.Fatalf("member login: status %d; body %s", login.Code, login.Body)
+	}
+	var pair struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(login.Body.Bytes(), &pair); err != nil {
+		t.Fatalf("decode member token: %v", err)
+	}
+	if refused := env.do(t, http.MethodPost, "/v1/agent/runners/"+runnerID+"/stop", pair.AccessToken, nil); refused.Code != http.StatusForbidden {
+		t.Errorf("a member stopping a runner = %d, want 403", refused.Code)
+	}
+}

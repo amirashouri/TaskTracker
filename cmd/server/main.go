@@ -290,6 +290,12 @@ func mount(
 	mux.Handle("GET /v1/admin/projects/{id}", adminMW(http.HandlerFunc(projectHandler.Get)))
 	mux.Handle("PATCH /v1/admin/projects/{id}", adminMW(http.HandlerFunc(projectHandler.Update)))
 
+	// Agent fleet controls. Stop is a server-side pause, not a process kill: the
+	// worker runs on the customer's own machine, so the server can only refuse it
+	// new work. Admin-only because stopping the fleet is an administrative act.
+	mux.Handle("POST /v1/agent/runners/{id}/stop", adminMW(http.HandlerFunc(agentApp.StopRunner)))
+	mux.Handle("POST /v1/agent/runners/{id}/start", adminMW(http.HandlerFunc(agentApp.StartRunner)))
+
 	// Self profile (any authenticated user). The response carries the account's
 	// own email, so it is not cacheable by an intermediary.
 	selfProfile := middleware.Auth(jwtManager)
