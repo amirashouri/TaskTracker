@@ -180,7 +180,7 @@ func Login(ctx context.Context, serverURL, email, password string) (string, erro
 		return "", err
 	}
 	var body struct {
-		AccessToken string `json:"access_token"`
+		AccessToken string `json:"accessToken"`
 	}
 	if err := json.Unmarshal(data, &body); err != nil {
 		return "", fmt.Errorf("decode login: %w", err)

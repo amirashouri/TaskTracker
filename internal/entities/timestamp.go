@@ -25,8 +25,9 @@ import (
 // unmarshalling — a stored instant survives a round trip through the client
 // unchanged.
 //
-// Only the synced entities use it. A User's timestamps belong to the auth and
-// admin API, which is a separate contract with its own snake_case shape.
+// Every timestamp that crosses the wire uses it: synced entities and the
+// user/auth/admin objects alike, all on the same camelCase + ISO-8601 contract
+// after the pre-release convention unification.
 type Timestamp int64
 
 // Now is the current instant, truncated to the resolution the wire carries.

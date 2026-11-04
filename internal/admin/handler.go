@@ -27,7 +27,7 @@ func NewHandler(users *entities.UserRepository, tokens *auth.TokenStore) *Handle
 type createUserRequest struct {
 	Email       string `json:"email"`
 	Password    string `json:"password"`
-	DisplayName string `json:"display_name,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
 	Position    string `json:"position,omitempty"`
 	Role        string `json:"role,omitempty"`
 }
@@ -118,7 +118,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 // ── Update ──────────────────────────────────────────────────────────
 
 type updateUserRequest struct {
-	DisplayName *string `json:"display_name,omitempty"`
+	DisplayName *string `json:"displayName,omitempty"`
 	Position    *string `json:"position,omitempty"`
 	Role        *string `json:"role,omitempty"`
 	Status      *string `json:"status,omitempty"`
@@ -280,8 +280,9 @@ const passwordResetCodeTTL = 24 * time.Hour
 
 type adminPasswordResetCodeResponse struct {
 	Code string `json:"code"`
-	// ExpiresAt is epoch milliseconds, as every timestamp on this API.
-	ExpiresAt int64 `json:"expires_at"`
+	// ExpiresAt is an ISO-8601 UTC string at whole-second resolution, matching
+	// every other timestamp on this API.
+	ExpiresAt entities.Timestamp `json:"expiresAt"`
 }
 
 // PasswordResetCode generates a time-limited, single-use reset code for the
@@ -314,22 +315,22 @@ func (h *Handler) PasswordResetCode(w http.ResponseWriter, r *http.Request) {
 
 	httpx.WriteJSON(w, http.StatusCreated, adminPasswordResetCodeResponse{
 		Code:      code,
-		ExpiresAt: time.Now().Add(passwordResetCodeTTL).UnixMilli(),
+		ExpiresAt: entities.Timestamp(time.Now().Add(passwordResetCodeTTL).UnixMilli()),
 	})
 }
 
 // ── Response shape ──────────────────────────────────────────────────
 
 type userResponse struct {
-	ID          string `json:"id"`
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name,omitempty"`
-	Position    string `json:"position,omitempty"`
-	AvatarID    string `json:"avatar_id,omitempty"`
-	Status      string `json:"status,omitempty"`
-	Role        string `json:"role,omitempty"`
-	LastSeen    *int64 `json:"last_seen,omitempty"`
-	CreatedAt   int64  `json:"created_at"`
+	ID          string              `json:"id"`
+	Email       string              `json:"email"`
+	DisplayName string              `json:"displayName,omitempty"`
+	Position    string              `json:"position,omitempty"`
+	AvatarID    string              `json:"avatarId,omitempty"`
+	Status      string              `json:"status,omitempty"`
+	Role        string              `json:"role,omitempty"`
+	LastSeen    *entities.Timestamp `json:"lastSeen,omitempty"`
+	CreatedAt   entities.Timestamp  `json:"createdAt"`
 }
 
 func toUserResponse(u *entities.User) userResponse {
@@ -341,7 +342,18 @@ func toUserResponse(u *entities.User) userResponse {
 		AvatarID:    u.AvatarID,
 		Status:      u.Status,
 		Role:        u.Role,
-		LastSeen:    u.LastSeen,
-		CreatedAt:   u.CreatedAt,
+		LastSeen:    userTimestampOrNil(u.LastSeen),
+		CreatedAt:   entities.Timestamp(u.CreatedAt),
 	}
+}
+
+// userTimestampOrNil converts a nullable epoch-millisecond column to the pointer
+// the response wants, so a NULL lastSeen stays absent instead of collapsing to
+// a zero timestamp.
+func userTimestampOrNil(v *int64) *entities.Timestamp {
+	if v == nil {
+		return nil
+	}
+	t := entities.Timestamp(*v)
+	return &t
 }

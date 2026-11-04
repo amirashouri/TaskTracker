@@ -20,15 +20,10 @@ see [`USER-MANAGEMENT.md`](USER-MANAGEMENT.md). For the design record, see
 | Request bodies | capped at 1 MiB; unknown fields are **rejected**, not ignored |
 | Errors | `{"error": "..."}` with a 4xx or 5xx status |
 
-### Two JSON conventions
+### One JSON convention
 
-The server has two, and which one applies depends on which half of the API you
-are in:
-
-| Area | Convention | Example |
-| --- | --- | --- |
-| Auth, admin, users | `snake_case` | `access_token`, `display_name` |
-| Sync envelope and entity payloads | `camelCase` | `entityId`, `nextCursor`, `keyPrefix` |
+Every shape on this server is `camelCase`, including the auth, admin and user
+objects. There is no second convention to remember.
 
 This is not a preference either side gets to revise. The client adapts wire
 names to Kotlin names with `@SerialName`, and its `ignoreUnknownKeys` is
@@ -37,10 +32,9 @@ about is a decoding failure, not a value it can skip.
 
 ### Timestamps
 
-Two formats, again split along the same line.
-
-**Synced entity payloads** (`project`, `workItem`, `sprint`, `comment`) use
-**ISO-8601 UTC at whole-second resolution**:
+All timestamps — synced entities (`project`, `workItem`, `sprint`, `comment`),
+agent runs, and the user/auth/admin objects alike — are **ISO-8601 UTC at
+whole-second resolution**:
 
 ```
 2026-09-26T20:13:32Z
@@ -55,10 +49,6 @@ it hands back.
 A bare epoch-millisecond number is also accepted on input, so a hand-rolled
 `curl` does not have to know the format. A fractional second is truncated rather
 than rejected. The server always **emits** the string form.
-
-**The user object** in the auth and admin API uses `snake_case` epoch
-milliseconds (`created_at`, `last_seen`), because that half of the API predates
-the sync protocol and is a separate contract.
 
 ## Auth
 
@@ -84,7 +74,7 @@ successful sign-in clears the account's counter but not the address's.
 ### `POST /v1/auth/refresh`
 
 ```json
-{ "refresh_token": "<refresh-token>" }
+{ "refreshToken": "<refresh-token>" }
 ```
 
 Rotates the token: the presented refresh token is revoked and a new one is issued
@@ -113,11 +103,11 @@ usable until it expires; that is what its short lifetime is for.
 
 ```json
 {
-  "access_token": "eyJhbGciOi...",
-  "refresh_token": "eyJhbGciOi...",
-  "user_id": "550e8400-e29b-41d4-a716-446655440000",
+  "accessToken": "eyJhbGciOi...",
+  "refreshToken": "eyJhbGciOi...",
+  "userId": "550e8400-e29b-41d4-a716-446655440000",
   "email": "jane@example.com",
-  "display_name": "Jane Doe"
+  "displayName": "Jane Doe"
 }
 ```
 
@@ -135,18 +125,18 @@ key rather than skipping it.
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "email": "jane@example.com",
-  "display_name": "Jane Doe",
+  "displayName": "Jane Doe",
   "position": "Designer",
-  "avatar_id": "",
+  "avatarId": "",
   "status": "active",
   "role": "member",
-  "last_seen": 1700000000000,
-  "created_at": 1699000000000
+  "lastSeen": "2023-11-14T22:13:20Z",
+  "createdAt": "2023-11-03T08:26:40Z"
 }
 ```
 
-`password_hash` is never present in any response. `last_seen` is omitted when
-null. Presence (`presence`, `presence_note`) is deliberately **not** part of
+`passwordHash` is never present in any response. `lastSeen` is omitted when
+null. Presence (`presence`, `presenceNote`) is deliberately **not** part of
 this object; it belongs to the self-profile shape below, so adding it here would
 break installed clients that decode this object strictly.
 
@@ -156,7 +146,7 @@ break installed clients that decode this object strictly.
 | --- | --- | --- |
 | `email` | yes | — |
 | `password` | yes | — |
-| `display_name` | no | `""` |
+| `displayName` | no | `""` |
 | `position` | no | `""` |
 | `role` | no | `"member"` |
 
@@ -188,7 +178,7 @@ typo is not read as an empty list.
 ### `PATCH /v1/admin/users/{id}` — admin only
 
 ```json
-{ "display_name": "Jane Smith", "position": "Senior Designer", "role": "admin", "status": "inactive" }
+{ "displayName": "Jane Smith", "position": "Senior Designer", "role": "admin", "status": "inactive" }
 ```
 
 Every field is optional; only the ones present are applied.
@@ -229,7 +219,7 @@ role claim, because a claim can outlive the role it names.
 ### `GET /v1/users/search?q=` — any authenticated user
 
 The collaborator directory. With a query, a case-insensitive substring match on
-`email` and `display_name`, limited to 50 results, newest first. An absent or
+`email` and `displayName`, limited to 50 results, newest first. An absent or
 blank `q` lists every non-deleted account, newest first — the member picker
 opens with no text and needs somebody to offer before the user types. `200`
 with an array of user objects.
@@ -252,11 +242,11 @@ profile through them.
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "email": "jane@example.com",
-  "display_name": "Jane Doe",
+  "displayName": "Jane Doe",
   "position": "Product owner",
-  "avatar_id": "7",
+  "avatarId": "7",
   "presence": "away",
-  "presence_note": "At the dentist"
+  "presenceNote": "At the dentist"
 }
 ```
 
@@ -268,23 +258,23 @@ exist, and the role is admin-managed.
 ### `PATCH /v1/me`
 
 ```json
-{ "display_name": "Jane Doe", "presence": "away", "presence_note": "At the dentist" }
+{ "displayName": "Jane Doe", "presence": "away", "presenceNote": "At the dentist" }
 ```
 
 Every field is optional; only the keys present are applied. Email, role,
-`status`, `password`, `last_seen` and `created_at` are unknown fields here and
+`status`, `password`, `lastSeen` and `createdAt` are unknown fields here and
 are rejected (`DisallowUnknownFields`). An empty object is a `400`, so a client
 that believes it saved something is told it did not.
 
 | Field | Rule |
 | --- | --- |
-| `display_name` | trimmed; 1–120 characters; blank rejected |
+| `displayName` | trimmed; 1–120 characters; blank rejected |
 | `position` | trimmed; 0–120 characters; empty clears |
-| `avatar_id` | `""` or exactly one ASCII digit `0`–`9` |
+| `avatarId` | `""` or exactly one ASCII digit `0`–`9` |
 | `presence` | `active`, `away`, `be_right_back`, or `busy`; empty rejected |
-| `presence_note` | trimmed; 0–280 characters; empty clears |
+| `presenceNote` | trimmed; 0–280 characters; empty clears |
 
-`presence` and `presence_note` are **not** `status`. `status` answers "may this
+`presence` and `presenceNote` are **not** `status`. `status` answers "may this
 account sign in?" (`active`/`inactive`/`deleted`) and is admin-owned; `presence`
 answers "is this person available?" and belongs to the user. A presence write
 cannot reactivate or inactivate an account, and an admin status write does not
@@ -586,8 +576,8 @@ inside this server: it is a worker on the machine that holds the code
 (`tt agent run`), so the server never calls a model and never stores a provider
 key. It owns the queue, the machine credential, and the progress log.
 
-This half of the API is `camelCase` with ISO-8601 whole-second timestamps, like
-the sync entities and unlike the auth/admin half.
+This half of the API is `camelCase` with ISO-8601 whole-second timestamps, the
+same convention the whole document now uses.
 
 **Two credentials, never interchangeable.** The runner routes accept an opaque
 `ttag_…` token issued by `POST /v1/agent/runners`; every other route in this

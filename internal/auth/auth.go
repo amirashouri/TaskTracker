@@ -168,7 +168,7 @@ type signInRequest struct {
 }
 
 type refreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
+	RefreshToken string `json:"refreshToken"`
 }
 
 // tokenResponse is the token pair, and its key set is the client's DTO.
@@ -185,11 +185,11 @@ type refreshRequest struct {
 // first. See "The wire format is a contract with a client you cannot update" in
 // AGENTS.md.
 type tokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	UserID       string `json:"user_id,omitempty"`
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
+	UserID       string `json:"userId,omitempty"`
 	Email        string `json:"email,omitempty"`
-	DisplayName  string `json:"display_name,omitempty"`
+	DisplayName  string `json:"displayName,omitempty"`
 }
 
 func (h *Handler) SignIn(w http.ResponseWriter, r *http.Request) {

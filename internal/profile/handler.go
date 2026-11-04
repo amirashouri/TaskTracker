@@ -39,11 +39,11 @@ func NewHandler(users *entities.UserRepository) *Handler {
 type profileResponse struct {
 	ID           string `json:"id"`
 	Email        string `json:"email"`
-	DisplayName  string `json:"display_name,omitempty"`
+	DisplayName  string `json:"displayName,omitempty"`
 	Position     string `json:"position,omitempty"`
-	AvatarID     string `json:"avatar_id,omitempty"`
+	AvatarID     string `json:"avatarId,omitempty"`
 	Presence     string `json:"presence,omitempty"`
-	PresenceNote string `json:"presence_note,omitempty"`
+	PresenceNote string `json:"presenceNote,omitempty"`
 }
 
 func toProfileResponse(u *entities.User) profileResponse {
@@ -59,11 +59,11 @@ func toProfileResponse(u *entities.User) profileResponse {
 }
 
 type updateProfileRequest struct {
-	DisplayName  *string `json:"display_name,omitempty"`
+	DisplayName  *string `json:"displayName,omitempty"`
 	Position     *string `json:"position,omitempty"`
-	AvatarID     *string `json:"avatar_id,omitempty"`
+	AvatarID     *string `json:"avatarId,omitempty"`
 	Presence     *string `json:"presence,omitempty"`
-	PresenceNote *string `json:"presence_note,omitempty"`
+	PresenceNote *string `json:"presenceNote,omitempty"`
 }
 
 // Get answers GET /v1/me.

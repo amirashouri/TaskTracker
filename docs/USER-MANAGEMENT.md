@@ -147,7 +147,7 @@ the client calls it best-effort before clearing local state.
 
 ```
 1. Bootstrap    →  go run ./cmd/server user-create --email admin@... --password ... --admin
-2. Sign in      →  POST /v1/auth/login  →  access_token + refresh_token
+2. Sign in      →  POST /v1/auth/login  →  accessToken + refreshToken
 3. Create users →  POST /v1/admin/users  (admin token required)
 4. New users sign in independently with their own credentials
 5. Any user searches the directory →  GET /v1/users/search?q=...

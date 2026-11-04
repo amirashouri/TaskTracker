@@ -46,11 +46,11 @@ import (
 // only a contract if it is transcribed from something; this one was written from
 // what the server sent.
 type clientTokenPair struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	UserID       string `json:"user_id"`
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
+	UserID       string `json:"userId"`
 	Email        string `json:"email"`
-	DisplayName  string `json:"display_name"`
+	DisplayName  string `json:"displayName"`
 }
 
 // clientPushBody mirrors PushRequestBody. Note `payload` is a *string*: the
@@ -102,12 +102,12 @@ type clientChange struct {
 type clientUser struct {
 	ID          string `json:"id"`
 	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
+	DisplayName string `json:"displayName"`
 	Position    string `json:"position"`
-	AvatarID    string `json:"avatar_id"`
+	AvatarID    string `json:"avatarId"`
 	Status      string `json:"status"`
 	Role        string `json:"role"`
-	CreatedAt   int64  `json:"created_at"`
+	CreatedAt   entities.Timestamp  `json:"createdAt"`
 }
 
 // clientProfile mirrors the KMP `UserProfileResponse`, transcribed from
@@ -117,11 +117,11 @@ type clientUser struct {
 type clientProfile struct {
 	ID           string `json:"id"`
 	Email        string `json:"email"`
-	DisplayName  string `json:"display_name"`
+	DisplayName  string `json:"displayName"`
 	Position     string `json:"position"`
-	AvatarID     string `json:"avatar_id"`
+	AvatarID     string `json:"avatarId"`
 	Presence     string `json:"presence"`
-	PresenceNote string `json:"presence_note"`
+	PresenceNote string `json:"presenceNote"`
 }
 
 type contractEnv struct {
@@ -232,7 +232,7 @@ func (e *contractEnv) signIn(t *testing.T) clientTokenPair {
 	// Every field the client declares is populated on a successful sign-in, so all
 	// five are required — and the key set is closed, because the client's DTO is.
 	assertWireKeys(t, "the token pair", rec.Body.Bytes(), []string{
-		"access_token", "refresh_token", "user_id", "email", "display_name",
+		"accessToken", "refreshToken", "userId", "email", "displayName",
 	}, nil)
 
 	return tokens
@@ -360,7 +360,7 @@ func signInToken(t *testing.T, env *contractEnv) string {
 		t.Fatalf("sign in: status %d; body %s", rec.Code, rec.Body)
 	}
 	var pair struct {
-		AccessToken string `json:"access_token"`
+		AccessToken string `json:"accessToken"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &pair); err != nil {
 		t.Fatalf("decode token pair: %v", err)
@@ -482,13 +482,13 @@ func TestTheLoginResponseIsWhatTheClientDecodes(t *testing.T) {
 		t.Errorf("token pair = %+v, want both tokens populated", tokens)
 	}
 	if tokens.UserID != string(env.user.ID) {
-		t.Errorf("user_id = %q, want %q", tokens.UserID, env.user.ID)
+		t.Errorf("userId = %q, want %q", tokens.UserID, env.user.ID)
 	}
 	if tokens.Email != "ada@example.com" {
 		t.Errorf("email = %q, want %q", tokens.Email, "ada@example.com")
 	}
 	if tokens.DisplayName != "Ada" {
-		t.Errorf("display_name = %q, want %q", tokens.DisplayName, "Ada")
+		t.Errorf("displayName = %q, want %q", tokens.DisplayName, "Ada")
 	}
 }
 
@@ -497,7 +497,7 @@ func TestTheRefreshResponseIsWhatTheClientDecodes(t *testing.T) {
 	tokens := env.signIn(t)
 
 	rec := env.do(t, http.MethodPost, "/v1/auth/refresh", "", map[string]string{
-		"refresh_token": tokens.RefreshToken,
+		"refreshToken": tokens.RefreshToken,
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("refresh = %d, body = %s", rec.Code, rec.Body.String())
@@ -511,14 +511,14 @@ func TestTheRefreshResponseIsWhatTheClientDecodes(t *testing.T) {
 	// and stay green — the same blind spot as the login pair, on the other call that
 	// returns one.
 	assertWireKeys(t, "the rotated token pair", rec.Body.Bytes(), []string{
-		"access_token", "refresh_token", "user_id", "email", "display_name",
+		"accessToken", "refreshToken", "userId", "email", "displayName",
 	}, nil)
 
 	if rotated.RefreshToken == "" || rotated.RefreshToken == tokens.RefreshToken {
-		t.Errorf("refresh_token = %q, want a new one", rotated.RefreshToken)
+		t.Errorf("refreshToken = %q, want a new one", rotated.RefreshToken)
 	}
 	if rotated.AccessToken == "" {
-		t.Error("the rotated pair carries no access_token")
+		t.Error("the rotated pair carries no accessToken")
 	}
 }
 
@@ -750,7 +750,7 @@ func TestTheUserObjectIsWhatTheClientDecodes(t *testing.T) {
 		t.Fatalf("search returned %d users, want 1: %s", len(users), rec.Body.String())
 	}
 
-	// position and avatar_id are omitempty and empty on a fresh user, so they are
+	// position and avatarId are omitempty and empty on a fresh user, so they are
 	// permitted rather than required. status is always present now that Create
 	// defaults it to active, but the client declares it with a default, so the
 	// contract still only promises it may be there.
@@ -759,8 +759,8 @@ func TestTheUserObjectIsWhatTheClientDecodes(t *testing.T) {
 		t.Fatalf("decode users: %v", err)
 	}
 	assertWireKeys(t, "the user object", rawUsers[0],
-		[]string{"id", "email", "display_name", "role", "created_at"},
-		[]string{"position", "avatar_id", "status", "last_seen"})
+		[]string{"id", "email", "displayName", "role", "createdAt"},
+		[]string{"position", "avatarId", "status", "lastSeen"})
 
 	user := users[0]
 	if user.ID != string(env.user.ID) || user.Email != "ada@example.com" {
@@ -770,7 +770,7 @@ func TestTheUserObjectIsWhatTheClientDecodes(t *testing.T) {
 		t.Errorf("role = %q, want %q", user.Role, entities.RoleAdmin)
 	}
 	if user.CreatedAt <= 0 {
-		t.Errorf("created_at = %d, want the epoch-millis the admin API uses", user.CreatedAt)
+		t.Errorf("createdAt = %s, want the ISO-8601 the admin API uses", user.CreatedAt)
 	}
 }
 
@@ -790,7 +790,7 @@ func TestTheSelfProfileIsWhatTheClientDecodes(t *testing.T) {
 	profile := decodeInto[clientProfile](t, rec)
 	assertWireKeys(t, "the self profile", rec.Body.Bytes(),
 		[]string{"id", "email", "presence"},
-		[]string{"display_name", "position", "avatar_id", "presence_note"})
+		[]string{"displayName", "position", "avatarId", "presenceNote"})
 
 	if profile.ID != string(env.user.ID) || profile.Email != "ada@example.com" {
 		t.Errorf("profile = %+v, want the signed-in account", profile)
@@ -800,11 +800,11 @@ func TestTheSelfProfileIsWhatTheClientDecodes(t *testing.T) {
 	}
 
 	rec = env.do(t, http.MethodPatch, "/v1/me", tokens.AccessToken, map[string]string{
-		"display_name":  "Ada Lovelace",
+		"displayName":  "Ada Lovelace",
 		"position":      "Product owner",
-		"avatar_id":     "7",
+		"avatarId":     "7",
 		"presence":      "away",
-		"presence_note": "At the dentist",
+		"presenceNote": "At the dentist",
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PATCH /v1/me = %d, body %s", rec.Code, rec.Body.String())
@@ -813,7 +813,7 @@ func TestTheSelfProfileIsWhatTheClientDecodes(t *testing.T) {
 	updated := decodeInto[clientProfile](t, rec)
 	assertWireKeys(t, "the updated self profile", rec.Body.Bytes(),
 		[]string{"id", "email", "presence"},
-		[]string{"display_name", "position", "avatar_id", "presence_note"})
+		[]string{"displayName", "position", "avatarId", "presenceNote"})
 
 	want := clientProfile{
 		ID:           string(env.user.ID),
@@ -839,8 +839,8 @@ func TestTheSelfProfileIsWhatTheClientDecodes(t *testing.T) {
 		t.Fatalf("decode users: %v", err)
 	}
 	assertWireKeys(t, "the user object", rawUsers[0],
-		[]string{"id", "email", "display_name", "role", "created_at"},
-		[]string{"position", "avatar_id", "status", "last_seen"})
+		[]string{"id", "email", "displayName", "role", "createdAt"},
+		[]string{"position", "avatarId", "status", "lastSeen"})
 }
 
 // Deleting a member is a soft delete: the row stays, but the account can no
@@ -854,7 +854,7 @@ func TestDeletingAMemberEndsTheirSessionsAndBlocksSignIn(t *testing.T) {
 	created := env.do(t, http.MethodPost, "/v1/admin/users", admin.AccessToken, map[string]string{
 		"email":        "grace@example.com",
 		"password":     "grace-password",
-		"display_name": "Grace",
+		"displayName": "Grace",
 		"role":         entities.RoleMember,
 	})
 	if created.Code != http.StatusCreated {
@@ -881,7 +881,7 @@ func TestDeletingAMemberEndsTheirSessionsAndBlocksSignIn(t *testing.T) {
 
 	// The session that was open when the row changed must not rotate.
 	rotated := env.do(t, http.MethodPost, "/v1/auth/refresh", "", map[string]string{
-		"refresh_token": graceTokens.RefreshToken,
+		"refreshToken": graceTokens.RefreshToken,
 	})
 	if rotated.Code != http.StatusUnauthorized {
 		t.Errorf("a deleted member's refresh = %d, want 401", rotated.Code)
@@ -1370,7 +1370,7 @@ func TestAdminProjectListSplitsActiveFromArchived(t *testing.T) {
 // (AGENTS.md §7) — so these two keys are the entire response.
 type clientResetCodeResponse struct {
 	Code      string `json:"code"`
-	ExpiresAt int64  `json:"expires_at"`
+	ExpiresAt entities.Timestamp `json:"expiresAt"`
 }
 
 // clientChangePasswordResponse mirrors the KMP `ChangePasswordResponse`,
@@ -1379,8 +1379,8 @@ type clientResetCodeResponse struct {
 type clientChangePasswordResponse struct {
 	ID           string `json:"id"`
 	Email        string `json:"email"`
-	DisplayName  string `json:"display_name"`
-	PasswordHash string `json:"password_hash"`
+	DisplayName  string `json:"displayName"`
+	PasswordHash string `json:"passwordHash"`
 }
 
 // The whole forgot-password flow over the routes the client actually calls
@@ -1395,8 +1395,8 @@ func TestChangePasswordFlowOverTheMountedRoutes(t *testing.T) {
 
 	// The route is mounted and auth-gated: without a token it is 401, not 404.
 	denied := env.do(t, http.MethodPost, "/v1/me/password", "", map[string]string{
-		"old_password_or_code": "correct horse battery",
-		"new_password":         "brand new secret",
+		"oldPasswordOrCode": "correct horse battery",
+		"newPassword":         "brand new secret",
 	})
 	if denied.Code != http.StatusUnauthorized {
 		t.Fatalf("change-password without a token = %d, want 401 (body %s)", denied.Code, denied.Body.String())
@@ -1404,8 +1404,8 @@ func TestChangePasswordFlowOverTheMountedRoutes(t *testing.T) {
 
 	// A wrong credential refuses with a 400 the client renders verbatim.
 	wrong := env.do(t, http.MethodPost, "/v1/me/password", member.AccessToken, map[string]string{
-		"old_password_or_code": "not-the-password",
-		"new_password":         "brand new secret",
+		"oldPasswordOrCode": "not-the-password",
+		"newPassword":         "brand new secret",
 	})
 	if wrong.Code != http.StatusBadRequest {
 		t.Fatalf("change-password with a wrong credential = %d, want 400 (body %s)", wrong.Code, wrong.Body.String())
@@ -1417,25 +1417,25 @@ func TestChangePasswordFlowOverTheMountedRoutes(t *testing.T) {
 	if minted.Code != http.StatusCreated {
 		t.Fatalf("mint reset code = %d, want 201 (body %s)", minted.Code, minted.Body.String())
 	}
-	assertWireKeys(t, "the reset code", minted.Body.Bytes(), []string{"code", "expires_at"}, nil)
+	assertWireKeys(t, "the reset code", minted.Body.Bytes(), []string{"code", "expiresAt"}, nil)
 	code := decodeInto[clientResetCodeResponse](t, minted)
 	if code.Code == "" {
 		t.Fatal("the minted response carries no code, so there is nothing to hand over")
 	}
-	if code.ExpiresAt <= time.Now().UnixMilli() {
-		t.Errorf("expires_at = %d, want a future epoch-millisecond instant", code.ExpiresAt)
+	if code.ExpiresAt.Time().Before(time.Now()) {
+		t.Errorf("expiresAt = %s, want a future instant", code.ExpiresAt)
 	}
 
 	// The member spends the code on a new password.
 	changed := env.do(t, http.MethodPost, "/v1/me/password", member.AccessToken, map[string]string{
-		"old_password_or_code": code.Code,
-		"new_password":         "brand new secret",
+		"oldPasswordOrCode": code.Code,
+		"newPassword":         "brand new secret",
 	})
 	if changed.Code != http.StatusOK {
 		t.Fatalf("change-password with the code = %d, want 200 (body %s)", changed.Code, changed.Body.String())
 	}
 	assertWireKeys(t, "the change-password response", changed.Body.Bytes(),
-		[]string{"id", "email", "display_name", "password_hash"}, nil)
+		[]string{"id", "email", "displayName", "passwordHash"}, nil)
 	applied := decodeInto[clientChangePasswordResponse](t, changed)
 	if applied.ID != string(env.user.ID) || applied.Email != env.user.Email {
 		t.Errorf("change-password answered %+v, want the caller's own row", applied)
@@ -1443,8 +1443,8 @@ func TestChangePasswordFlowOverTheMountedRoutes(t *testing.T) {
 
 	// Single use: the spent code cannot authorise a second change.
 	replay := env.do(t, http.MethodPost, "/v1/me/password", member.AccessToken, map[string]string{
-		"old_password_or_code": code.Code,
-		"new_password":         "another secret 1",
+		"oldPasswordOrCode": code.Code,
+		"newPassword":         "another secret 1",
 	})
 	if replay.Code != http.StatusBadRequest {
 		t.Fatalf("replaying the spent code = %d, want 400 (body %s)", replay.Code, replay.Body.String())
@@ -1605,7 +1605,7 @@ func TestTheAdminCanStopAndStartAPairedMachine(t *testing.T) {
 		t.Fatalf("member login: status %d; body %s", login.Code, login.Body)
 	}
 	var pair struct {
-		AccessToken string `json:"access_token"`
+		AccessToken string `json:"accessToken"`
 	}
 	if err := json.Unmarshal(login.Body.Bytes(), &pair); err != nil {
 		t.Fatalf("decode member token: %v", err)

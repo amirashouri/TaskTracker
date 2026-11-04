@@ -39,7 +39,7 @@ func agentServer(t *testing.T, revokes *atomic.Int32) *httptest.Server {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid credentials"})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "jwt"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"accessToken": "jwt"})
 	})
 	mux.HandleFunc("/v1/agent/runners", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer jwt" {

@@ -31,15 +31,15 @@ func NewHandler(users *entities.UserRepository) *Handler {
 }
 
 type changePasswordRequest struct {
-	OldPasswordOrCode string `json:"old_password_or_code"`
-	NewPassword       string `json:"new_password"`
+	OldPasswordOrCode string `json:"oldPasswordOrCode"`
+	NewPassword       string `json:"newPassword"`
 }
 
 type changePasswordResponse struct {
 	ID           string `json:"id"`
 	Email        string `json:"email"`
-	DisplayName  string `json:"display_name"`
-	PasswordHash string `json:"password_hash"`
+	DisplayName  string `json:"displayName"`
+	PasswordHash string `json:"passwordHash"`
 }
 
 // ChangePassword sets a new password for the caller after verifying identity
@@ -47,7 +47,7 @@ type changePasswordResponse struct {
 // two credentials the client's change sheet offers. A code that verifies is
 // consumed here, so one code authorises exactly one change.
 //
-// The response carries password_hash like no other /v1/me shape does: the
+// The response carries passwordHash like no other /v1/me shape does: the
 // client's DTO for this endpoint declares it, and specs/t8.1-change-password.md
 // records that as the deliberate exception to the projection rule.
 func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +71,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	// space, and silently altering it is the bug cmd/tt/prompt.go already warns
 	// about for the CLI's own secret reads.
 	if req.OldPasswordOrCode == "" || req.NewPassword == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "old_password_or_code and new_password are required")
+		httpx.WriteError(w, http.StatusBadRequest, "oldPasswordOrCode and newPassword are required")
 		return
 	}
 	if len(req.NewPassword) < minPasswordLength {

@@ -167,7 +167,7 @@ func TestLoginAndRegisterReadThePairingResponse(t *testing.T) {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "jwt"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"accessToken": "jwt"})
 		case "/v1/agent/runners":
 			registerAuth = r.Header.Get("Authorization")
 			w.WriteHeader(http.StatusCreated)

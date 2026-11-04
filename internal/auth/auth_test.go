@@ -58,12 +58,12 @@ func (e *testEnv) signIn(t *testing.T) tokenResponse {
 
 func (e *testEnv) refresh(t *testing.T, refreshToken string) *httptest.ResponseRecorder {
 	t.Helper()
-	return postJSON(t, e.handler.Refresh, map[string]string{"refresh_token": refreshToken})
+	return postJSON(t, e.handler.Refresh, map[string]string{"refreshToken": refreshToken})
 }
 
 func (e *testEnv) signOut(t *testing.T, refreshToken string) *httptest.ResponseRecorder {
 	t.Helper()
-	return postJSON(t, e.handler.SignOut, map[string]string{"refresh_token": refreshToken})
+	return postJSON(t, e.handler.SignOut, map[string]string{"refreshToken": refreshToken})
 }
 
 func (e *testEnv) stored(t *testing.T, token string) *RefreshToken {
@@ -162,7 +162,7 @@ func TestSignInStoresAHashedRefreshToken(t *testing.T) {
 	// A refresh token's own expiry must match the configured TTL.
 	want := time.Now().Add(720 * time.Hour).UnixMilli()
 	if delta := record.ExpiresAt - want; delta < -time.Minute.Milliseconds() || delta > time.Minute.Milliseconds() {
-		t.Errorf("expires_at = %d, want about %d", record.ExpiresAt, want)
+		t.Errorf("expiresAt = %d, want about %d", record.ExpiresAt, want)
 	}
 }
 
@@ -274,8 +274,8 @@ func TestRefreshAndSignOutRequireARefreshToken(t *testing.T) {
 		body string
 	}{
 		{"an empty object", `{}`},
-		{"a blank token", `{"refresh_token":""}`},
-		{"a body that is not JSON", `{"refresh_token":`},
+		{"a blank token", `{"refreshToken":""}`},
+		{"a body that is not JSON", `{"refreshToken":`},
 	}
 
 	for _, h := range handlers {

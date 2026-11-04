@@ -73,7 +73,7 @@ func TestGetReturnsOnlyTheCallersProfile(t *testing.T) {
 func TestPatchWritesOnlyTheFieldsItCarries(t *testing.T) {
 	handler, users, ada := newTestHandler(t)
 
-	rec := call(handler.Update, http.MethodPatch, string(ada.ID), `{"display_name":"Ada Lovelace"}`)
+	rec := call(handler.Update, http.MethodPatch, string(ada.ID), `{"displayName":"Ada Lovelace"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PATCH = %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -108,11 +108,11 @@ func TestPatchWritesOnlyTheFieldsItCarries(t *testing.T) {
 func TestPatchCanClearTheNoteButNotEmptyPresence(t *testing.T) {
 	handler, users, ada := newTestHandler(t)
 
-	if rec := call(handler.Update, http.MethodPatch, string(ada.ID), `{"presence":"away","presence_note":"At the dentist"}`); rec.Code != http.StatusOK {
+	if rec := call(handler.Update, http.MethodPatch, string(ada.ID), `{"presence":"away","presenceNote":"At the dentist"}`); rec.Code != http.StatusOK {
 		t.Fatalf("seed presence = %d, body %s", rec.Code, rec.Body.String())
 	}
 
-	if rec := call(handler.Update, http.MethodPatch, string(ada.ID), `{"presence_note":""}`); rec.Code != http.StatusOK {
+	if rec := call(handler.Update, http.MethodPatch, string(ada.ID), `{"presenceNote":""}`); rec.Code != http.StatusOK {
 		t.Fatalf("clear note = %d, body %s", rec.Code, rec.Body.String())
 	}
 	got, _ := users.GetProfile(context.Background(), ada.ID)
@@ -155,13 +155,13 @@ func TestPatchRejectsInvalidFields(t *testing.T) {
 		name string
 		body string
 	}{
-		{"blank display name", `{"display_name":"   "}`},
-		{"overlong display name", `{"display_name":"` + strings.Repeat("a", 121) + `"}`},
+		{"blank display name", `{"displayName":"   "}`},
+		{"overlong display name", `{"displayName":"` + strings.Repeat("a", 121) + `"}`},
 		{"overlong position", `{"position":"` + strings.Repeat("a", 121) + `"}`},
-		{"two digit avatar", `{"avatar_id":"10"}`},
-		{"non digit avatar", `{"avatar_id":"x"}`},
+		{"two digit avatar", `{"avatarId":"10"}`},
+		{"non digit avatar", `{"avatarId":"x"}`},
 		{"unknown presence", `{"presence":"sleeping"}`},
-		{"overlong note", `{"presence_note":"` + strings.Repeat("a", 281) + `"}`},
+		{"overlong note", `{"presenceNote":"` + strings.Repeat("a", 281) + `"}`},
 		{"empty patch", `{}`},
 		{"field that is not self-owned", `{"email":"other@example.com"}`},
 	}

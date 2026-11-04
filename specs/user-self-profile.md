@@ -50,31 +50,31 @@ The admin and directory user responses do **not** change. The new keys exist onl
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "email": "jane@example.com",
-  "display_name": "Jane Doe",
+  "displayName": "Jane Doe",
   "position": "Product owner",
-  "avatar_id": "7",
+  "avatarId": "7",
   "presence": "away",
-  "presence_note": "At the dentist"
+  "presenceNote": "At the dentist"
 }
 ```
 
 `PATCH /v1/me` — same auth. Every field optional; only present fields are applied; the
-response is the `GET` shape. `email`, `role`, `status`, `password`, `last_seen` and
-`created_at` are unknown fields and are rejected by `DisallowUnknownFields`.
+response is the `GET` shape. `email`, `role`, `status`, `password`, `lastSeen` and
+`createdAt` are unknown fields and are rejected by `DisallowUnknownFields`.
 
 ```json
-{ "display_name": "Jane Doe", "presence": "away", "presence_note": "At the dentist" }
+{ "displayName": "Jane Doe", "presence": "away", "presenceNote": "At the dentist" }
 ```
 
 Validation (all failures `400`, never `500`):
 
 | field | rule |
 | --- | --- |
-| `display_name` | trimmed; 1–120 runes; blank rejected |
+| `displayName` | trimmed; 1–120 runes; blank rejected |
 | `position` | trimmed; 0–120 runes; empty clears |
-| `avatar_id` | `""` or exactly one ASCII digit `0`–`9` |
+| `avatarId` | `""` or exactly one ASCII digit `0`–`9` |
 | `presence` | one of `active`, `away`, `be_right_back`, `busy`; empty rejected |
-| `presence_note` | 0–280 runes; empty clears |
+| `presenceNote` | 0–280 runes; empty clears |
 | body | no keys at all → `400 "no fields to update"` |
 
 `presence`/`presence_note` default to `active`/`""` for existing rows, so an upgraded account
@@ -85,10 +85,10 @@ keeps the settings screen's current default.
 - [x] `GET /v1/me` returns the caller's row and never another user's, even when the token's
       `uid` exists alongside other accounts. `handler_test` signs in two users and asserts
       each sees only itself.
-- [x] `GET /v1/me` omits the password hash, `last_seen` and `created_at`; the response decodes
+- [x] `GET /v1/me` omits the password hash, `lastSeen` and `createdAt`; the response decodes
       into the client's strict DTO. The contract test is the pin.
 - [x] `PATCH` with one key changes only that key and returns the updated row;
-      `presence_note` can be cleared with `""` but `presence` cannot.
+      `presenceNote` can be cleared with `""` but `presence` cannot.
 - [x] `PATCH` with no keys, an unknown key, a bad presence, a two-digit avatar, or a 121-rune
       name is `400`; the row is unchanged afterwards.
 - [x] `users.status` is untouched by both routes; an account with `inactive`/`deleted` is not

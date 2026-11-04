@@ -92,7 +92,7 @@ func TestChangePasswordRefusesAWrongCredential(t *testing.T) {
 	handler, users, ada := newTestHandler(t)
 
 	rec := call(handler.ChangePassword, string(ada.ID),
-		`{"old_password_or_code":"not-the-password","new_password":"brand new secret"}`)
+		`{"oldPasswordOrCode":"not-the-password","newPassword":"brand new secret"}`)
 	wantStatus(t, rec, http.StatusBadRequest)
 	wantError(t, rec, "old password does not match")
 
@@ -108,7 +108,7 @@ func TestChangePasswordWithAnUnknownCodeAnswersAsAWrongPassword(t *testing.T) {
 	handler, _, ada := newTestHandler(t)
 
 	rec := call(handler.ChangePassword, string(ada.ID),
-		`{"old_password_or_code":"00000000-0000-0000-0000-000000000000","new_password":"brand new secret"}`)
+		`{"oldPasswordOrCode":"00000000-0000-0000-0000-000000000000","newPassword":"brand new secret"}`)
 	wantStatus(t, rec, http.StatusBadRequest)
 	wantError(t, rec, "old password does not match")
 }
@@ -117,7 +117,7 @@ func TestChangePasswordRefusesAShortNewPassword(t *testing.T) {
 	handler, users, ada := newTestHandler(t)
 
 	rec := call(handler.ChangePassword, string(ada.ID),
-		`{"old_password_or_code":"correct horse battery","new_password":"short"}`)
+		`{"oldPasswordOrCode":"correct horse battery","newPassword":"short"}`)
 	wantStatus(t, rec, http.StatusBadRequest)
 	wantError(t, rec, "new password does not meet policy")
 
@@ -130,9 +130,9 @@ func TestChangePasswordWithTheOldPassword(t *testing.T) {
 	handler, users, ada := newTestHandler(t)
 
 	rec := call(handler.ChangePassword, string(ada.ID),
-		`{"old_password_or_code":"correct horse battery","new_password":"brand new secret"}`)
+		`{"oldPasswordOrCode":"correct horse battery","newPassword":"brand new secret"}`)
 	wantStatus(t, rec, http.StatusOK)
-	wantExactKeys(t, rec, []string{"id", "email", "display_name", "password_hash"})
+	wantExactKeys(t, rec, []string{"id", "email", "displayName", "passwordHash"})
 
 	if _, err := users.VerifyPassword(context.Background(), ada.Email, "brand new secret"); err != nil {
 		t.Errorf("the new password does not verify: %v", err)
@@ -152,9 +152,9 @@ func TestChangePasswordWithAResetCodeConsumesIt(t *testing.T) {
 	}
 
 	rec := call(handler.ChangePassword, string(ada.ID),
-		`{"old_password_or_code":"`+code+`","new_password":"brand new secret"}`)
+		`{"oldPasswordOrCode":"`+code+`","newPassword":"brand new secret"}`)
 	wantStatus(t, rec, http.StatusOK)
-	wantExactKeys(t, rec, []string{"id", "email", "display_name", "password_hash"})
+	wantExactKeys(t, rec, []string{"id", "email", "displayName", "passwordHash"})
 
 	if _, err := users.VerifyPassword(ctx, ada.Email, "brand new secret"); err != nil {
 		t.Errorf("the new password does not verify: %v", err)
@@ -162,7 +162,7 @@ func TestChangePasswordWithAResetCodeConsumesIt(t *testing.T) {
 
 	// Single use: the same code must not authorise a second change.
 	rec = call(handler.ChangePassword, string(ada.ID),
-		`{"old_password_or_code":"`+code+`","new_password":"another secret 1"}`)
+		`{"oldPasswordOrCode":"`+code+`","newPassword":"another secret 1"}`)
 	wantStatus(t, rec, http.StatusBadRequest)
 	wantError(t, rec, "reset code is invalid or expired")
 
@@ -180,7 +180,7 @@ func TestChangePasswordWithAnExpiredCodeSaysSo(t *testing.T) {
 	}
 
 	rec := call(handler.ChangePassword, string(ada.ID),
-		`{"old_password_or_code":"`+code+`","new_password":"brand new secret"}`)
+		`{"oldPasswordOrCode":"`+code+`","newPassword":"brand new secret"}`)
 	wantStatus(t, rec, http.StatusBadRequest)
 	wantError(t, rec, "reset code is invalid or expired")
 }
@@ -189,6 +189,6 @@ func TestChangePasswordWithoutACallerIsUnauthorized(t *testing.T) {
 	handler, _, _ := newTestHandler(t)
 
 	rec := call(handler.ChangePassword, "",
-		`{"old_password_or_code":"whatever","new_password":"brand new secret"}`)
+		`{"oldPasswordOrCode":"whatever","newPassword":"brand new secret"}`)
 	wantStatus(t, rec, http.StatusUnauthorized)
 }

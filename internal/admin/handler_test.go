@@ -147,8 +147,8 @@ func TestPasswordResetCodeReturnsAFreshUsableCode(t *testing.T) {
 	// The key set is the client's DTO contract: no sent flag, no password — the
 	// code itself and when it dies, and nothing the client does not declare.
 	var resp struct {
-		Code      string `json:"code"`
-		ExpiresAt int64  `json:"expires_at"`
+		Code      string              `json:"code"`
+		ExpiresAt entities.Timestamp `json:"expiresAt"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode reset code: %v", err)
@@ -156,8 +156,8 @@ func TestPasswordResetCodeReturnsAFreshUsableCode(t *testing.T) {
 	if resp.Code == "" {
 		t.Fatal("the response carries no code, so the admin has nothing to hand over")
 	}
-	if resp.ExpiresAt <= time.Now().UnixMilli() {
-		t.Errorf("expires_at = %d, want a future epoch-millisecond instant", resp.ExpiresAt)
+	if resp.ExpiresAt.Time().Before(time.Now()) {
+		t.Errorf("expiresAt = %s, want a future instant", resp.ExpiresAt)
 	}
 
 	// The code the member receives is the one that verifies against the row.
