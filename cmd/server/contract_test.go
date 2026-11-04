@@ -110,8 +110,8 @@ type clientUser struct {
 	CreatedAt   entities.Timestamp  `json:"createdAt"`
 }
 
-// clientProfile mirrors the KMP `UserProfileResponse`, transcribed from
-// specs/settings-user-backend-profile.md. Every field after the id has a Kotlin
+// clientProfile mirrors the KMP `UserProfileResponse`; the retained wire
+// contract is in docs/ARCHITECTURE.md. Every field after the id has a Kotlin
 // default, which is why the response may omit the optional ones; the key set is
 // still closed, because `ignoreUnknownKeys` is off.
 type clientProfile struct {
@@ -332,9 +332,10 @@ func TestARunnerTokenIsRefusedOnAUserRoute(t *testing.T) {
 	}
 }
 
-// clientAgentRun mirrors the KMP `AgentRunDto` in specs/11.1-agent-runs.md. The
-// three nullable members have Kotlin defaults, so those keys may be omitted; every
-// other key is required and must always be present.
+// clientAgentRun mirrors the KMP `AgentRunDto`; the retained agent-run wire
+// contract is in docs/ARCHITECTURE.md. The three nullable members have Kotlin
+// defaults, so those keys may be omitted; every other key is required and must
+// always be present.
 type clientAgentRun struct {
 	ID              string  `json:"id"`
 	WorkItemID      string  `json:"workItemId"`

@@ -12,10 +12,10 @@ Follow this sequence for each task. Keep one task on one feature branch and in
 one merge request.
 
 1. **Orient.** Read this file first. Use `docs/PLAN.md` as the concise task
-   index. Read the selected task's spec in `specs/`; if none exists, consult
-   only that task's section in `docs/PLAN-ARCHIVE.md` and create a spec before
-   implementation. For cross-repository work, read the other repository's
-   `AGENTS.md` before planning.
+   index. Read the selected task's spec in `specs/`; if none exists, create one
+   from `specs/_template.md` before implementation. Completed tasks have no spec
+   — their durable decisions live in `docs/ARCHITECTURE.md`. For cross-repository
+   work, read the other repository's `AGENTS.md` before planning.
 2. **Plan the scope.** Identify the files, observable contract, and validation
    before editing. A roadmap task's spec records these. If the change needs
    files or behavior outside that scope, stop and re-plan before expanding it.
@@ -28,12 +28,14 @@ one merge request.
    per-task check: run it when a release is cut, with `race` for anything
    concurrent.
 5. **Update status and hand off.** Keep the spec `in-progress` while work or
-   validation remains. Once its contract and checks pass and the diff review is
-   approved, set it to `done` as the final task-branch update before merging.
-   Update `## Handoff` with verified progress, remaining work, the next step,
-   and gotchas; if nothing remains, say so. For standalone work, create a spec
-   rather than an untracked handoff note. Commit the status and handoff on the
-   task branch. Do not push without authorization.
+   validation remains. At the end of each session, update `## Handoff` with
+   verified progress, remaining work, the next step, and gotchas; if nothing
+   remains, say so. Once its contract and checks pass and the diff review is
+   approved, promote any durable, non-obvious decisions into
+   `docs/ARCHITECTURE.md` (or the relevant guide), update the active PLAN entry,
+   and **delete the spec** in the final task-branch commit before merging. For
+   standalone work, create a spec rather than an untracked handoff note. Do not
+   push without authorization.
 
 ## Project documentation
 
@@ -42,7 +44,8 @@ one merge request.
   handoff; authoritative for how that task is done and resumed.
 - `docs/API.md` — HTTP wire contract. Read it before changing a request or
   response shape.
-- `docs/ARCHITECTURE.md` — architecture decisions, boundaries, and known gaps.
+- `docs/ARCHITECTURE.md` — architecture decisions, boundaries, known gaps, and
+  the durable decisions retained from completed task specs.
 - `README.md` — build, configuration, and run instructions.
 - `docs/SELF-HOSTING.md` and `docs/USER-MANAGEMENT.md` — operator and user
   management guidance.
@@ -208,7 +211,9 @@ task state when the agent, tool, or session changes. End each session by
 updating its `## Handoff` section (done / pending / next step / gotchas) and
 committing it on the branch. When resuming, read the task's spec and
 `git diff main...HEAD`; do not load unrelated specs. Cross-repository handoffs
-also follow `../AGENTS.md` §6.
+also follow `../AGENTS.md` §6. A spec covers work in progress only: once the
+task is done, promote its durable notes into `docs/ARCHITECTURE.md` and remove
+the spec. There is no archive of completed specs.
 
 ## Skills
 

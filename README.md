@@ -19,7 +19,8 @@ engine are all wired in.
 
 Milestones 0–8 are complete. Milestone 9 tracks customer installation and
 exposure work; see [`docs/PLAN.md`](docs/PLAN.md) for the active roadmap and
-[`docs/PLAN-ARCHIVE.md`](docs/PLAN-ARCHIVE.md) for detailed plans and history.
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design decisions retained
+from completed work.
 
 Verified: `gofmt`, `go build ./...`, `go vet ./...` and `go test ./...` all pass,
 and an end-to-end run signs in, pushes a project and a work item, pulls them back
@@ -269,6 +270,10 @@ version number:
 0001_initial.sqlite.sql
 ```
 
+`0001` is the **pre-release baseline**: the development versions were squashed
+before the first release, when there was no installed database to upgrade. New
+schema changes add the next version; they do not rewrite the baseline.
+
 They are embedded in the binary (`go:embed`) and applied on startup in version
 order; each version runs in its own transaction and is recorded in
 `schema_migrations`, so re-running applies nothing. To add one, create the next
@@ -289,11 +294,9 @@ test are green, so a red run is a real regression.
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture and code review.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture, code review, and decisions retained from completed task specs.
 - [`docs/API.md`](docs/API.md) — the HTTP contract: auth, users, and the sync endpoints, checked against the client's own DTOs.
 - [`docs/PLAN.md`](docs/PLAN.md) — concise active roadmap and task index.
-- [`docs/PLAN-ARCHIVE.md`](docs/PLAN-ARCHIVE.md) — completed-work history and
-  detailed plans for pending tasks without specs.
 - [`docs/INSTALL.md`](docs/INSTALL.md) — **customer-facing install guide**: what you need, `tt install`, `tt expose` for LAN/Tailscale/Cloudflare, Day 2 operations, and troubleshooting.
 - [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) — the bare-metal/systemd deployment path, without Docker.
 - [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) — roles, CLI bootstrap, token lifecycle, and how a user gets provisioned.

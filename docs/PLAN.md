@@ -1,16 +1,16 @@
 # TaskTrackerServer — Active roadmap
 
-This is the short index of current and upcoming work. For completed-work
-history, see [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md). `docs/ARCHITECTURE.md`
-records system design and rationale; task specs hold the implementation contract.
+This is the short index of current and upcoming work. `docs/ARCHITECTURE.md`
+records system design and rationale — including the durable decisions retained
+from completed tasks — while `specs/` holds the implementation contract for work
+in progress. A completed task leaves no spec.
 
 ## How to use this roadmap
 
 - Choose a pending task below, respecting its dependencies and the milestone
   ordering.
-- Read that task's spec in `specs/` if one exists. If it does not, consult only
-  the matching section in [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), then create and
-  review a task spec before implementation.
+- Read that task's spec in `specs/` if one exists. If it does not, create one
+  from `specs/_template.md` and review it before implementation.
 - Keep one task on one feature branch and in one merge request. Do not bundle
   neighboring work.
 - Verify a task with focused tests for the packages it touches
@@ -23,15 +23,15 @@ records system design and rationale; task specs hold the implementation contract
 
 | Milestone | State |
 | --- | --- |
-| 0 — Compiling baseline | Complete — details in the archive |
-| 1 — Data-layer integrity | Complete — details in the archive |
-| 2 — Versioned migrations | Complete — details in the archive |
-| 3 — Auth and security | Complete — details in the archive |
-| 4 — Sync engine | Complete — details in the archive |
+| 0 — Compiling baseline | Complete |
+| 1 — Data-layer integrity | Complete |
+| 2 — Versioned migrations | Complete |
+| 3 — Auth and security | Complete |
+| 4 — Sync engine | Complete |
 | 5 — Observability and operations | Complete; T5.6 moved to T9.1 |
-| 6 — Testing | Complete — details in the archive |
-| 7 — Client contract | Complete — details in the archive |
-| 8 — Admin management | Complete — details in the archive |
+| 6 — Testing | Complete |
+| 7 — Client contract | Complete |
+| 8 — Admin management | Complete |
 | 9 — Customer install and exposure | Active; tasks below are pending or deferred |
 | 10 — Agent runs | Complete; T10.1–T10.5 done |
 
@@ -46,19 +46,22 @@ local addresses and refuses a public `http://` root at save time.
 
 | Task | State | Intent | Depends on | Execution details |
 | --- | --- | --- | --- | --- |
-| T9.1 | Complete | Trusted-proxy-aware client address | T3.2 | [`t9.1-trusted-proxies.md`](../specs/t9.1-trusted-proxies.md) |
-| T9.2 | Complete | Per-route attachment-transfer deadlines | None | [`t9.2-attachment-deadlines.md`](../specs/t9.2-attachment-deadlines.md) |
-| T9.3 | Complete | Bind and publish the server safely | None | [`t9.3-server-bind.md`](../specs/t9.3-server-bind.md) |
-| T9.4 | Complete | `tt` CLI skeleton, state file, and idempotence | T9.3 | [`t9.4-tt-cli-skeleton.md`](../specs/t9.4-tt-cli-skeleton.md) |
-| T9.5 | Complete | Interactive `tt install` wizard | T9.4 | [`t9.5-install-wizard.md`](../specs/t9.5-install-wizard.md) |
-| T9.6 | Complete | `tt doctor` and `tt status` | T9.5 | [`t9.6-doctor-status.md`](../specs/t9.6-doctor-status.md) |
-| T9.7 | Complete | Runtime server URL and `tasktracker://connect` pairing | Client first; CLI depends on T9.5 | [`t9.7-connect-pairing.md`](../specs/t9.7-connect-pairing.md) |
-| T9.8 | Complete | `tt expose --provider=lan` (default) | T9.3, T9.5 | [`t9.8-lan-expose.md`](../specs/t9.8-lan-expose.md) |
-| T9.9 | Complete | `tt expose --provider=tailscale` | T9.1, T9.7, T9.8 | [`t9.9-tailscale-expose.md`](../specs/t9.9-tailscale-expose.md) |
-| T9.10 | Complete | `tt expose --provider=cloudflare` | T9.1, T9.7, T9.8 | [`t9.10-cloudflare-expose.md`](../specs/t9.10-cloudflare-expose.md) |
-| T9.11 | Deferred | VPS + Caddy deployment guide (documented, not implemented) | T9.1–T9.3, if picked up | [`PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md), section T9.11 |
-| T9.12 | Complete | Guided Docker bootstrap in `tt install` | T9.4, T9.5 | [`t9.12-docker-bootstrap.md`](../specs/t9.12-docker-bootstrap.md) |
-| T9.13 | Complete | Customer installation and onboarding docs | T9.5, T9.7–T9.12 | [`t9.13-install-docs.md`](../specs/t9.13-install-docs.md) |
+| T9.1 | Complete | Trusted-proxy-aware client address | T3.2 | — |
+| T9.2 | Complete | Per-route attachment-transfer deadlines | None | — |
+| T9.3 | Complete | Bind and publish the server safely | None | — |
+| T9.4 | Complete | `tt` CLI skeleton, state file, and idempotence | T9.3 | — |
+| T9.5 | Complete | Interactive `tt install` wizard | T9.4 | — |
+| T9.6 | Complete | `tt doctor` and `tt status` | T9.5 | — |
+| T9.7 | Complete | Runtime server URL and `tasktracker://connect` pairing | Client first; CLI depends on T9.5 | — |
+| T9.8 | Complete | `tt expose --provider=lan` (default) | T9.3, T9.5 | — |
+| T9.9 | Complete | `tt expose --provider=tailscale` | T9.1, T9.7, T9.8 | — |
+| T9.10 | Complete | `tt expose --provider=cloudflare` | T9.1, T9.7, T9.8 | — |
+| T9.11 | Deferred | VPS + Caddy deployment guide (documented, not implemented) | T9.1–T9.3, if picked up | — (no spec yet) |
+| T9.12 | Complete | Guided Docker bootstrap in `tt install` | T9.4, T9.5 | — |
+| T9.13 | Complete | Customer installation and onboarding docs | T9.5, T9.7–T9.12 | — |
+
+Completed tasks leave no spec. The decisions worth keeping are in
+[`ARCHITECTURE.md`](ARCHITECTURE.md#decisions-retained-from-completed-task-specs).
 
 ### Milestone ordering
 
@@ -80,7 +83,7 @@ break installed clients.
 
 | Task | State | Intent | Depends on | Execution details |
 | --- | --- | --- | --- | --- |
-| T10.1 | Complete | Agent-runs schema and lifecycle (migration 0012, repository, lease) | None | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
+| T10.1 | Complete | Agent-runs schema and lifecycle (schema baseline, repository, lease) | None | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
 | T10.2 | Complete | Runner API: claim, events, heartbeat, finish, token middleware | T10.1 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
 | T10.3 | Complete | App API: dispatch, read, cancel, runner registration | T10.2 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |
 | T10.4 | Complete | `tt agent connect`, `status`, `disconnect`; `echo` worker | T10.3 | [`t10.1-agent-runs.md`](../specs/t10.1-agent-runs.md) |

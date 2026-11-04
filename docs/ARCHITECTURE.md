@@ -163,9 +163,9 @@ case-insensitive decode cannot see a case-only rename.
 | server on SQLite | boots; signs in; push/pull round-trips every entity type |
 | server on Postgres | covered by the CI `test-postgres` job |
 
-The blockers below were fixed in Milestones 0 and 1 of
-[`docs/PLAN-ARCHIVE.md`](PLAN-ARCHIVE.md); they are kept here as the record of
-what was wrong. C1 and C2 in particular are worth reading before writing new SQL.
+The blockers below were fixed in Milestones 0 and 1; they are kept here as the
+record of what was wrong. C1 and C2 in particular are worth reading before
+writing new SQL.
 
 ## Findings
 
@@ -323,6 +323,127 @@ Severity is about what blocks a working server.
 6. **B2** — implement `auth`, `middleware` and `sync`.
 7. **E2/E3/E4** — readiness probe, refresh-token rotation, deploy artifacts.
 
-Steps 1–3 are the blocking Milestone 1 of `docs/PLAN-ARCHIVE.md`. The build is green
-today, so a red CI run is a real regression; the runtime failures Milestone 1
-tracks are known and are not build failures.
+Steps 1–3 were the blocking Milestone 1 work. The build is green today, so a red
+CI run is a real regression.
+
+## Decisions retained from completed task specs
+
+The per-task specs that produced these decisions were removed before the first
+release. Only constraints a future change could silently violate are kept here;
+validation runs, counts, handoffs and per-task file lists were dropped.
+
+### Wire contract
+
+- **The installed client is the fixed point.** A response may not gain, lose or
+  rename a key the client declares without a default, because it strict-decodes
+  (`ignoreUnknownKeys` off). Add a field client-first, with a default, then send
+  it; anything else is a new `/v1` version. `docs/API.md` is the written
+  contract, `cmd/server/contract_test.go` the executable one — it must pin key
+  names, since Go matches JSON keys case-insensitively and a decode-only check
+  cannot see a case-only rename.
+- **One JSON convention.** Response keys are `camelCase`, timestamps ISO-8601 UTC
+  whole seconds via `internal/entities/timestamp.go`. SQL column names, the
+  agent runner's `last_seen_at` and third-party LLM request keys are not wire
+  keys and stay `snake_case`.
+- **`/v1/me` identity comes from the request context**, never a body, query or
+  path value. `UserRepository.Update` (admin) and `UpdateProfile` keep disjoint
+  `SET` lists, so neither route can erase the other's field. `presence` is not
+  the account-lifecycle `status`; a profile write must never revive an
+  `inactive`/`deleted` account.
+- **Blob bytes never enter the sync payload.** The `attachment` sync entity is
+  metadata-only JSON and the two blob routes use `http.MaxBytesReader`, not
+  `httpx.DecodeJSON`, so they bypass the 1 MiB JSON body cap. `tagIDs` must be a
+  non-null array on scan; `color`/`icon` are opaque client strings, never
+  validated against a server enum.
+- **Blank `q` is a different query.** `GET /v1/users/search` with a blank `q`
+  lists non-deleted accounts (the addable set); a non-empty `q` deliberately
+  includes deleted authors (the historical directory). Do not "fix" the
+  asymmetry or add a route — the client already calls this one.
+
+### Database and schema
+
+- **`0001` is a pre-release baseline.** `internal/db/migrations/` holds one
+  version for both drivers, squashed before release when no installed database
+  existed. Never edit it after release; add the next version for *both* drivers,
+  keep statements `IF NOT EXISTS`, and verify on SQLite **and** Postgres — a
+  SQLite-only pass proves nothing about Postgres.
+- **Entity `version` columns are optimistic locks, not schema versions.** The
+  sync engine uses them for compare-and-swap conflict detection; removing them
+  breaks offline-first sync. `StateVersion` and `ConfigVersion` are separate
+  guards on `install.json` and `agent.json`.
+- **Blob path invariant.** `${root}/${id}.blob` is shared by
+  `engine.removeAttachmentBlob` and `attachments.BlobStore.path`. Uploading a
+  blob must not bump the attachment version (no rebroadcast through sync), and
+  a failed file delete must never fail the metadata delete.
+- **Permanent write errors are narrow.** Only CHECK-constraint violations earn
+  `rejected`; FK, unique and serialization failures are retryable. `rejected`
+  is terminal on the client, so a wrongly dead-lettered change is silent data
+  loss. `sqlite3.ErrConstraintDatatype` does not exist in the pinned driver.
+- **Domain rules stay out of the sync engine.** It routes opaque payloads;
+  whether a locked sprint may take an edit is the client's call. The sprint
+  overlap check lives in the repository (inside the push transaction), because
+  only that layer sees the project's other sprints.
+
+### Install and exposure
+
+- **The project owns no infrastructure.** No domain, relay, provisioning
+  endpoint, hosted service, static IP, port forwarding or DDNS; `tt` never
+  phones home. `lan` is the default provider and serves desktop, Android and iOS
+  over plain HTTP on the customer's network; `tailscale` and `cloudflare` are
+  additive behind one flag. Exposure is a provider the customer holds an account
+  with, or nothing — the project earns nothing and cannot carry a recurring cost.
+- **`SERVER_BIND` defaults to `127.0.0.1`** and is validated as an IP literal.
+  Inside a container, loopback is the container's own, so the compose service
+  must set `0.0.0.0` explicitly and only the *published* side moves to loopback.
+- **The installer is a pure state machine.** `Next` is pure; a second `install`
+  is a `repair`, never `init`, and repair defaults come from existing state. The
+  JWT secret is generated once and survives byte-for-byte, and the rendered
+  image tag is the CLI's own version, so a repair cannot pull a newer server
+  than the binary that planned it. State and compose are written atomically at
+  `0600`; a corrupt state is refused, not replaced.
+- **`tt expose` is not persisted.** It writes the publish into the rendered
+  compose; `tt install` re-renders loopback, so a repair resets exposure (docs
+  tell the operator to re-run `expose`). Verification GETs `/readyz` at the
+  detected LAN address — never `127.0.0.1` — restores the previous compose on
+  failure, and prints the pairing link and QR only after success.
+- **Pairing link grammar.** `tasktracker://connect?url=<QueryEscape(the WHOLE
+  URL)>`; escape `&`, `#`, `%` too, because the client decodes exactly once, so
+  an existing `%2F` goes on the wire as `%252F`. Render a QR only for a verified
+  URL and refuse links over 2000 bytes, since the QR library ignores the encode
+  error and would panic.
+- **Trusted proxies key on the peer, not the forwarded value.** An untrusted
+  peer's `X-Forwarded-For`/`Forwarded` is never read; walk right-to-left to the
+  first untrusted hop. Reject `0.0.0.0/0`, `::/0` and bare addresses, and reject
+  the whole header on one bad hop rather than skipping it.
+- **Tailscale keeps the server on loopback** with
+  `TRUSTED_PROXIES=127.0.0.1/32`; funnel is beta, Personal is non-commercial,
+  and ACLs may disable it. Cloudflare uses a `cloudflared` sidecar, derives the
+  trusted CIDR from the compose network, and keeps the API token in the OS
+  keychain or a `0600` file — never in compose or state. Its Free plan's 100 MiB
+  request cap is why `ATTACHMENT_MAX_BYTES` is validated at startup.
+- **Only the blob routes get longer deadlines.** Global timeouts stay 15 s read /
+  15 s write / 60 s idle for slowloris protection; the two blob routes use
+  `http.ResponseController` with `max(15s, cap / 1 MiB/s)`.
+- **`status` and `doctor` are read-only.** They print an instruction, never run
+  a repair, and never print an install secret. `doctor` fails only on a failed
+  check; warnings and skips do not fail. A check that cannot be proven stays a
+  documented `skip` — a permanently yellow line trains operators to ignore it.
+- **Docker bootstrap is the only host-changing step.** The prompt defaults to
+  `No`, `--dry-run` executes nothing, non-interactive `--yes` fails closed, and
+  there is no `curl | sh`. Docker-group membership (root-equivalent) needs its
+  own explicit yes. SIGINT maps to exit `130`, and any future blocking read must
+  take the run context because `signal.NotifyContext` disables the default.
+- **Distribution assets.** The license is MIT + Commons Clause + no-rebranding
+  (source-available, not OSI) and the Docker image is the only distribution
+  channel, so `/app/LICENSE` must be copied into the runtime stage. The embedded
+  template is `docker-compose.tmpl` while the rendered customer file must stay
+  `docker-compose.yml`; `State.ComposePath` and every repair depend on that name.
+
+### Testing traps
+
+- **Both dialects, and both parser shapes.** Postgres coverage needs
+  `TASKTRACKER_TEST_POSTGRES_URL` pointed at a throwaway server.
+  `compose ps --format json` is an array on newer Compose and one object per
+  line on older releases — keep both paths or it works only on the author's
+  machine. Fake-Docker e2e must put an executable `docker` on `PATH` and isolate
+  `HOME`, or it writes to the developer's real install state.

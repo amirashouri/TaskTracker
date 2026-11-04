@@ -20,6 +20,11 @@ a version number:
 0001_initial.sqlite.sql
 ```
 
+`0001` is the pre-release baseline: the development versions were squashed
+before the first release, so there is no installed database to upgrade. Never
+edit it to make a schema change after release — add the next version for both
+drivers.
+
 `internal/db/migrate.go` embeds them with `go:embed`, loads the files for the
 driver on `DB.Driver` in version order, and applies each unapplied version in its
 own transaction, recording it in `schema_migrations` inside the same transaction.

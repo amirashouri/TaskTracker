@@ -20,7 +20,7 @@ written down.
 | `admin` | Yes — create, list, update, delete, reactivate; list and edit every project | Yes |
 | `member` | No | Yes |
 
-The role is stored in the `users.role` column (migration `0003`, both drivers)
+The role is stored in the `users.role` column (declared in the schema baseline)
 and carried in the JWT `role` claim. The `AdminOnly` middleware gates
 `/v1/admin/*` routes; `/v1/users/search` and the sync endpoints are open to any
 authenticated user.
@@ -169,5 +169,5 @@ the client calls it best-effort before clearing local state.
 | Sync engine, incl. ApplyAdminProject | `internal/sync/engine.go` |
 | CLI bootstrap command | `cmd/server/main.go` (`createUserCmd`) |
 | Route wiring | `cmd/server/main.go` (`mount`) |
-| Migration 0003 (role column) | `internal/db/migrations/0003_user_roles.{postgres,sqlite}.sql` |
+| Schema baseline (incl. role column) | `internal/db/migrations/0001_initial.{postgres,sqlite}.sql` |
 | Contract tests | `cmd/server/contract_test.go` |

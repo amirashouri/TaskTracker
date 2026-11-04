@@ -303,7 +303,7 @@ func mount(
 	mux.Handle("PATCH /v1/me", noStore(selfProfile(http.HandlerFunc(profileHandler.Update))))
 	// Change-password is an action with its own body, not a profile field patch,
 	// so it gets its own route rather than overloading PATCH /v1/me — which the
-	// client already decodes as the profile write (specs/user-self-profile.md).
+	// client already decodes as the profile write (see docs/ARCHITECTURE.md).
 	mux.Handle("POST /v1/me/password", noStore(selfProfile(http.HandlerFunc(meHandler.ChangePassword))))
 
 	// Directory search (any authenticated user)

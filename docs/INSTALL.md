@@ -125,7 +125,7 @@ sudo dpkg -i TaskTracker.deb
 sudo apt-get install -f
 ```
 
-> **Note:** The iOS app requires a TestFlight invite or building from source (see the [KMP client repo](../TaskTrackerKMP) for build instructions). The Android APK and Desktop native installers are published to GitHub Releases on every tag.
+> **Note:** The iOS app requires a TestFlight invite or building from source (see the [KMP client repo](https://github.com/amirashouri/TaskTrackerKMP) for build instructions). The Android APK and Desktop native installers are published to GitHub Releases on every tag.
 
 ## Step 1 — Run `tt install`
 
