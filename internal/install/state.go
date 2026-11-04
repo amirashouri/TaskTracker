@@ -41,6 +41,16 @@ const (
 	ModePostgres Mode = "postgres"
 )
 
+// Runtime is how the server process is supervised on the host. Docker is the
+// default; a native instance is a systemd service running a server binary that
+// was already on the host.
+type Runtime string
+
+const (
+	RuntimeDocker Runtime = "docker"
+	RuntimeNative Runtime = "native"
+)
+
 // Provider is how the instance is reached from outside the host.
 type Provider string
 
@@ -53,16 +63,28 @@ const (
 // State is the install.json document. Secrets live here because the file is
 // 0600 and the CLI must be able to repair an install without regenerating them.
 type State struct {
-	Version          int      `json:"version"`
-	InstanceName     string   `json:"instanceName"`
-	Mode             Mode     `json:"mode"`
-	Provider         Provider `json:"provider"`
-	DataDir          string   `json:"dataDir"`
-	ComposePath      string   `json:"composePath"`
-	ImageTag         string   `json:"imageTag"`
-	ServerPort       int      `json:"serverPort"`
-	JWTSecret        string   `json:"jwtSecret"`
-	DatabasePassword string   `json:"databasePassword,omitempty"`
+	Version      int      `json:"version"`
+	InstanceName string   `json:"instanceName"`
+	Mode         Mode     `json:"mode"`
+	Provider     Provider `json:"provider"`
+	// Runtime is empty in a state written before the native runtime existed;
+	// runtimeOrDefault reads that as docker so an old install still repairs.
+	Runtime          Runtime `json:"runtime,omitempty"`
+	DataDir          string  `json:"dataDir"`
+	ComposePath      string  `json:"composePath,omitempty"`
+	ImageTag         string  `json:"imageTag"`
+	ServerPort       int     `json:"serverPort"`
+	JWTSecret        string  `json:"jwtSecret"`
+	DatabasePassword string  `json:"databasePassword,omitempty"`
+
+	// Native-only paths. A Docker install leaves these empty and uses
+	// ComposePath; a native install sets them and leaves ComposePath empty.
+	BinaryPath string `json:"binaryPath,omitempty"`
+	EnvPath    string `json:"envPath,omitempty"`
+	UnitPath   string `json:"unitPath,omitempty"`
+	// ServerBind is the address a native server binds; `tt expose` widens it to
+	// 0.0.0.0. Docker renders its bind into the compose publish instead.
+	ServerBind string `json:"serverBind,omitempty"`
 
 	// Path is the state file this document lives in. It is not part of the
 	// document, so a hand-edited copy cannot move its own location.
@@ -91,9 +113,41 @@ func (s State) Validate() error {
 	if strings.TrimSpace(s.DataDir) == "" {
 		return errors.New("install state has no data directory")
 	}
-	if strings.TrimSpace(s.ComposePath) == "" {
-		return errors.New("install state has no compose path")
+
+	switch s.runtimeOrDefault() {
+	case RuntimeDocker:
+		if strings.TrimSpace(s.ComposePath) == "" {
+			return errors.New("install state has no compose path")
+		}
+	case RuntimeNative:
+		if s.Mode != ModeSQLite {
+			return errors.New("a native install runs SQLite only; use --mode postgres with --runtime docker")
+		}
+		if s.Provider != ProviderLAN {
+			return fmt.Errorf("a native install exposes with provider lan only; %q needs --runtime docker", s.Provider)
+		}
+		// A systemd unit is line-oriented and unquoted, so a path with
+		// whitespace would silently split into two arguments at boot.
+		for _, path := range []struct{ name, value string }{
+			{"server binary", s.BinaryPath},
+			{"env file", s.EnvPath},
+			{"systemd unit", s.UnitPath},
+			{"data directory", s.DataDir},
+		} {
+			if strings.TrimSpace(path.value) == "" {
+				return fmt.Errorf("install state has no %s path", path.name)
+			}
+			if !filepath.IsAbs(path.value) {
+				return fmt.Errorf("install state %s path %q is not absolute", path.name, path.value)
+			}
+			if strings.ContainsAny(path.value, " \t\r\n") {
+				return fmt.Errorf("install state %s path %q contains whitespace, which a systemd unit cannot carry", path.name, path.value)
+			}
+		}
+	default:
+		return fmt.Errorf("install state runtime %q is not docker or native", s.Runtime)
 	}
+
 	if strings.TrimSpace(s.ImageTag) == "" {
 		return errors.New("install state has no image tag; reinstall with a versioned tt")
 	}
@@ -107,6 +161,15 @@ func (s State) Validate() error {
 		return errors.New("install state has no database password for the postgres mode")
 	}
 	return nil
+}
+
+// runtimeOrDefault reads a state written before the native runtime existed as
+// the Docker install it was.
+func (s State) runtimeOrDefault() Runtime {
+	if s.Runtime == "" {
+		return RuntimeDocker
+	}
+	return s.Runtime
 }
 
 // DefaultStatePath is where install.json lives on this platform. Linux uses
@@ -160,6 +223,9 @@ func LoadState(path string) (State, error) {
 	}
 
 	state.Path = path
+	if state.Runtime == "" {
+		state.Runtime = RuntimeDocker
+	}
 	if err := state.Validate(); err != nil {
 		return State{}, fmt.Errorf("install state %s: %w", path, err)
 	}

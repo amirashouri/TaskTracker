@@ -66,6 +66,8 @@ func run(
 		return runLogs(ctx, args[1:], stdout, stderr, statePath, runner)
 	case "uninstall":
 		return runUninstall(ctx, args[1:], stdin, stdout, stderr, statePath, runner)
+	case "admin":
+		return runAdmin(ctx, args[1:], stdin, stdout, stderr, statePath, runner)
 	case "version", "--version", "-version":
 		fmt.Fprintln(stdout, buildVersion)
 		return 0
@@ -128,9 +130,21 @@ func loadState(statePath string) (install.State, error) {
 }
 
 func printState(w io.Writer, state install.State) {
+	runtime := state.Runtime
+	if runtime == "" {
+		runtime = install.RuntimeDocker
+	}
 	fmt.Fprintf(w, "instance: %s\n", state.InstanceName)
+	fmt.Fprintf(w, "runtime: %s\n", runtime)
 	fmt.Fprintf(w, "mode: %s\n", state.Mode)
 	fmt.Fprintf(w, "provider: %s\n", state.Provider)
+	if runtime == install.RuntimeNative {
+		fmt.Fprintf(w, "server: http://127.0.0.1:%d\n", state.ServerPort)
+		fmt.Fprintf(w, "service: %s\n", state.ServiceName())
+		fmt.Fprintf(w, "binary: %s\n", state.BinaryPath)
+		fmt.Fprintf(w, "env: %s\n", state.EnvPath)
+		return
+	}
 	fmt.Fprintf(w, "image: tasktracker-server:%s\n", state.ImageTag)
 	fmt.Fprintf(w, "server: http://127.0.0.1:%d\n", state.ServerPort)
 	fmt.Fprintf(w, "compose: %s\n", state.ComposePath)
@@ -140,7 +154,8 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `tt — install and operate a self-hosted TaskTracker server
 
 Usage:
-  tt install [--mode sqlite|postgres] [--provider lan|tailscale|cloudflare]
+  tt install [--mode sqlite|postgres] [--runtime docker|native]
+             [--provider lan|tailscale|cloudflare] [--server-binary PATH]
              [--data-dir PATH] [--name NAME] [--port PORT]
              [--admin-email EMAIL --admin-password PASSWORD]
              [--admin-display-name NAME] [--yes] [--dry-run]
@@ -149,6 +164,8 @@ Usage:
   tt doctor
   tt logs
   tt uninstall
+  tt admin show
+  tt admin reset-password --email EMAIL
   tt agent connect [--server URL] [--email EMAIL] [--name NAME]
                    [--provider PROVIDER] [--model MODEL] [--base-url URL]
                    [--api-key KEY] [--force]

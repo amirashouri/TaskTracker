@@ -616,6 +616,63 @@ func TestInstallNonInteractiveFailsClosedWhenDockerMissing(t *testing.T) {
 	}
 }
 
+// runInstall always builds a prompter for the wizard, but --yes means nobody
+// is there to answer. installWith has to drop it: a nil prompter is
+// EnsureDocker's only fail-closed signal, and with one present it would ask
+// for sudo consent during an install the operator asked to be unattended.
+func TestInstallNonInteractiveDoesNotPromptForDocker(t *testing.T) {
+	dir := t.TempDir()
+	opts := defaultInstallOptions()
+	opts.dataDir = dir
+	opts.yes = true
+	opts.platform = "linux"
+	opts.adminEmail = "admin@example.com"
+	opts.adminPassword = "password123"
+
+	original := install.DetectLinuxDistroFunc
+	install.DetectLinuxDistroFunc = func() (install.Distro, error) { return install.DistroDebian, nil }
+	t.Cleanup(func() { install.DetectLinuxDistroFunc = original })
+
+	fakeExec := &fakeExecutorForInstall{
+		lookPathFunc: func(name string) (string, error) {
+			if name == "sudo" {
+				return "/usr/bin/sudo", nil
+			}
+			return "", exec.ErrNotFound
+		},
+	}
+	// Every Docker question is answered yes: if the prompter is consulted at
+	// all, the bootstrap proceeds instead of failing closed.
+	p := &scriptedPrompter{confirms: []bool{true, true, true}}
+
+	var stdout, stderr bytes.Buffer
+	deps := installDeps{
+		stdout:       &stdout,
+		stderr:       &stderr,
+		statePath:    filepath.Join(dir, "install.json"),
+		buildVersion: "v1.2.3",
+		runner:       &recordingRunner{},
+		preflight:    install.Preflight,
+		ensureDocker: install.EnsureDocker,
+		executor:     fakeExec,
+		prompter:     p,
+		lanAddress:   func() string { return "" },
+		interactive:  false,
+	}
+
+	code := installWith(context.Background(), opts, deps)
+
+	if code == 0 {
+		t.Fatal("expected a non-zero exit when Docker is missing and nobody can consent")
+	}
+	if !strings.Contains(stderr.String(), "not allowed") {
+		t.Errorf("stderr = %q, want the fail-closed message", stderr.String())
+	}
+	if answered := 3 - len(p.confirms); answered != 0 {
+		t.Errorf("prompter answered %d Docker questions, want none", answered)
+	}
+}
+
 func TestInstallInteractiveDeclinesDockerInstall(t *testing.T) {
 	dir := t.TempDir()
 	runner := &recordingRunner{}
@@ -630,9 +687,9 @@ func TestInstallInteractiveDeclinesDockerInstall(t *testing.T) {
 	}
 	defer func() { install.DetectLinuxDistroFunc = originalDetectFunc }()
 
-	// Prompter that declines the Docker install
+	// Prompter that keeps the Docker runtime and then declines its install.
 	p := &scriptedPrompter{
-		confirms: []bool{false}, // decline Docker install
+		confirms: []bool{false, false}, // not native, then decline Docker install
 		asks:     []string{"sqlite", dir, "Admin"},
 		required: []string{"admin@example.com"},
 		secrets:  []string{"password123", "password123"},
@@ -678,6 +735,95 @@ func TestInstallInteractiveDeclinesDockerInstall(t *testing.T) {
 	}
 }
 
+// orderingPrompter records the order in which the wizard asks, so a test can
+// prove what happened before the first question.
+type orderingPrompter struct {
+	events  []string
+	answers []string
+}
+
+func (p *orderingPrompter) Ask(label, _ string) (string, error) {
+	p.events = append(p.events, label)
+	if len(p.answers) == 0 {
+		return "", io.EOF
+	}
+	value := p.answers[0]
+	p.answers = p.answers[1:]
+	return value, nil
+}
+
+func (p *orderingPrompter) AskRequired(label string) (string, error) {
+	p.events = append(p.events, label)
+	return "", io.EOF
+}
+
+func (p *orderingPrompter) Secret(label string) (string, error) {
+	p.events = append(p.events, label)
+	return "", io.EOF
+}
+
+func (p *orderingPrompter) Confirm(label string, _ bool) (bool, error) {
+	p.events = append(p.events, label)
+	return false, nil
+}
+
+// The Docker check sits between the runtime choice and the questions it cannot
+// use: the database and "without Docker?" answers decide whether Docker is
+// needed at all, while the data directory is only read by preflight and the
+// compose render. Asking the path first is the wasted work this order removes.
+func TestInstallChecksDockerBeforeAskingForTheDataDirectory(t *testing.T) {
+	dir := t.TempDir()
+	p := &orderingPrompter{answers: []string{"sqlite", dir}}
+
+	var stdout, stderr bytes.Buffer
+	deps := installDeps{
+		stdout:       &stdout,
+		stderr:       &stderr,
+		statePath:    filepath.Join(dir, "install.json"),
+		buildVersion: "v1.2.3",
+		runner:       &recordingRunner{},
+		preflight: func(context.Context, install.PreflightOptions) error {
+			return errors.New("stop once the ordering is known")
+		},
+		ensureDocker: func(_ context.Context, _ install.Executor, _ install.Prompter, opts install.PreflightOptions) error {
+			p.events = append(p.events, "docker")
+			if opts.Platform != "linux" {
+				t.Errorf("ensureDocker platform = %q, want linux", opts.Platform)
+			}
+			return nil
+		},
+		executor:    install.RealExecutor{},
+		prompter:    p,
+		lanAddress:  func() string { return "" },
+		interactive: true,
+	}
+
+	opts := defaultInstallOptions()
+	opts.dataDir = dir
+	opts.platform = "linux"
+
+	installWith(context.Background(), opts, deps)
+
+	docker, dataDir := -1, -1
+	for i, event := range p.events {
+		switch event {
+		case "docker":
+			docker = i
+		case "Data directory":
+			dataDir = i
+		}
+	}
+	if docker == -1 {
+		t.Fatalf("events = %v, want the Docker check to run", p.events)
+	}
+	if dataDir == -1 || docker > dataDir {
+		t.Fatalf("events = %v, want the Docker check before the data directory prompt", p.events)
+	}
+	if len(p.events) != 4 {
+		t.Errorf("events = %v, want the database, the runtime offer, the Docker check and the path", p.events)
+	}
+}
+
 // main's signal handler cancels the context without killing the process, so a
 // prompt that ignores cancellation is a `tt install` no Ctrl+C can leave. The
 // interrupt must exit quietly with the shell's status for SIGINT, not print a
@@ -701,11 +847,16 @@ func TestWizardInterruptedAtAPromptExitsWith130(t *testing.T) {
 		buildVersion: "v1.2.3",
 		runner:       runner,
 		preflight:    install.Preflight,
-		ensureDocker: install.EnsureDocker,
-		executor:     install.RealExecutor{},
-		prompter:     newPrompter(ctx, unanswered, &stdout),
-		lanAddress:   func() string { return "" },
-		interactive:  true,
+		// The subject here is the prompt, not the Docker bootstrap: a real
+		// EnsureDocker would inspect the host before any prompt is reached and
+		// make this test depend on the machine it runs on.
+		ensureDocker: func(context.Context, install.Executor, install.Prompter, install.PreflightOptions) error {
+			return nil
+		},
+		executor:    install.RealExecutor{},
+		prompter:    newPrompter(ctx, unanswered, &stdout),
+		lanAddress:  func() string { return "" },
+		interactive: true,
 	}
 	cancel()
 

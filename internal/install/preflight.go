@@ -21,6 +21,8 @@ type preflightEnv interface {
 	Listen(network, address string) (io.Closer, error)
 	EnsureWritable(path string) error
 	AvailableBytes(path string) (uint64, error)
+	Stat(path string) (os.FileInfo, error)
+	Euid() int
 }
 
 type osPreflightEnv struct{}
@@ -68,14 +70,29 @@ func (osPreflightEnv) AvailableBytes(path string) (uint64, error) {
 	return availableBytes(path)
 }
 
+func (osPreflightEnv) Stat(path string) (os.FileInfo, error) {
+	return os.Stat(path)
+}
+
+func (osPreflightEnv) Euid() int {
+	return os.Geteuid()
+}
+
 // PreflightOptions names what the checks depend on. Platform is normally
 // runtime.GOOS; tests set it to exercise the start hint.
 type PreflightOptions struct {
-	DataDir  string
-	Mode     Mode
-	Port     int
-	Repair   bool
-	Platform string
+	Runtime    Runtime
+	DataDir    string
+	Mode       Mode
+	Port       int
+	Repair     bool
+	Platform   string
+	BinaryPath string
+
+	// Out is where EnsureDocker reports the plan it would run and what it saw.
+	// Nil means os.Stderr. The wizard passes its stdout so the bootstrap reads
+	// in order with its own prompts instead of jumping between streams.
+	Out io.Writer
 }
 
 func (o PreflightOptions) platform() string {
@@ -83,6 +100,13 @@ func (o PreflightOptions) platform() string {
 		return runtime.GOOS
 	}
 	return o.Platform
+}
+
+func (o PreflightOptions) output() io.Writer {
+	if o.Out != nil {
+		return o.Out
+	}
+	return os.Stderr
 }
 
 // Preflight refuses an install that cannot work. Every error names the fix:
@@ -95,6 +119,15 @@ func preflight(ctx context.Context, env preflightEnv, opts PreflightOptions) err
 	if strings.TrimSpace(opts.DataDir) == "" {
 		return errors.New("a data directory is required; pass --data-dir")
 	}
+	runtime := opts.Runtime
+	if runtime == "" {
+		runtime = RuntimeDocker
+	}
+	switch runtime {
+	case RuntimeDocker, RuntimeNative:
+	default:
+		return fmt.Errorf("runtime %q is not docker or native; pass --runtime", opts.Runtime)
+	}
 	switch opts.Mode {
 	case ModeSQLite, ModePostgres:
 	default:
@@ -104,13 +137,21 @@ func preflight(ctx context.Context, env preflightEnv, opts PreflightOptions) err
 		return fmt.Errorf("port %d is not between 1 and 65535; pass --port", opts.Port)
 	}
 
-	if _, err := env.LookPath("docker"); err != nil {
-		return fmt.Errorf("Docker is not installed. %s and re-run `tt install`", dockerInstallHint(opts.platform()))
-	}
+	var dockerRoot string
+	if runtime == RuntimeNative {
+		if err := nativeHostChecks(env, opts); err != nil {
+			return err
+		}
+	} else {
+		if _, err := env.LookPath("docker"); err != nil {
+			return fmt.Errorf("Docker is not installed. %s and re-run `tt install`", dockerInstallHint(opts.platform()))
+		}
 
-	dockerRoot, err := env.DockerRoot(ctx)
-	if err != nil {
-		return fmt.Errorf("Docker is installed but its daemon is not reachable (%v). %s, then re-run `tt install`", err, dockerStartHint(opts.platform()))
+		root, err := env.DockerRoot(ctx)
+		if err != nil {
+			return fmt.Errorf("Docker is installed but its daemon is not reachable (%v). %s, then re-run `tt install`", err, dockerStartHint(opts.platform()))
+		}
+		dockerRoot = root
 	}
 
 	if err := env.EnsureWritable(opts.DataDir); err != nil {
@@ -129,7 +170,7 @@ func preflight(ctx context.Context, env preflightEnv, opts PreflightOptions) err
 	// the VM. On Linux the Docker root is the real storage location; elsewhere
 	// the data directory's filesystem is the useful host proxy.
 	target := opts.DataDir
-	if opts.platform() == "linux" && dockerRoot != "" {
+	if runtime == RuntimeDocker && opts.platform() == "linux" && dockerRoot != "" {
 		target = dockerRoot
 	}
 	available, err := env.AvailableBytes(target)
@@ -147,6 +188,35 @@ func preflight(ctx context.Context, env preflightEnv, opts PreflightOptions) err
 	required := minFreeBytes(opts.Mode)
 	if available < required {
 		return fmt.Errorf("not enough free space in %s: need at least %s, have %s. Free space or choose another --data-dir", target, humanBytes(required), humanBytes(available))
+	}
+	return nil
+}
+
+// nativeHostChecks refuses a native install that cannot run. It needs root (the
+// unit is written to /etc/systemd/system), systemd to run it, SQLite as the
+// database, and a server binary that exists and is executable.
+func nativeHostChecks(env preflightEnv, opts PreflightOptions) error {
+	if opts.Mode != ModeSQLite {
+		return errors.New("a native install runs SQLite only; use --mode postgres with --runtime docker")
+	}
+	if _, err := env.LookPath("systemctl"); err != nil {
+		return errors.New("a native install needs systemd, and systemctl is not on PATH. Use --runtime docker, or follow docs/SELF-HOSTING.md")
+	}
+	if env.Euid() != 0 {
+		return errors.New("a native install writes /etc/systemd/system and needs root; re-run with sudo, or use --runtime docker")
+	}
+	if strings.TrimSpace(opts.BinaryPath) == "" {
+		return errors.New("a native install needs a server binary; pass --server-binary")
+	}
+	info, err := env.Stat(opts.BinaryPath)
+	if err != nil {
+		return fmt.Errorf("server binary %s is not readable: %v. Pass --server-binary, or install with --runtime docker", opts.BinaryPath, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("server binary %s is a directory; pass the binary itself with --server-binary", opts.BinaryPath)
+	}
+	if info.Mode()&0o111 == 0 {
+		return fmt.Errorf("server binary %s is not executable; run chmod +x %s and re-run `tt install`", opts.BinaryPath, opts.BinaryPath)
 	}
 	return nil
 }
@@ -230,16 +300,19 @@ func EnsureDocker(ctx context.Context, exec Executor, prompter Prompter, opts Pr
 		return fmt.Errorf("Docker is not installed. %s", plan.OfficialURL)
 	}
 
-	// Non-interactive mode fails closed
+	// Nobody to consent means nothing is run: --yes and a piped stdin both
+	// arrive here with a nil prompter.
 	if prompter == nil {
-		return fmt.Errorf("Docker is not installed and --yes was specified. Automatic Docker install is not allowed. Please install Docker manually: %s", plan.OfficialURL)
+		return fmt.Errorf("Docker is not installed and this install is non-interactive. Automatic Docker install is not allowed. Install Docker manually: %s", plan.OfficialURL)
 	}
 
+	w := opts.output()
+
 	// Interactive mode: offer to install
-	fmt.Fprintf(os.Stderr, "Docker is not installed. This install can set it up for you.\n")
-	fmt.Fprintf(os.Stderr, "Distribution detected: %s\n", plan.Distro)
-	fmt.Fprintf(os.Stderr, "The following command will be run:\n  %s\n", plan.InstallCommand)
-	fmt.Fprintf(os.Stderr, "This requires sudo. You will be prompted for your password.\n")
+	fmt.Fprintf(w, "Docker is not installed. This install can set it up for you.\n")
+	fmt.Fprintf(w, "Distribution detected: %s\n", plan.Distro)
+	fmt.Fprintf(w, "The following command will be run:\n  %s\n", plan.InstallCommand)
+	fmt.Fprintf(w, "This requires sudo. You will be prompted for your password.\n")
 
 	confirmInstall, err := prompter.Confirm("Install Docker now?", false)
 	if err != nil {
@@ -249,7 +322,7 @@ func EnsureDocker(ctx context.Context, exec Executor, prompter Prompter, opts Pr
 		return fmt.Errorf("Docker install declined. Please install Docker manually: %s", plan.OfficialURL)
 	}
 
-	fmt.Fprintf(os.Stderr, "The Docker daemon will be started and enabled:\n  %s\n", plan.StartCommand)
+	fmt.Fprintf(w, "The Docker daemon will be started and enabled:\n  %s\n", plan.StartCommand)
 	confirmStart, err := prompter.Confirm("Start Docker daemon now?", false)
 	if err != nil {
 		return fmt.Errorf("prompt failed: %w", err)
@@ -258,9 +331,9 @@ func EnsureDocker(ctx context.Context, exec Executor, prompter Prompter, opts Pr
 		return fmt.Errorf("Docker daemon start declined. Please start Docker manually.")
 	}
 
-	fmt.Fprintf(os.Stderr, "Adding your user to the 'docker' group allows running Docker without sudo.\n")
-	fmt.Fprintf(os.Stderr, "This is root-equivalent on the host and requires a separate consent.\n")
-	fmt.Fprintf(os.Stderr, "Command: %s\n", plan.GroupCommand)
+	fmt.Fprintf(w, "Adding your user to the 'docker' group allows running Docker without sudo.\n")
+	fmt.Fprintf(w, "This is root-equivalent on the host and requires a separate consent.\n")
+	fmt.Fprintf(w, "Command: %s\n", plan.GroupCommand)
 	confirmGroup, err := prompter.Confirm("Add your user to the docker group?", false)
 	if err != nil {
 		return fmt.Errorf("prompt failed: %w", err)
@@ -270,28 +343,30 @@ func EnsureDocker(ctx context.Context, exec Executor, prompter Prompter, opts Pr
 	output, err := RunDockerInstall(ctx, exec, plan, confirmInstall, confirmStart, confirmGroup)
 	if err != nil {
 		if output != "" {
-			fmt.Fprintf(os.Stderr, "%s\n", output)
+			fmt.Fprintf(w, "%s\n", output)
 		}
 		return fmt.Errorf("Docker bootstrap failed: %w", err)
 	}
 
 	if output != "" {
-		fmt.Fprintf(os.Stderr, "%s\n", output)
+		fmt.Fprintf(w, "%s\n", output)
 	}
 
-	fmt.Fprintf(os.Stderr, "Docker is now installed and running.\n")
+	fmt.Fprintf(w, "Docker is now installed and running.\n")
 	if confirmGroup {
-		fmt.Fprintf(os.Stderr, "You may need to log out and back in for the docker group change to take effect.\n")
+		fmt.Fprintf(w, "You may need to log out and back in for the docker group change to take effect.\n")
 	}
 	return nil
 }
 
 func startDockerDaemon(ctx context.Context, executor Executor, prompter Prompter, plan DockerInstallPlan, opts PreflightOptions) error {
-	fmt.Fprintf(os.Stderr, "Docker is installed but its daemon is not running.\n")
-	fmt.Fprintf(os.Stderr, "The following command will start and enable it:\n  %s\n", plan.StartCommand)
+	w := opts.output()
+
+	fmt.Fprintf(w, "Docker is installed but its daemon is not running.\n")
+	fmt.Fprintf(w, "The following command will start and enable it:\n  %s\n", plan.StartCommand)
 
 	if prompter == nil {
-		return fmt.Errorf("Docker daemon not running and --yes was specified. Please start Docker manually: %s", dockerStartHint(opts.platform()))
+		return fmt.Errorf("Docker daemon not running and this install is non-interactive. Start Docker manually: %s", dockerStartHint(opts.platform()))
 	}
 
 	confirmStart, err := prompter.Confirm("Start Docker daemon now?", false)
@@ -306,10 +381,10 @@ func startDockerDaemon(ctx context.Context, executor Executor, prompter Prompter
 	stdout, stderr, err := executor.RunWithOutput(ctx, cmd)
 	if err != nil {
 		if stdout != "" {
-			fmt.Fprintf(os.Stderr, "%s\n", stdout)
+			fmt.Fprintf(w, "%s\n", stdout)
 		}
 		if stderr != "" {
-			fmt.Fprintf(os.Stderr, "%s\n", stderr)
+			fmt.Fprintf(w, "%s\n", stderr)
 		}
 		return fmt.Errorf("Docker daemon start failed: %w", err)
 	}
@@ -318,6 +393,6 @@ func startDockerDaemon(ctx context.Context, executor Executor, prompter Prompter
 		return fmt.Errorf("Docker daemon not ready after start: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Docker daemon is now running.\n")
+	fmt.Fprintf(w, "Docker daemon is now running.\n")
 	return nil
 }

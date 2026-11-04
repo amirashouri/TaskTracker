@@ -27,6 +27,7 @@ import (
 	"github.com/amirashouri/tasktracker-server/internal/profile"
 	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
 	"github.com/amirashouri/tasktracker-server/internal/sync"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // readyzTimeout bounds the readiness ping, so a hung database cannot make the
@@ -39,9 +40,27 @@ func main() {
 		case "user-create":
 			createUserCmd(os.Args[2:])
 			return
+		case "user-set-password":
+			setUserPasswordCmd(os.Args[2:])
+			return
+		case "admin-list":
+			listAdminsCmd(os.Args[2:])
+			return
 		case "serve":
 			if len(os.Args) > 2 {
 				os.Args = append(os.Args[:1], os.Args[2:]...)
+			}
+		default:
+			// Other subcommands also shouldn't start server
+			if os.Args[1] != "" && !strings.HasPrefix(os.Args[1], "-") {
+				// Try to handle common subcommands
+				switch os.Args[1] {
+				case "migrate":
+					migrateCmd(os.Args[2:])
+					return
+				default:
+					// Fall through to run server for unknown
+				}
 			}
 		}
 	}
@@ -438,4 +457,99 @@ func createUserCmd(args []string) {
 func cliFatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
+}
+
+func setUserPasswordCmd(args []string) {
+	fs := flag.NewFlagSet("user-set-password", flag.ExitOnError)
+	email := fs.String("email", "", "user email (required)")
+	password := fs.String("password", "", "new password (required)")
+	fs.Parse(args)
+
+	*email = strings.TrimSpace(*email)
+	if *email == "" || *password == "" {
+		fmt.Fprintln(os.Stderr, "email and password are required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		cliFatal("invalid configuration: %v", err)
+	}
+
+	database, err := db.New(cfg.DatabaseURL)
+	if err != nil {
+		cliFatal("failed to connect to database: %v", err)
+	}
+	defer database.Close()
+
+	if err := db.Migrate(database); err != nil {
+		cliFatal("failed to run migrations: %v", err)
+	}
+
+	userRepo := entities.NewUserRepository(database.DB)
+	user, err := userRepo.GetByEmail(context.Background(), *email)
+	if err != nil {
+		cliFatal("failed to find user: %v", err)
+	}
+	if user == nil {
+		cliFatal("user %s not found", *email)
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(*password), bcrypt.DefaultCost)
+	if err != nil {
+		cliFatal("failed to hash password: %v", err)
+	}
+
+	if err := userRepo.SetPassword(context.Background(), user.ID, string(hashed)); err != nil {
+		cliFatal("failed to set password: %v", err)
+	}
+
+	fmt.Printf("Updated password for %s (id=%s, role=%s)\n", user.Email, user.ID, user.Role)
+}
+
+func listAdminsCmd(args []string) {
+	cfg, err := config.Load()
+	if err != nil {
+		cliFatal("invalid configuration: %v", err)
+	}
+
+	database, err := db.New(cfg.DatabaseURL)
+	if err != nil {
+		cliFatal("failed to connect to database: %v", err)
+	}
+	defer database.Close()
+
+	if err := db.Migrate(database); err != nil {
+		cliFatal("failed to run migrations: %v", err)
+	}
+
+	userRepo := entities.NewUserRepository(database.DB)
+	users, err := userRepo.List(context.Background())
+	if err != nil {
+		cliFatal("failed to list users: %v", err)
+	}
+
+	fmt.Println("email\tdisplay_name\trole\tstatus\tid")
+	for _, u := range users {
+		fmt.Printf("%s\t%s\t%s\t%s\t%s\n", u.Email, u.DisplayName, u.Role, u.Status, u.ID)
+	}
+}
+
+func migrateCmd(args []string) {
+	cfg, err := config.Load()
+	if err != nil {
+		cliFatal("invalid configuration: %v", err)
+	}
+
+	database, err := db.New(cfg.DatabaseURL)
+	if err != nil {
+		cliFatal("failed to connect to database: %v", err)
+	}
+	defer database.Close()
+
+	if err := db.Migrate(database); err != nil {
+		cliFatal("failed to run migrations: %v", err)
+	}
+	fmt.Println("migrations applied")
 }

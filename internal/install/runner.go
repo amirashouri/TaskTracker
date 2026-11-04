@@ -66,6 +66,29 @@ func (r ExecRunner) Run(ctx context.Context, step Step) error {
 			return fmt.Errorf("remove install state: %w", err)
 		}
 		return nil
+	case StepEnsureUser:
+		return r.ensureServiceUser(ctx, step.State)
+	case StepWriteEnv:
+		return writeFileAtomic(step.State.EnvPath, []byte(step.Env), 0o600)
+	case StepWriteUnit:
+		return writeFileAtomic(step.State.UnitPath, []byte(step.Unit), 0o644)
+	case StepStartService:
+		return r.startService(ctx, step.State)
+	case StepRestartService:
+		return r.systemctl(ctx, step.State, "restart")
+	case StepStopService:
+		return r.stopService(ctx, step.State)
+	case StepRemoveEnv:
+		if err := os.Remove(step.State.EnvPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove environment file: %w", err)
+		}
+		return nil
+	case StepServiceLogs:
+		return r.command(ctx, "journalctl", "-u", step.State.ServiceName(), "-f", "--no-pager", "-n", "200")
+	case StepAdminList:
+		return r.adminList(ctx, step.State)
+	case StepAdminResetPassword:
+		return r.adminResetPassword(ctx, step)
 	default:
 		return fmt.Errorf("unknown install step %q", step.Kind)
 	}
@@ -104,17 +127,99 @@ func (r ExecRunner) createAdmin(ctx context.Context, step Step) error {
 		return errors.New("create admin: email and password are required")
 	}
 
-	args := []string{
-		"exec", "-T", "server", "/app/server", "user-create",
+	adminArgs := []string{
+		"user-create",
 		"--email", step.Admin.Email,
 		"--password", step.Admin.Password,
 	}
 	if step.Admin.DisplayName != "" {
-		args = append(args, "--display-name", step.Admin.DisplayName)
+		adminArgs = append(adminArgs, "--display-name", step.Admin.DisplayName)
 	}
-	args = append(args, "--admin")
+	adminArgs = append(adminArgs, "--admin")
 
+	if step.State.runtimeOrDefault() == RuntimeNative {
+		// A native server has no container to exec into: run the binary the unit
+		// runs, with the unit's env file, so both read the same database and the
+		// same secret.
+		args := append([]string{"ENV_FILE=" + step.State.EnvPath, step.State.BinaryPath}, adminArgs...)
+		return r.commandRedacted(ctx, "env "+strings.Join(redactAdminArgs(args), " "), "env", args...)
+	}
+
+	args := append([]string{"exec", "-T", "server", "/app/server"}, adminArgs...)
 	return r.composeDisplay(ctx, step.State, strings.Join(redactAdminArgs(args), " "), args...)
+}
+
+// ensureServiceUser creates the system account the unit runs as and hands it
+// the data directory. Both halves are idempotent, because a repair runs them
+// again on a host that already has the account.
+func (r ExecRunner) ensureServiceUser(ctx context.Context, state State) error {
+	if err := r.runQuiet(ctx, "id", "-u", NativeServiceUser); err != nil {
+		if err := r.command(ctx, "useradd", "--system", "--home", state.DataDir, "--shell", "/usr/sbin/nologin", NativeServiceUser); err != nil {
+			return fmt.Errorf("create the %s service account: %w", NativeServiceUser, err)
+		}
+	}
+	return r.command(ctx, "chown", "-R", NativeServiceUser+":"+NativeServiceUser, state.DataDir)
+}
+
+func (r ExecRunner) startService(ctx context.Context, state State) error {
+	if err := r.command(ctx, "systemctl", "daemon-reload"); err != nil {
+		return err
+	}
+	return r.systemctl(ctx, state, "enable", "--now")
+}
+
+// stopService removes the unit only after systemd has stopped using it, so a
+// failure leaves a service that can still be inspected.
+func (r ExecRunner) stopService(ctx context.Context, state State) error {
+	if err := r.systemctl(ctx, state, "disable", "--now"); err != nil {
+		return err
+	}
+	if err := os.Remove(state.UnitPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove %s: %w", state.UnitPath, err)
+	}
+	return r.command(ctx, "systemctl", "daemon-reload")
+}
+
+// systemctl puts the unit last: `systemctl enable --now tasktracker.service`.
+func (r ExecRunner) systemctl(ctx context.Context, state State, verbs ...string) error {
+	return r.command(ctx, "systemctl", append(verbs, state.ServiceName())...)
+}
+
+// command runs one host command with the CLI's streams, so the native steps
+// read like the commands an operator would type by hand.
+func (r ExecRunner) command(ctx context.Context, name string, args ...string) error {
+	runner := r.commands
+	if runner == nil {
+		runner = execCommandRunner{}
+	}
+	if err := runner.Run(ctx, r.Stdout, r.Stderr, name, args...); err != nil {
+		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+	}
+	return nil
+}
+
+// commandRedacted runs a command whose argv may carry a secret. The error names
+// the redacted form, because a wrapped *exec.Cmd would otherwise put the admin
+// password in a failure message.
+func (r ExecRunner) commandRedacted(ctx context.Context, display, name string, args ...string) error {
+	runner := r.commands
+	if runner == nil {
+		runner = execCommandRunner{}
+	}
+	if err := runner.Run(ctx, r.Stdout, r.Stderr, name, args...); err != nil {
+		return fmt.Errorf("%s: %w", display, err)
+	}
+	return nil
+}
+
+// runQuiet is a probe: its output is noise unless the caller prints it, and a
+// zero exit is a "yes".
+func (r ExecRunner) runQuiet(ctx context.Context, name string, args ...string) error {
+	runner := r.commands
+	if runner == nil {
+		runner = execCommandRunner{}
+	}
+	return runner.Run(ctx, io.Discard, io.Discard, name, args...)
 }
 
 func redactAdminArgs(args []string) []string {

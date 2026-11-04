@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -45,6 +46,8 @@ func Checks(ctx context.Context, state State, doctor bool) []Check {
 // provable without Docker, a listening server, or a real clock.
 type checkEnv interface {
 	Compose(ctx context.Context, state State, args ...string) (string, error)
+	Service(ctx context.Context, state State) (string, error)
+	Stat(path string) (os.FileInfo, error)
 	Get(ctx context.Context, address string) (httpResult, error)
 	Now() time.Time
 }
@@ -68,6 +71,31 @@ func (osCheckEnv) Compose(ctx context.Context, state State, args ...string) (str
 		return "", err
 	}
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+// Service asks systemd for the unit's state. `is-active` exits non-zero for an
+// inactive unit while still printing its state, so a non-zero exit is a result
+// and only empty output is a failure to inspect.
+func (osCheckEnv) Service(ctx context.Context, state State) (string, error) {
+	cmd := exec.CommandContext(ctx, "systemctl", "is-active", state.ServiceName())
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	out := strings.TrimSpace(stdout.String())
+	if out == "" {
+		if err != nil {
+			if detail := strings.TrimSpace(stderr.String()); detail != "" {
+				return "", fmt.Errorf("%w: %s", err, detail)
+			}
+			return "", err
+		}
+	}
+	return out, nil
+}
+
+func (osCheckEnv) Stat(path string) (os.FileInfo, error) {
+	return os.Stat(path)
 }
 
 func (osCheckEnv) Get(ctx context.Context, address string) (httpResult, error) {
@@ -96,12 +124,23 @@ func (osCheckEnv) Now() time.Time {
 // something is wrong. Sharing the first five functions is what keeps the two
 // commands from disagreeing.
 func runChecks(ctx context.Context, env checkEnv, state State, doctor bool) []Check {
-	checks := []Check{
-		checkContainers(ctx, env, state),
-		checkReady(ctx, env, state),
-		checkAddress(ctx, env, state),
-		checkDatabase(ctx, env, state),
-		checkBackup(),
+	var checks []Check
+	if state.runtimeOrDefault() == RuntimeNative {
+		checks = []Check{
+			checkService(ctx, env, state),
+			checkReady(ctx, env, state),
+			checkNativeAddress(state),
+			checkNativeDatabase(env, state),
+			checkBackup(),
+		}
+	} else {
+		checks = []Check{
+			checkContainers(ctx, env, state),
+			checkReady(ctx, env, state),
+			checkAddress(ctx, env, state),
+			checkDatabase(ctx, env, state),
+			checkBackup(),
+		}
 	}
 	if doctor {
 		checks = append(checks, checkClock(ctx, env, state), checkProvider(state))
@@ -212,6 +251,50 @@ func containerState(service composeService) string {
 	default:
 		return "unknown"
 	}
+}
+
+func checkService(ctx context.Context, env checkEnv, state State) Check {
+	out, err := env.Service(ctx, state)
+	if err != nil {
+		return newCheck("service", CheckFail, "cannot read the service state",
+			fmt.Sprintf("%v. Is systemd running?", err))
+	}
+	switch out {
+	case "active":
+		return newCheck("service", CheckOK, state.ServiceName()+" active", "")
+	case "activating", "reloading":
+		return newCheck("service", CheckWarn, state.ServiceName()+" is "+out, "")
+	case "":
+		return newCheck("service", CheckFail, "systemctl reported no state",
+			"run `sudo systemctl status "+state.ServiceName()+"`")
+	default:
+		return newCheck("service", CheckFail, state.ServiceName()+" is "+out,
+			"run `tt logs` or `sudo systemctl status "+state.ServiceName()+"`")
+	}
+}
+
+// checkNativeAddress reads the bind `tt` rendered, which is the only publish a
+// native install has: there is no compose port mapping to interrogate.
+func checkNativeAddress(state State) Check {
+	switch bind := state.Bind(); bind {
+	case NativeLoopback:
+		return newCheck("address", CheckOK, "bound to "+bind+" (this host only)", "")
+	case NativeAllInterfaces:
+		return newCheck("address", CheckOK, "bound to "+bind+" (LAN)", "")
+	default:
+		return newCheck("address", CheckFail,
+			"bound to "+bind+", expected "+NativeLoopback+" or "+NativeAllInterfaces,
+			"run `tt install` to restore the loopback bind")
+	}
+}
+
+func checkNativeDatabase(env checkEnv, state State) Check {
+	file := state.DatabaseFile()
+	info, err := env.Stat(file)
+	if err != nil {
+		return newCheck("database", CheckFail, "cannot read "+file, err.Error())
+	}
+	return newCheck("database", CheckOK, humanBytes(uint64(info.Size()))+" on disk", "")
 }
 
 func checkReady(ctx context.Context, env checkEnv, state State) Check {

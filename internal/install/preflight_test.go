@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakePreflightEnv struct {
@@ -17,7 +18,12 @@ type fakePreflightEnv struct {
 	dockerErr   error
 	listenErr   error
 	ensureErr   error
+	statErr     error
+	statMode    os.FileMode
+	statIsDir   bool
+	euid        int
 
+	lookPathCalls  []string
 	listenCalls    []string
 	ensurePaths    []string
 	availableCalls []string
@@ -26,6 +32,7 @@ type fakePreflightEnv struct {
 }
 
 func (f *fakePreflightEnv) LookPath(name string) (string, error) {
+	f.lookPathCalls = append(f.lookPathCalls, name)
 	if f.lookPathErr != nil {
 		return "", f.lookPathErr
 	}
@@ -59,6 +66,30 @@ func (f *fakePreflightEnv) AvailableBytes(path string) (uint64, error) {
 	}
 	return 1 << 40, nil
 }
+
+func (f *fakePreflightEnv) Stat(string) (os.FileInfo, error) {
+	if f.statErr != nil {
+		return nil, f.statErr
+	}
+	return fakeExecutableInfo{mode: f.statMode, dir: f.statIsDir}, nil
+}
+
+func (f *fakePreflightEnv) Euid() int {
+	return f.euid
+}
+
+// fakeExecutableInfo is the part of os.FileInfo the native checks read.
+type fakeExecutableInfo struct {
+	mode os.FileMode
+	dir  bool
+}
+
+func (f fakeExecutableInfo) Name() string       { return "server" }
+func (f fakeExecutableInfo) Size() int64        { return 1024 }
+func (f fakeExecutableInfo) Mode() os.FileMode  { return f.mode }
+func (f fakeExecutableInfo) ModTime() time.Time { return time.Time{} }
+func (f fakeExecutableInfo) IsDir() bool        { return f.dir }
+func (f fakeExecutableInfo) Sys() any           { return nil }
 
 type fakeCloser struct{}
 

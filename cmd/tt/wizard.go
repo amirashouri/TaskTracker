@@ -22,6 +22,19 @@ func validateInstallShape(opts installOptions, buildVersion string) error {
 	default:
 		return fmt.Errorf("provider %q is not lan, tailscale, or cloudflare", opts.provider)
 	}
+	switch install.Runtime(opts.runtime) {
+	case install.RuntimeDocker, install.RuntimeNative:
+	default:
+		return fmt.Errorf("runtime %q is not docker or native", opts.runtime)
+	}
+	if install.Runtime(opts.runtime) == install.RuntimeNative {
+		if install.Mode(opts.mode) != install.ModeSQLite {
+			return errors.New("a native install runs SQLite only; use --mode postgres with --runtime docker")
+		}
+		if install.Provider(opts.provider) != install.ProviderLAN {
+			return fmt.Errorf("a native install exposes with provider lan only; %q needs --runtime docker", opts.provider)
+		}
+	}
 	if strings.TrimSpace(opts.name) == "" {
 		return errors.New("an instance name is required")
 	}

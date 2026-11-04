@@ -56,6 +56,10 @@ func runUninstall(
 		return code
 	}
 
+	if state.Runtime == install.RuntimeNative {
+		fmt.Fprintf(stdout, "Removed %q. The data directory %s was left in place.\n", state.InstanceName, state.DataDir)
+		return 0
+	}
 	fmt.Fprintf(stdout, "Removed %q. Data volumes were left in place.\n", state.InstanceName)
 	return 0
 }

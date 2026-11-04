@@ -3,6 +3,7 @@ package install
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -13,11 +14,25 @@ var fixedNow = time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 
 type fakeCheckEnv struct {
 	compose      func(args []string) (string, error)
+	service      func() (string, error)
+	stat         func(path string) (os.FileInfo, error)
 	get          func(address string) (httpResult, error)
 	now          time.Time
 	composeCalls []string
+	serviceCalls []string
+	statCalls    []string
 	getCalls     []string
 }
+
+// fakeFileInfo is the only part of os.FileInfo the checks read.
+type fakeFileInfo struct{ size int64 }
+
+func (f fakeFileInfo) Name() string       { return "tasktracker.db" }
+func (f fakeFileInfo) Size() int64        { return f.size }
+func (f fakeFileInfo) Mode() os.FileMode  { return 0o600 }
+func (f fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (f fakeFileInfo) IsDir() bool        { return false }
+func (f fakeFileInfo) Sys() any           { return nil }
 
 func (e *fakeCheckEnv) Compose(_ context.Context, _ State, args ...string) (string, error) {
 	e.composeCalls = append(e.composeCalls, strings.Join(args, " "))
@@ -25,6 +40,22 @@ func (e *fakeCheckEnv) Compose(_ context.Context, _ State, args ...string) (stri
 		return "", nil
 	}
 	return e.compose(args)
+}
+
+func (e *fakeCheckEnv) Service(_ context.Context, state State) (string, error) {
+	e.serviceCalls = append(e.serviceCalls, state.ServiceName())
+	if e.service == nil {
+		return "active", nil
+	}
+	return e.service()
+}
+
+func (e *fakeCheckEnv) Stat(path string) (os.FileInfo, error) {
+	e.statCalls = append(e.statCalls, path)
+	if e.stat == nil {
+		return fakeFileInfo{size: 1048576}, nil
+	}
+	return e.stat(path)
 }
 
 func (e *fakeCheckEnv) Get(_ context.Context, address string) (httpResult, error) {

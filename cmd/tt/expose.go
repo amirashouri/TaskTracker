@@ -126,6 +126,11 @@ func runExposeWithDeps(ctx context.Context, args []string, deps exposeDeps) int 
 		return 1
 	}
 
+	if state.Runtime == install.RuntimeNative && provider != install.ProviderLAN {
+		fmt.Fprintf(deps.stderr, "tt expose: this instance runs natively; only the lan provider is wired for it. Follow docs/SELF-HOSTING.md §8 for %s, or reinstall with --runtime docker.\n", provider)
+		return 1
+	}
+
 	if provider == install.ProviderTailscale {
 		return exposeTailscale(ctx, deps, state, opts.tailnetOnly)
 	}
@@ -147,6 +152,10 @@ func runExposeWithDeps(ctx context.Context, args []string, deps exposeDeps) int 
 	hostPort := net.JoinHostPort(ip, strconv.Itoa(state.ServerPort))
 	serverURL := "http://" + hostPort
 	readyURL := serverURL + "/readyz"
+
+	if state.Runtime == install.RuntimeNative {
+		return exposeNativeLAN(ctx, deps, state, serverURL)
+	}
 
 	compose, err := install.RenderExposedCompose(state)
 	if err != nil {
@@ -175,6 +184,64 @@ func runExposeWithDeps(ctx context.Context, args []string, deps exposeDeps) int 
 	fmt.Fprintln(deps.stdout, "`tt install` rewrites the compose file to loopback; re-run `tt expose` after a repair.")
 	printPairing(deps.stdout, provider, serverURL)
 	return 0
+}
+
+// exposeNativeLAN widens the bind in the env file and restarts the unit: a
+// native instance has no publish to rewrite and no container to recreate.
+func exposeNativeLAN(ctx context.Context, deps exposeDeps, state install.State, serverURL string) int {
+	readyURL := serverURL + "/readyz"
+	previousEnv, err := os.ReadFile(state.EnvPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(deps.stderr, "tt expose: read %s: %v\n", state.EnvPath, err)
+		return 1
+	}
+
+	next := state
+	next.ServerBind = install.NativeAllInterfaces
+
+	steps := []install.Step{
+		{Kind: install.StepWriteEnv, State: next, Env: install.RenderNativeEnv(next)},
+		{Kind: install.StepRestartService, State: next},
+	}
+	for _, step := range steps {
+		if err := deps.runner.Run(ctx, step); err != nil {
+			restoreNativeEnv(ctx, deps, state, previousEnv)
+			fmt.Fprintf(deps.stderr, "tt expose: %v\n", err)
+			return 1
+		}
+	}
+	// The state carries the bind so status and doctor report what is running,
+	// not what was asked for.
+	if err := install.SaveState(next); err != nil {
+		restoreNativeEnv(ctx, deps, state, previousEnv)
+		fmt.Fprintf(deps.stderr, "tt expose: %v\n", err)
+		return 1
+	}
+
+	if err := deps.verify(ctx, readyURL); err != nil {
+		restoreNativeEnv(ctx, deps, state, previousEnv)
+		fmt.Fprintf(deps.stderr, "tt expose: no response from %s: %v\n", readyURL, err)
+		return 1
+	}
+
+	fmt.Fprintf(deps.stdout, "Exposed on the LAN: %s\n", serverURL)
+	fmt.Fprintln(deps.stdout, "Plain HTTP on your local network: trust this network, and do not forward this port from the internet.")
+	fmt.Fprintln(deps.stdout, "`tt install` restores the loopback bind; re-run `tt expose` after a repair.")
+	printPairing(deps.stdout, install.ProviderLAN, serverURL)
+	return 0
+}
+
+// restoreNativeEnv puts the previous env file and bind back and restarts, so a
+// failed expose does not leave the server listening on every interface.
+func restoreNativeEnv(ctx context.Context, deps exposeDeps, state install.State, previous []byte) {
+	if previous == nil {
+		return
+	}
+	_ = deps.runner.Run(ctx, install.Step{Kind: install.StepWriteEnv, State: state, Env: string(previous)})
+	_ = deps.runner.Run(ctx, install.Step{Kind: install.StepRestartService, State: state})
+	// The state carries the bind, so it has to go back too or status would
+	// report a LAN bind the server no longer has.
+	_ = install.SaveState(state)
 }
 
 // exposeTailscale keeps the server on its loopback publish and lets Tailscale

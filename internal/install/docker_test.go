@@ -26,6 +26,47 @@ func TestDetectDockerInstallPlan_DockerPresent(t *testing.T) {
 	// but we can test the parts that don't depend on it
 }
 
+// The wizard hands EnsureDocker its own stdout so the bootstrap reads in order
+// with the prompts instead of jumping between streams. A daemon that is
+// installed but down prints before it fails, so it is the case that can prove
+// the writer is honoured.
+func TestEnsureDockerWritesToTheConfiguredWriter(t *testing.T) {
+	original := DetectLinuxDistroFunc
+	DetectLinuxDistroFunc = func() (Distro, error) { return DistroDebian, nil }
+	t.Cleanup(func() { DetectLinuxDistroFunc = original })
+
+	fake := &fakeExecutor{
+		lookPathFunc: func(name string) (string, error) {
+			switch name {
+			case "docker":
+				return "/usr/bin/docker", nil
+			case "sudo":
+				return "/usr/bin/sudo", nil
+			}
+			return "", exec.ErrNotFound
+		},
+		runFunc: func(context.Context, *exec.Cmd) error {
+			return errors.New("Cannot connect to the Docker daemon")
+		},
+	}
+
+	var out strings.Builder
+	err := EnsureDocker(context.Background(), fake, nil, PreflightOptions{Platform: "linux", Out: &out})
+
+	if err == nil {
+		t.Fatal("EnsureDocker accepted a daemon that is not reachable")
+	}
+	if !strings.Contains(err.Error(), "non-interactive") {
+		t.Errorf("error = %q, want the fail-closed message for a nil prompter", err)
+	}
+	if !strings.Contains(out.String(), "daemon is not running") {
+		t.Errorf("output = %q, want the daemon message on the configured writer", out.String())
+	}
+	if !strings.Contains(out.String(), "systemctl start docker") {
+		t.Errorf("output = %q, want the start command on the configured writer", out.String())
+	}
+}
+
 func TestRunDockerInstall_NoSudo(t *testing.T) {
 	ctx := context.Background()
 	fake := &fakeExecutor{

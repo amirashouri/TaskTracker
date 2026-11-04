@@ -133,52 +133,55 @@ sudo apt-get install -f
 tt install
 ```
 
-This is an interactive wizard. Here's a transcript from a clean Ubuntu 24.04 host:
+It checks Docker **first**. The server and its database both run in containers,
+so nothing can be installed on a host that cannot run them — and in SQLite mode
+as much as in Postgres. If Docker is missing, `tt install` offers to install it
+(Debian/Ubuntu, Fedora/RHEL, Arch) and to start its daemon before asking you
+anything; with no terminal to answer (`--yes`, or a piped stdin), it stops and
+names the manual install instead.
+
+Only two of the questions are prompts. Provider, instance name and port are
+flags with defaults (`lan`, `tasktracker`, `8080`); pass them to change them. The
+remaining checks — Docker present and running, data directory writable, port
+free, disk space — are silent and only speak up when they fail, each naming the
+fix.
+
+Here's a transcript from a clean Ubuntu 24.04 host that already runs Docker:
 
 ```text
 $ tt install
-Welcome to TaskTracker setup.
-
 Database [sqlite/postgres] [sqlite]:
 Data directory [/var/lib/tasktracker]:
-Exposure provider [lan/tailscale/cloudflare] [lan]:
-Instance name [tasktracker]:
-Host port for HTTP server [8080]:
 Admin email: admin@company.com
-Admin password: ********
-Confirm admin password: ********
 Admin display name (optional): Admin
-
-Preflight checks…
-  ✓ Docker installed
-  ✓ Docker daemon running
-  ✓ Data directory writable
-  ✓ Port 8080 free
-  ✓ Sufficient disk space (need 512 MiB, have 45.2 GiB)
-
-Starting stack…
-  ✓ Compose file written
-  ✓ Containers started
-  ✓ Server ready on http://127.0.0.1:8080
-
+Admin password:
+Confirm admin password:
 JWT_SECRET=3f2a1c4e9b8d7f6a5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2
 Store this secret; it is not printed again.
+ Container tasktracker-server-1  Started
 
 Installed "tasktracker". Server: http://127.0.0.1:8080
 Admin: admin@company.com
+LAN address: 192.168.1.42
 If this host is a laptop, keep it plugged in, on Ethernet, and with the lid open: a laptop that sleeps is a server that is down.
-
 Next: open http://127.0.0.1:8080 on this host and sign in as admin@company.com.
-
-Provider lan is configured; run `tt expose --provider=lan` to publish it.
+Pairing: no verified server URL yet.
+Run "tt expose --provider=lan" to publish one; it prints the pairing link and QR code.
 ```
 
 ### What just happened
 
-- **Database**: Chose SQLite (zero external dependencies). Data lives in `/var/lib/tasktracker/tasktracker.db`.
-- **Provider**: Chose `lan` (default). The server is only reachable on this host for now.
-- **Instance name**: `tasktracker` — used as the Docker Compose project name.
-- **Admin**: Created the first admin user. No self-signup exists.
+- **Database**: SQLite by default. Its file lives in the `tasktracker-data`
+  container volume, not in the data directory. Choosing `postgres` also starts a
+  `postgres:16-alpine` service with its own volume.
+- **Data directory**: `/var/lib/tasktracker` — where `tt` writes
+  `docker-compose.yml`. The install state goes to `/etc/tasktracker/install.json`
+  (`~/.config/tasktracker/install.json` on macOS and Windows).
+- **Provider**: `lan`, the `--provider` default. The server is published on
+  `127.0.0.1` only; `tt expose` is what makes it reachable from other devices.
+- **Instance name**: `tasktracker`, the `--name` default — the Docker Compose
+  project name.
+- **Admin**: Created inside the running server container. No self-signup exists.
 - **JWT_SECRET**: Generated once, printed once. **Save it.** Rotating it invalidates every token.
 
 ### Non-interactive install (automation)

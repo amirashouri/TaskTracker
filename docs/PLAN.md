@@ -59,6 +59,7 @@ local addresses and refuses a public `http://` root at save time.
 | T9.11 | Deferred | VPS + Caddy deployment guide (documented, not implemented) | T9.1–T9.3, if picked up | — (no spec yet) |
 | T9.12 | Complete | Guided Docker bootstrap in `tt install` | T9.4, T9.5 | — |
 | T9.13 | Complete | Customer installation and onboarding docs | T9.5, T9.7–T9.12 | — |
+| T9.14 | In progress | Native SQLite runtime (no Docker) | T9.5, T9.6, T9.8 | [`specs/t9.14-native-sqlite-runtime.md`](../specs/t9.14-native-sqlite-runtime.md) |
 
 Completed tasks leave no spec. The decisions worth keeping are in
 [`ARCHITECTURE.md`](ARCHITECTURE.md#decisions-retained-from-completed-task-specs).
