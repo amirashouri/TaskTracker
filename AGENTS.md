@@ -38,8 +38,6 @@ one merge request.
 ## Project documentation
 
 - `docs/PLAN.md` — concise active roadmap and task index.
-- `docs/PLAN-ARCHIVE.md` — completed-work history and detailed planning notes
-  for tasks not yet captured in specs; read only the selected task section.
 - `specs/<task>.md` — one task's scope, acceptance contract, validation, and
   handoff; authoritative for how that task is done and resumed.
 - `docs/API.md` — HTTP wire contract. Read it before changing a request or
