@@ -72,13 +72,16 @@ test-postgres:
 
 # The CLI is the install funnel. Build it on tags for every platform the
 # customer might download it on, with the release tag baked into the image
-# tag it pins.
+# tag it pins. release-tt additionally bundles a static tt with the server
+# binary it supervises, so a customer who does not want Docker can fetch one
+# tarball and run `tt install --runtime native --server-binary ./server`.
 release:
   stage: release
   rules:
     - if: $CI_COMMIT_TAG
   script:
     - make release VERSION="$CI_COMMIT_TAG"
+    - make release-tt VERSION="$CI_COMMIT_TAG"
   artifacts:
     paths:
       - dist/

@@ -60,6 +60,7 @@ local addresses and refuses a public `http://` root at save time.
 | T9.12 | Complete | Guided Docker bootstrap in `tt install` | T9.4, T9.5 | — |
 | T9.13 | Complete | Customer installation and onboarding docs | T9.5, T9.7–T9.12 | — |
 | T9.14 | In progress | Native SQLite runtime (no Docker) | T9.5, T9.6, T9.8 | [`specs/t9.14-native-sqlite-runtime.md`](../specs/t9.14-native-sqlite-runtime.md) |
+| T9.15 | In progress | `tt` curl-installable and runnable without cloning | T9.5, T9.12, T9.14 | [`specs/t9.15-curl-installable-cli.md`](../specs/t9.15-curl-installable-cli.md) |
 
 Completed tasks leave no spec. The decisions worth keeping are in
 [`ARCHITECTURE.md`](ARCHITECTURE.md#decisions-retained-from-completed-task-specs).

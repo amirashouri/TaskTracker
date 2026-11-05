@@ -25,43 +25,68 @@ internals — just a Linux host and a terminal.
 
 > **Mobile note:** All clients — desktop, Android, and iOS — work over `lan`. The first connection from a phone asks one permission (Android: local network; iOS: Local Network prompt), and plain HTTP stays inside your network. If your team also needs access from outside the LAN, use `tailscale` or `cloudflare`, which serve HTTPS.
 
-## Step 0 — Install the `tt` CLI
+## Step 0 — Get the `tt` CLI
 
-Download the latest release for your platform. **Copy only the block for your OS:**
+`tt` is a static Go binary that bootstraps the server, the database, and the
+first admin account, then prints the address the phone scans. It does not need
+Docker on the machine that runs it — only on the host that runs the server, and
+it installs that too. It never phones home: the URL you pass is the URL you
+get.
 
-### Linux (amd64 / x86_64)
+### Fastest: one curl command, no cloning
 
-```bash
-curl -fsSL https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/tt_linux_amd64 -o /usr/local/bin/tt
-chmod +x /usr/local/bin/tt
-```
-
-### Linux (arm64 / aarch64)
-
-```bash
-curl -fsSL https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/tt_linux_arm64 -o /usr/local/bin/tt
-chmod +x /usr/local/bin/tt
-```
-
-### macOS (Apple Silicon / arm64)
+On a tagged release, CI publishes a tarball per platform containing `tt` and
+the `server` binary it supervises. Fetch it, extract it, and install:
 
 ```bash
-curl -fsSL https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/tt_darwin_arm64 -o /usr/local/bin/tt
+# Linux amd64 — the only platform with a server binary today:
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/download/v0.1.6/tt-linux-amd64.tar.gz \
+  | tar -xz -C /usr/local/bin
+sudo mv /usr/local/bin/tt-linux-amd64 /usr/local/bin/tt
 chmod +x /usr/local/bin/tt
+
+# Install. The tarball already has the server binary, so no Docker, no clone:
+tt install --runtime native --server-binary ./server
 ```
 
-### macOS (Intel / amd64)
+The other platforms ship `tt` alone and install with Docker:
+
+| Platform | Tarball |
+|----------|---------|
+| Linux amd64 | `tt-linux-amd64.tar.gz` (tt + server) |
+| Linux arm64 | `tt-linux-arm64.tar.gz` (tt only) |
+| macOS arm64 | `tt-darwin-arm64.tar.gz` (tt only) |
+| macOS amd64 | `tt-darwin-amd64.tar.gz` (tt only) |
+| Windows amd64 | `tt-windows-amd64.exe` (tt only) |
 
 ```bash
-curl -fsSL https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/tt_darwin_amd64 -o /usr/local/bin/tt
-chmod +x /usr/local/bin/tt
+# macOS / Windows: extract the single binary and run it from where it lands.
+tar -xzf tt-darwin-arm64.tar.gz
+./tt-darwin-arm64 install
 ```
 
-### Windows (PowerShell, amd64)
+### Build from source (developers and unreleased versions)
 
-```powershell
-iwr -useb https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download/tt_windows_amd64.exe -outfile $env:USERPROFILE\tt.exe
-# Add $env:USERPROFILE to your PATH if not already present
+If there is no tarball for your platform or you want the working tree, build
+`tt` with Go 1.27:
+
+```bash
+make tt
+./dist/tt install
+```
+
+Per-platform builds use `go build` directly; `make tt` does not take
+`GOOS`/`GOARCH`:
+
+```bash
+mkdir -p dist && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o dist/tt-linux-arm64 ./cmd/tt
+```
+
+To build every platform at once, including the curl-installable tarballs:
+
+```bash
+make release VERSION=v1.2.3        # static tt binaries
+make release-tt VERSION=v1.2.3    # ... plus the tt + server tarballs
 ```
 
 ### Verify
@@ -70,7 +95,8 @@ iwr -useb https://github.com/amirashouri/TaskTrackerKMP/releases/latest/download
 tt --help
 ```
 
-You should see the command list: `install`, `expose`, `status`, `doctor`, `logs`, `upgrade`, `uninstall`, `version`.
+You should see the command list: `install`, `expose`, `status`, `doctor`,
+`logs`, `uninstall`, `version`, `agent`.
 
 ## Get the TaskTracker App
 
@@ -149,11 +175,10 @@ fix.
 Here's a transcript from a clean Ubuntu 24.04 host that already runs Docker:
 
 ```text
-$ tt install
-Database [sqlite/postgres] [sqlite]:
+$ ./dist/tt install
+Choose sqlite or postgres [sqlite]:
 Data directory [/var/lib/tasktracker]:
 Admin email: admin@company.com
-Admin display name (optional): Admin
 Admin password:
 Confirm admin password:
 JWT_SECRET=3f2a1c4e9b8d7f6a5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2
@@ -197,6 +222,29 @@ tt install --yes \
 
 > **Warning:** `--yes` skips all prompts. If Docker is missing, it **fails closed** — it will not install Docker automatically. Install Docker first, then re-run.
 
+### No Docker (native, Linux with systemd)
+
+A SQLite install can run without Docker at all. The wizard offers it after you
+choose SQLite; the answer is the only thing that turns the runtime on:
+
+```bash
+# The tarball already has the server binary beside tt:
+tt install --runtime native --server-binary ./server
+
+# Or fetch one over HTTPS into the data directory. tt never phones home, so
+# the URL is an explicit argument the operator chooses:
+tt install --runtime native \
+  --server-binary-url https://github.com/amirashouri/TaskTracker/releases/download/v0.1.6/server \
+  --data-dir /var/lib/tasktracker
+```
+
+Native is Linux + systemd only, SQLite only, provider `lan` only. The server
+runs as the `tasktracker` system account, the data directory is chowned to it,
+and `tt` writes a systemd unit at `/etc/systemd/system/tasktracker.service`.
+`--server-binary-url` only accepts `https://`, refuses `http://`, and refuses
+with `--runtime docker`. It lands the binary in the data directory next to the
+instance, so a repair reuses the file that is already there.
+
 ### Dry-run (audit what would happen)
 
 ```bash
@@ -222,6 +270,8 @@ $ tt expose --provider=lan
 Exposed on the LAN: http://192.168.1.42:8080
 Plain HTTP on your local network: trust this network, and do not forward this port from the internet.
 `tt install` rewrites the compose file to loopback; re-run `tt expose` after a repair.
+Pairing link: tasktracker://connect?url=https%3A%2F%2F192.168.1.42%3A8080
+QR code: (ASCII QR printed to terminal)
 ```
 
 This rewrites the compose file to publish `0.0.0.0:8080:8080` and verifies the LAN address works. **Do not forward this port to the internet.**
@@ -248,6 +298,8 @@ $ tt expose --provider=tailscale
 Exposed with Tailscale Funnel: https://myserver.tailnet.ts.net
 The server stays bound to loopback; Tailscale reaches it from 127.0.0.1 over HTTPS.
 To stop exposing: tailscale funnel reset
+Pairing link: tasktracker://connect?url=https%3A%2F%2Fmyserver.tailnet.ts.net
+QR code: (ASCII QR printed to terminal)
 ```
 
 **Caveats:**
@@ -269,6 +321,8 @@ $ tt expose --provider=cloudflare --domain tasks.company.com
 Exposed with Cloudflare Tunnel: https://tasks.company.com
 The server stays bound to loopback; Cloudflare terminates TLS and proxies to it.
 To stop exposing: cloudflared tunnel delete <tunnel-id>
+Pairing link: tasktracker://connect?url=https%3A%2F%2Ftasks.company.com
+QR code: (ASCII QR printed to terminal)
 ```
 
 **Caveats:**
@@ -277,7 +331,8 @@ To stop exposing: cloudflared tunnel delete <tunnel-id>
 
 ### What the QR code and `tasktracker://connect` link do
 
-After a successful `tt expose`, you'll see:
+After a successful `tt expose`, the command prints a pairing link and a
+scannable terminal QR code:
 
 ```text
 Pairing link: tasktracker://connect?url=https%3A%2F%2Ftasks.company.com
@@ -297,19 +352,25 @@ QR code: (ASCII QR printed to terminal)
 tt status
 ```
 
+Prints the install state and runs read-only checks. The state section is always
+there; the checks section is what `tt status` and `tt doctor` share, with
+`doctor` adding the two that only matter when something is wrong.
+
 Output:
 
 ```text
-Instance: tasktracker
-Mode: sqlite
-Provider: cloudflare
-Server: https://tasks.company.com (verified)
-Port: 8080
-Compose: /var/lib/tasktracker/docker-compose.yml
-Image: tasktracker-server:v1.2.3
-Containers:
-  server  Up 2 hours (healthy)
-  cloudflared  Up 2 hours
+instance: tasktracker
+runtime: docker
+mode: sqlite
+provider: cloudflare
+image: tasktracker-server:v1.2.3
+server: http://127.0.0.1:8080
+compose: /var/lib/tasktracker/docker-compose.yml
+[ok] containers server running
+[ok] readyz the server answered 200
+[ok] address published at 127.0.0.1:8080 (this host only)
+[ok] database 12.3 MiB on disk
+[skip] backup no backup recorded; tt does not create backups
 ```
 
 ### Health check
@@ -318,21 +379,32 @@ Containers:
 tt doctor
 ```
 
-Output:
+Same checks as `tt status`, plus the two that only matter when something is
+wrong:
 
 ```text
 $ tt doctor
-Running checks…
-  ✓ containers   server, cloudflared running
-  ✓ ready        HTTPS https://tasks.company.com/readyz → 200
-  ✓ address      published on 127.0.0.1:8080
-  ✓ database     sqlite: 12.3 MiB
-  ✓ clock        server time within 1s of host
-  ⊘ provider     cloudflare: run `tt expose --provider=cloudflare --domain tasks.company.com` to verify the URL; doctor does not retain the exposed name
-  ✓ backup       manual procedure: sqlite3 /var/lib/tasktracker/tasktracker.db ".backup '/var/backups/tasktracker-$(date +%F).db'"
+instance: tasktracker
+runtime: docker
+mode: sqlite
+provider: cloudflare
+image: tasktracker-server:v1.2.3
+server: http://127.0.0.1:8080
+compose: /var/lib/tasktracker/docker-compose.yml
+[ok] containers server running
+[ok] readyz the server answered 200
+[ok] address published at 127.0.0.1:8080 (this host only)
+[ok] database 12.3 MiB on disk
+[skip] backup no backup recorded; tt does not create backups
+[ok] clock local and server clocks agree
+[skip] provider cloudflare: provider health is not checked yet
 ```
 
-- `provider` is always `skip` because the install state doesn't store the exposed URL. Re-run `tt expose` to re-verify.
+- `provider` is always `skip`: the install state does not store the exposed URL,
+  and `tt doctor` does not retain it. Re-run `tt expose` to re-verify.
+- `backup` is always `skip`, not a warning: `tt` does not create backups, so
+  there is no age it could honestly report. Back up the data volume yourself
+  (see §3 below).
 
 ### View logs
 
@@ -342,47 +414,63 @@ tt logs server       # just the server
 tt logs -f           # follow (Ctrl-C to stop)
 ```
 
-### Upgrade
+### Move to a new server version
+
+`tt` has no `upgrade` command. To move to a new server version, change the image
+tag in the compose file or the binary path in the unit file and run
+`tt install` again — it repairs the existing instance in place, keeping the
+database and the admin account:
 
 ```bash
-tt upgrade
+tt install --yes --admin-email admin@company.com --admin-password 'StrongPass123'
 ```
-
-Pulls the new image, recreates the container, and runs migrations. The JWT secret and data volume are preserved.
 
 ### Backup
 
-**SQLite (single file):**
+**SQLite (single file inside a Docker volume):**
 
 ```bash
-sqlite3 /var/lib/tasktracker/tasktracker.db \
-  ".backup '/var/backups/tasktracker-$(date +%F).db'"
+docker compose -f /var/lib/tasktracker/docker-compose.yml exec server \
+  sqlite3 /data/tasktracker.db \
+  ".backup '/data/tasktracker-$(date +%F).db'"
+docker compose -f /var/lib/tasktracker/docker-compose.yml cp server:/data/tasktracker-$(date +%F).db /var/backups/
 ```
 
-Or stop and copy:
+Or stop the stack and copy the volume:
 
 ```bash
-sudo systemctl stop docker  # if using systemd Docker
-cp /var/lib/tasktracker/tasktracker.db /var/backups/
+docker compose -f /var/lib/tasktracker/docker-compose.yml down
+docker run --rm -v tasktracker-tasktracker-data:/data -v /var/backups:/backups \
+  alpine cp /data/tasktracker.db /backups/tasktracker-$(date +%F).db
 # also copy -wal and -shm files if they exist
 ```
 
 **Postgres:**
 
 ```bash
-pg_dump -Fc -U tasktracker tasktracker > /var/backups/tasktracker-$(date +%F).dump
+docker compose -f /var/lib/tasktracker/docker-compose.yml exec postgres \
+  pg_dump -Fc -U tasktracker tasktracker > /var/backups/tasktracker-$(date +%F).dump
 ```
 
 ### Restore
 
-**SQLite:** Replace the file while Docker is stopped, then start. The server re-applies migrations on startup.
+**SQLite:** Replace the file while the stack is stopped, then start. The server
+re-applies migrations on startup.
+
+```bash
+docker compose -f /var/lib/tasktracker/docker-compose.yml down
+docker run --rm -v tasktracker-tasktracker-data:/data -v /var/backups:/backups \
+  alpine cp /backups/tasktracker-2026-10-13.db /data/tasktracker.db
+docker compose -f /var/lib/tasktracker/docker-compose.yml up -d
+```
 
 **Postgres:**
 
 ```bash
-sudo systemctl stop docker
-pg_restore --clean --if-exists -U tasktracker -d tasktracker /var/backups/tasktracker-2026-10-13.dump
-sudo systemctl start docker
+docker compose -f /var/lib/tasktracker/docker-compose.yml stop
+docker compose -f /var/lib/tasktracker/docker-compose.yml exec postgres \
+  pg_restore --clean --if-exists -U tasktracker -d tasktracker /var/backups/tasktracker-2026-10-13.dump
+docker compose -f /var/lib/tasktracker/docker-compose.yml start
 ```
 
 > **Test a restore at least once.** A backup nobody has restored is a hypothesis.
@@ -397,8 +485,8 @@ You must type the instance name to confirm. This stops and removes containers an
 
 ```text
 $ tt uninstall
-This will stop and remove the "tasktracker" instance. Type the instance name to confirm: tasktracker
-Removed.
+Type the instance name "tasktracker" to uninstall: tasktracker
+Removed "tasktracker". Data volumes were left in place.
 ```
 
 ## Delegating a task to an agent
@@ -443,8 +531,9 @@ A provider key stays on the developer machine. Do not put one in the server's
 tt agent status
 ```
 
-Prints the server, runner, provider and model, then probes `/healthz`. It shows
-that a token is stored but never prints the token itself.
+Prints the server, runner, provider and model, then probes the server's
+`/healthz` endpoint. It shows that a token is stored but never prints the token
+itself.
 
 ### 3. Run the worker
 

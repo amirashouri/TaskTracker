@@ -10,6 +10,52 @@ so the deployment target is a single process plus Postgres or SQLite — not a
 cluster of services. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for why
 that shape was chosen and what still needs building.
 
+## Quick start — one curl command, no cloning
+
+Don't want to read the rest? Fetch the `tt` CLI, install the server, and reach
+it from your phone in three steps:
+
+```bash
+# 1. Fetch the CLI for this machine (one tarball per platform):
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/download/v0.1.6/tt-linux-amd64.tar.gz \
+  | tar -xz -C /usr/local/bin tt-linux-amd64
+sudo mv /usr/local/bin/tt-linux-amd64 /usr/local/bin/tt
+chmod +x /usr/local/bin/tt
+
+# 2. Install — it only asks for an admin email and password:
+tt install
+
+# 3. Reach it from other devices on the network:
+tt expose --provider=lan
+```
+
+The tarball contains `tt` and the `server` binary it supervises, so a native
+install needs no Docker and no clone:
+
+```bash
+# No Docker, no cloning — the tarball already has the server binary:
+tt install --runtime native --server-binary ./server
+```
+
+`tt install` handles Docker for you when you want it: if it is missing it
+offers to install it and start the daemon, renders the compose file, waits for
+the server to answer `/readyz`, and creates the first admin account. SQLite or
+Postgres, the port, and the data directory all have defaults and can be passed
+as flags for a non-interactive run:
+
+```bash
+tt install --yes \
+  --admin-email admin@company.com \
+  --admin-password 'StrongPass123' \
+  --provider lan
+```
+
+On a tagged release, CI builds the `tt` binaries and the curl-installable
+tarballs (`make release-tt VERSION=v1.2.3` produces
+`dist/tt-linux-amd64.tar.gz`, `dist/tt-darwin-arm64.tar.gz`, and the rest). See
+[`docs/INSTALL.md`](docs/INSTALL.md) for the full customer guide, including
+Tailscale and Cloudflare exposure, Day 2 operations, and troubleshooting.
+
 ## Status
 
 The server compiles, boots, and serves requests: configuration, JWT auth with

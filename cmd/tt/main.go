@@ -156,7 +156,7 @@ func usage(w io.Writer) {
 Usage:
   tt install [--mode sqlite|postgres] [--runtime docker|native]
              [--provider lan|tailscale|cloudflare] [--server-binary PATH]
-             [--data-dir PATH] [--name NAME] [--port PORT]
+             [--server-binary-url URL] [--data-dir PATH] [--name NAME] [--port PORT]
              [--admin-email EMAIL --admin-password PASSWORD]
              [--admin-display-name NAME] [--yes] [--dry-run]
   tt expose [--provider lan|tailscale|cloudflare]

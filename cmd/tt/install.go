@@ -26,7 +26,12 @@ type installOptions struct {
 	// serverBinary is the binary a native install supervises. Empty means
 	// resolveServerBinary picks one.
 	serverBinary string
-	platform     string // for testing: override runtime.GOOS
+	// serverBinaryURL is an https URL a native install downloads the server
+	// binary from. Empty means resolveServerBinary looks on the host instead.
+	// tt never phones home: the operator chooses this URL, it is not derived
+	// from a version or a project endpoint.
+	serverBinaryURL string
+	platform        string // for testing: override runtime.GOOS
 
 	dryRun bool
 	yes    bool
@@ -49,7 +54,11 @@ type installDeps struct {
 	executor       install.Executor
 	prompter       prompter
 	lanAddress     func() string
-	interactive    bool
+	// fetchBinary downloads a server binary for a native install. It is nil in
+	// production and a fake in tests, so the URL branch is provable without a
+	// network or a release host.
+	fetchBinary func(context.Context, string, string) error
+	interactive bool
 }
 
 func defaultInstallOptions() installOptions {
@@ -83,6 +92,7 @@ func runInstall(
 		executor:     install.RealExecutor{},
 		prompter:     newPrompter(ctx, stdin, stdout),
 		lanAddress:   install.LANAddress,
+		fetchBinary:  install.FetchBinaryURL,
 	})
 }
 
@@ -98,6 +108,7 @@ func runInstallWithDeps(ctx context.Context, args []string, deps installDeps) in
 	fs.StringVar(&opts.runtime, "runtime", opts.runtime, "how the server runs: docker, or native (sqlite only, Linux with systemd)")
 	fs.StringVar(&opts.provider, "provider", opts.provider, "exposure provider: lan, tailscale, or cloudflare")
 	fs.StringVar(&opts.serverBinary, "server-binary", opts.serverBinary, "server binary for --runtime native (default: `server` beside tt, then /opt/tasktracker/server)")
+	fs.StringVar(&opts.serverBinaryURL, "server-binary-url", opts.serverBinaryURL, "https URL to download the server binary for --runtime native; tt never phones home, so the operator chooses this URL")
 	fs.StringVar(&opts.dataDir, "data-dir", opts.dataDir, "directory for the rendered compose file")
 	fs.StringVar(&opts.name, "name", opts.name, "instance name")
 	fs.IntVar(&opts.port, "port", opts.port, "host port for the HTTP server")
@@ -183,11 +194,18 @@ func installWith(ctx context.Context, opts installOptions, deps installDeps) int
 		if cmd.Runtime == install.RuntimeNative && strings.TrimSpace(cmd.BinaryPath) == "" {
 			binary := state.BinaryPath
 			if !wasInstalled {
-				resolved, err := resolveServerBinary("")
-				if err != nil {
-					return fail(ctx, deps.stderr, "tt install", err)
+				// Dry-run must not fetch: name the destination the fetch would
+				// land in and let the plan print it, without touching the
+				// network.
+				if strings.TrimSpace(opts.serverBinaryURL) != "" {
+					binary = filepath.Join(opts.dataDir, opts.name, "server")
+				} else {
+					resolved, err := resolveServerBinary("", "", opts.dataDir, opts.name, deps)
+					if err != nil {
+						return fail(ctx, deps.stderr, "tt install", err)
+					}
+					binary = resolved
 				}
-				binary = resolved
 			}
 			cmd.BinaryPath = binary
 		}
@@ -202,6 +220,9 @@ func installWith(ctx context.Context, opts installOptions, deps installDeps) int
 		}
 		if cmd.Runtime == install.RuntimeNative {
 			printNativePlan(deps.stdout, steps)
+			if opts.serverBinaryURL != "" {
+				fmt.Fprintf(deps.stdout, "# would fetch %s into %s\n", opts.serverBinaryURL, cmd.BinaryPath)
+			}
 			return 0
 		}
 		compose := install.ComposeFromSteps(steps)
@@ -335,12 +356,12 @@ func freshInstall(ctx context.Context, opts installOptions, deps installDeps) in
 		}
 	}
 
-	if install.Runtime(opts.runtime) == install.RuntimeNative {
-		binary, err := resolveServerBinary(opts.serverBinary)
-		if err != nil {
-			return fail(ctx, deps.stderr, "tt install", err)
-		}
-		opts.serverBinary = binary
+	// --server-binary-url only makes sense for a native install: a Docker
+	// install supervises an image, and downloading a binary into a compose
+	// project is not a thing. Refuse it before the Docker bootstrap so the
+	// customer meets the refusal, not a compose error.
+	if install.Runtime(opts.runtime) != install.RuntimeNative && strings.TrimSpace(opts.serverBinaryURL) != "" {
+		return fail(ctx, deps.stderr, "tt install", fmt.Errorf("--server-binary-url is only for --runtime native; a Docker install pulls the image"))
 	}
 
 	// Docker is only needed by a Docker install, and it is ensured before the
@@ -367,6 +388,18 @@ func freshInstall(ctx context.Context, opts installOptions, deps installDeps) in
 		return fail(ctx, deps.stderr, "tt install", err)
 	}
 	opts.dataDir = dataDir
+
+	// A native install supervises a binary that is already on the host. When
+	// the operator passes --server-binary-url, tt fetches it into the data
+	// directory — the same directory the service account will own — and only
+	// then, so the path is absolute and the directory exists.
+	if install.Runtime(opts.runtime) == install.RuntimeNative {
+		binary, err := resolveServerBinary(opts.serverBinary, opts.serverBinaryURL, opts.dataDir, opts.name, deps)
+		if err != nil {
+			return fail(ctx, deps.stderr, "tt install", err)
+		}
+		opts.serverBinary = binary
+	}
 
 	if err := deps.preflight(ctx, install.PreflightOptions{
 		Runtime:    install.Runtime(opts.runtime),
@@ -433,10 +466,15 @@ func freshInstall(ctx context.Context, opts installOptions, deps installDeps) in
 	return 0
 }
 
-// resolveServerBinary prefers the flag, then `server` beside the tt binary (the
-// release bundle ships both), then the path docs/SELF-HOSTING.md installs to.
-// tt never downloads a binary, so one of those has to exist already.
-func resolveServerBinary(explicit string) (string, error) {
+// resolveServerBinary prefers an explicit path, then a URL the operator
+// chose, then `server` beside the tt binary (the release bundle ships both),
+// then the path docs/SELF-HOSTING.md installs to. tt never downloads a binary
+// on its own: a URL is an explicit argument, and nothing here derives one.
+//
+// When a URL is given, the binary is fetched into the data directory next to
+// the instance, so a repair reuses the file that is already there and only
+// re-fetches when the operator passes the URL again.
+func resolveServerBinary(explicit, url, dataDir, name string, deps installDeps) (string, error) {
 	if strings.TrimSpace(explicit) != "" {
 		absolute, err := filepath.Abs(explicit)
 		if err != nil {
@@ -444,6 +482,27 @@ func resolveServerBinary(explicit string) (string, error) {
 		}
 		return absolute, nil
 	}
+	if strings.TrimSpace(url) != "" {
+		if strings.TrimSpace(dataDir) == "" {
+			return "", errors.New("--server-binary-url needs --data-dir or --name to know where to put the binary")
+		}
+		dest := filepath.Join(dataDir, name, "server")
+		if install.BinaryExists(dest) {
+			return dest, nil
+		}
+		if deps.fetchBinary == nil {
+			return "", errors.New("--server-binary-url needs a fetch function; the production tt installs one")
+		}
+		fmt.Fprintf(deps.stdout, "Fetching the server binary from %s into %s\n", url, dest)
+		if err := deps.fetchBinary(context.Background(), url, dest); err != nil {
+			if install.IsHTTPRefused(err) {
+				return "", err
+			}
+			return "", fmt.Errorf("fetch %s: %w", url, err)
+		}
+		return dest, nil
+	}
+
 	if self, err := os.Executable(); err == nil {
 		candidate := filepath.Join(filepath.Dir(self), "server")
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {

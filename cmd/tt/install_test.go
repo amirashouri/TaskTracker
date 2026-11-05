@@ -877,3 +877,137 @@ func TestWizardInterruptedAtAPromptExitsWith130(t *testing.T) {
 		t.Errorf("ran %d steps after an interrupted prompt, want none", len(runner.steps))
 	}
 }
+
+// TestInstallNativeFetchesTheBinaryFromAURL covers the curl-installable path:
+// an operator who passes --server-binary-url gets a binary fetched into the
+// data directory, supervised as a native service, without Docker.
+func TestInstallNativeFetchesTheBinaryFromAURL(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "install.json")
+	runner := &recordingRunner{}
+
+	fetched := ""
+	var stdout, stderr bytes.Buffer
+	deps := installDeps{
+		stdout:       &stdout,
+		stderr:       &stderr,
+		statePath:    statePath,
+		buildVersion: "v1.2.3",
+		runner:       runner,
+		preflight: func(_ context.Context, opts install.PreflightOptions) error {
+			return nil
+		},
+		ensureDocker: func(context.Context, install.Executor, install.Prompter, install.PreflightOptions) error {
+			t.Error("a native install with a URL must not consult Docker")
+			return nil
+		},
+		executor:    install.RealExecutor{},
+		prompter:    nil,
+		lanAddress:  func() string { return "" },
+		interactive: false,
+		fetchBinary: func(_ context.Context, url, dest string) error {
+			fetched = dest
+			if !strings.HasPrefix(url, "https://") {
+				return errors.New("refuse " + url + ": only https is accepted")
+			}
+			if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+				return err
+			}
+			return os.WriteFile(dest, []byte("#!/bin/sh\n"), 0o755)
+		},
+	}
+
+	opts := defaultInstallOptions()
+	opts.yes = true
+	opts.runtime = string(install.RuntimeNative)
+	opts.dataDir = dir
+	opts.name = "tasktracker"
+	opts.serverBinaryURL = "https://example.com/server"
+	opts.adminEmail = "admin@example.com"
+	opts.adminPassword = "password123"
+	opts.platform = "linux"
+
+	code := installWith(context.Background(), opts, deps)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	wantDest := filepath.Join(dir, "tasktracker", "server")
+	if fetched != wantDest {
+		t.Errorf("fetched into %q, want %q", fetched, wantDest)
+	}
+	if _, err := os.Stat(wantDest); err != nil {
+		t.Fatalf("expected the fetched binary at %s: %v", wantDest, err)
+	}
+	if !strings.Contains(stdout.String(), "Fetching the server binary from https://example.com/server") {
+		t.Errorf("stdout does not name the fetch:\n%s", stdout.String())
+	}
+
+	var sawUnit bool
+	for _, step := range runner.steps {
+		if step.Kind == install.StepWriteUnit {
+			sawUnit = true
+		}
+	}
+	if !sawUnit {
+		t.Error("a native install with a fetched binary did not plan a systemd unit")
+	}
+}
+
+// TestInstallRefusesServerBinaryURLWithDocker covers the cross-runtime refusal:
+// --server-binary-url is for native installs only.
+func TestInstallRefusesServerBinaryURLWithDocker(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "install.json")
+	runner := &recordingRunner{}
+	opts := defaultInstallOptions()
+	opts.yes = true
+	opts.runtime = string(install.RuntimeDocker)
+	opts.dataDir = dir
+	opts.serverBinaryURL = "https://example.com/server"
+	opts.adminEmail = "admin@example.com"
+	opts.adminPassword = "password123"
+
+	result := runInstallFlow(t, opts, statePath, "v1.2.3", runner, nil, false, nil, nil)
+
+	if result.code == 0 {
+		t.Fatal("a Docker install with --server-binary-url was accepted")
+	}
+	if !strings.Contains(result.stderr, "--server-binary-url is only for --runtime native") {
+		t.Errorf("stderr = %q, want the cross-runtime refusal", result.stderr)
+	}
+	if len(runner.steps) != 0 {
+		t.Errorf("ran %d steps after a refusal", len(runner.steps))
+	}
+}
+
+// TestInstallDryRunNamesTheFetchDestination covers the dry-run path: it must
+// not fetch, but it must name where the binary would land.
+func TestInstallDryRunNamesTheFetchDestination(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "install.json")
+	runner := &recordingRunner{}
+
+	opts := defaultInstallOptions()
+	opts.dryRun = true
+	opts.runtime = string(install.RuntimeNative)
+	opts.dataDir = dir
+	opts.name = "tasktracker"
+	opts.serverBinaryURL = "https://example.com/server"
+
+	result := runInstallFlow(t, opts, statePath, "v1.2.3", runner, &scriptedPrompter{}, true, errors.New("preflight must not run"),
+		func() string { return "" })
+
+	if result.code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", result.code, result.stderr)
+	}
+	if len(runner.steps) != 0 {
+		t.Errorf("dry run executed %d steps", len(runner.steps))
+	}
+	wantDest := filepath.Join(dir, "tasktracker", "server")
+	if !strings.Contains(result.stdout, wantDest) {
+		t.Errorf("dry run did not name the fetch destination:\n%s", result.stdout)
+	}
+	if !strings.Contains(result.stdout, "would fetch https://example.com/server") {
+		t.Errorf("dry run did not name the URL:\n%s", result.stdout)
+	}
+}
