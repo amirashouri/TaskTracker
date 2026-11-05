@@ -11,13 +11,14 @@ Working agreement for `TaskTrackerServer`. Read this before changing anything.
 Follow this sequence for each task. Keep one task on one feature branch and in
 one merge request.
 
-1. **Orient.** Read this file first. Use `docs/PLAN.md` as the concise task
-   index. Read the selected task's spec in `specs/`; if none exists, create one
-   from `specs/_template.md` before implementation. Completed tasks have no spec
-   — their durable decisions live in `docs/ARCHITECTURE.md`. For cross-repository
-   work, read the other repository's `AGENTS.md` before planning.
+1. **Orient.** Read this file first. `specs/` is the only task index — one spec
+   per unit of work, with its own `status:`. Read the selected task's spec; if
+   none exists, create one from `specs/_template.md` before implementation.
+   Completed tasks have no spec — their durable decisions live in
+   `docs/ARCHITECTURE.md`. For cross-repository work, read the other repository's
+   `AGENTS.md` before planning.
 2. **Plan the scope.** Identify the files, observable contract, and validation
-   before editing. A roadmap task's spec records these. If the change needs
+   before editing. The task's spec records these. If the change needs
    files or behavior outside that scope, stop and re-plan before expanding it.
 3. **Implement.** Read any applicable skill in `.agents/skills/`. Follow the
    architecture and compatibility rules below; add tests with behavior changes.
@@ -32,14 +33,13 @@ one merge request.
    verified progress, remaining work, the next step, and gotchas; if nothing
    remains, say so. Once its contract and checks pass and the diff review is
    approved, promote any durable, non-obvious decisions into
-   `docs/ARCHITECTURE.md` (or the relevant guide), update the active PLAN entry,
-   and **delete the spec** in the final task-branch commit before merging. For
+   `docs/ARCHITECTURE.md` (or the relevant guide) and **delete the spec** in the
+   final task-branch commit before merging. For
    standalone work, create a spec rather than an untracked handoff note. Do not
    push without authorization.
 
 ## Project documentation
 
-- `docs/PLAN.md` — concise active roadmap and task index.
 - `specs/<task>.md` — one task's scope, acceptance contract, validation, and
   handoff; authoritative for how that task is done and resumed.
 - `docs/API.md` — HTTP wire contract. Read it before changing a request or
@@ -205,8 +205,8 @@ authorisation.
 ## Specs & continuity
 
 A task's *how* lives in one spec under `specs/` (copy `specs/_template.md`);
-roadmap tasks use their plan ID in the filename, while standalone tasks may use
-a descriptive slug. The spec is the **portable handoff unit**: it preserves
+name the file after the work — a task ID when there is one, otherwise a
+descriptive slug. The spec is the **portable handoff unit**: it preserves
 task state when the agent, tool, or session changes. End each session by
 updating its `## Handoff` section (done / pending / next step / gotchas) and
 committing it on the branch. When resuming, read the task's spec and

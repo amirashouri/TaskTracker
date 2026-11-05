@@ -2,9 +2,9 @@
 
 - **status:** pending | in-progress | done (`done` means validated, reviewed, and ready to merge)
 - **priority:** P0 | P1 | P2 | P3
-- **plan:** [`docs/PLAN.md`](../docs/PLAN.md) §<section>, entry `<id>`, or
-  `none` for standalone work — the *what* and rationale live there when
-  applicable; this file is the *how*.
+- **context:** optional — where the work came from (a sync log, a device finding,
+  a follow-up spec). `specs/` is the only index; this file is self-contained and
+  holds the task's scope, contract, validation and handoff.
 
 ## Scope
 

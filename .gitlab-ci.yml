@@ -1,7 +1,7 @@
 # Simple CI pipeline: lint (format + vet), build, test, and a tagged CLI release.
 #
 # The tree is green on main, so a red pipeline is a real regression. Known
-# runtime gaps (which still build and pass) are tracked in docs/PLAN.md.
+# runtime gaps (which still build and pass) are tracked in the task specs in specs/.
 
 stages:
   - lint

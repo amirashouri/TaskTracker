@@ -63,10 +63,9 @@ refresh-token rotation and sign-in throttling, admin-managed user provisioning,
 middleware (security headers, request IDs, structured logging), and the sync
 engine are all wired in.
 
-Milestones 0–8 are complete. Milestone 9 tracks customer installation and
-exposure work; see [`docs/PLAN.md`](docs/PLAN.md) for the active roadmap and
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design decisions retained
-from completed work.
+Active work lives in [`specs/`](specs/README.md) — one spec per unit of work,
+with its own `status:` — and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) holds
+the design decisions retained from completed work.
 
 Verified: `gofmt`, `go build ./...`, `go vet ./...` and `go test ./...` all pass,
 and an end-to-end run signs in, pushes a project and a work item, pulls them back
@@ -342,7 +341,7 @@ test are green, so a red run is a real regression.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture, code review, and decisions retained from completed task specs.
 - [`docs/API.md`](docs/API.md) — the HTTP contract: auth, users, and the sync endpoints, checked against the client's own DTOs.
-- [`docs/PLAN.md`](docs/PLAN.md) — concise active roadmap and task index.
+- [`specs/`](specs/README.md) — the only task index; one spec per unit of work in progress.
 - [`docs/INSTALL.md`](docs/INSTALL.md) — **customer-facing install guide**: what you need, `tt install`, `tt expose` for LAN/Tailscale/Cloudflare, Day 2 operations, and troubleshooting.
 - [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) — the bare-metal/systemd deployment path, without Docker.
 - [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) — roles, CLI bootstrap, token lifecycle, and how a user gets provisioned.

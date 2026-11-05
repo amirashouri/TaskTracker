@@ -392,6 +392,9 @@ validation runs, counts, handoffs and per-task file lists were dropped.
   over plain HTTP on the customer's network; `tailscale` and `cloudflare` are
   additive behind one flag. Exposure is a provider the customer holds an account
   with, or nothing — the project earns nothing and cannot carry a recurring cost.
+  A static IP solves addressing only, and CGNAT makes port forwarding impossible
+  for most home and small-office connections; `lan` needs no account, third party
+  or beta dependency.
 - **`SERVER_BIND` defaults to `127.0.0.1`** and is validated as an IP literal.
   Inside a container, loopback is the container's own, so the compose service
   must set `0.0.0.0` explicitly and only the *published* side moves to loopback.
