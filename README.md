@@ -16,8 +16,8 @@ Don't want to read the rest? Fetch the `tt` CLI, install the server, and reach
 it from your phone in three steps:
 
 ```bash
-# 1. Fetch the CLI for this machine (one tarball per platform):
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/download/v0.1.6/tt-linux-amd64.tar.gz \
+# 1. Fetch the Linux amd64 CLI bundle:
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-amd64.tar.gz \
   | tar -xz -C /usr/local/bin tt-linux-amd64
 sudo mv /usr/local/bin/tt-linux-amd64 /usr/local/bin/tt
 chmod +x /usr/local/bin/tt
@@ -50,9 +50,8 @@ tt install --yes \
   --provider lan
 ```
 
-On a tagged release, CI builds the `tt` binaries and the curl-installable
-tarballs (`make release-tt VERSION=v1.2.3` produces
-`dist/tt-linux-amd64.tar.gz`, `dist/tt-darwin-arm64.tar.gz`, and the rest). See
+On a tagged release, CI builds the `tt` binaries and publishes the
+Linux/amd64 curl-installable bundle (`dist/tt-linux-amd64.tar.gz`). See
 [`docs/INSTALL.md`](docs/INSTALL.md) for the full customer guide, including
 Tailscale and Cloudflare exposure, Day 2 operations, and troubleshooting.
 
