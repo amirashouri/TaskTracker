@@ -44,11 +44,15 @@ jobs:
             echo "EOF" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Build CLI release asset
+        run: make release-tt VERSION="$GITHUB_REF_NAME"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: TaskTracker Server ${{ github.ref_name }}
+          files: dist/tt-linux-amd64.tar.gz
           body: |
             ## TaskTracker Server ${{ github.ref_name }}
 

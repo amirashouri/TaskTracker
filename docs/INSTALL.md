@@ -35,12 +35,13 @@ get.
 
 ### Fastest: one curl command, no cloning
 
-On a tagged release, CI publishes a tarball per platform containing `tt` and
-the `server` binary it supervises. Fetch it, extract it, and install:
+On a tagged release, CI publishes a Linux/amd64 tarball containing `tt` and the
+`server` binary it supervises. The URL below targets this asset on the latest
+GitHub release:
 
 ```bash
 # Linux amd64 — the only platform with a server binary today:
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/download/v0.1.6/tt-linux-amd64.tar.gz \
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-amd64.tar.gz \
   | tar -xz -C /usr/local/bin
 sudo mv /usr/local/bin/tt-linux-amd64 /usr/local/bin/tt
 chmod +x /usr/local/bin/tt
@@ -49,21 +50,8 @@ chmod +x /usr/local/bin/tt
 tt install --runtime native --server-binary ./server
 ```
 
-The other platforms ship `tt` alone and install with Docker:
-
-| Platform | Tarball |
-|----------|---------|
-| Linux amd64 | `tt-linux-amd64.tar.gz` (tt + server) |
-| Linux arm64 | `tt-linux-arm64.tar.gz` (tt only) |
-| macOS arm64 | `tt-darwin-arm64.tar.gz` (tt only) |
-| macOS amd64 | `tt-darwin-amd64.tar.gz` (tt only) |
-| Windows amd64 | `tt-windows-amd64.exe` (tt only) |
-
-```bash
-# macOS / Windows: extract the single binary and run it from where it lands.
-tar -xzf tt-darwin-arm64.tar.gz
-./tt-darwin-arm64 install
-```
+The release job also builds standalone `tt` binaries for other platforms, but
+currently publishes only the Linux/amd64 bundle as a GitHub release asset.
 
 ### Build from source (developers and unreleased versions)
 
@@ -82,11 +70,12 @@ Per-platform builds use `go build` directly; `make tt` does not take
 mkdir -p dist && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o dist/tt-linux-arm64 ./cmd/tt
 ```
 
-To build every platform at once, including the curl-installable tarballs:
+To build every platform at once, including the Linux/amd64 curl-installable
+bundle:
 
 ```bash
 make release VERSION=v1.2.3        # static tt binaries
-make release-tt VERSION=v1.2.3    # ... plus the tt + server tarballs
+make release-tt VERSION=v1.2.3    # ... plus the Linux/amd64 tt + server bundle
 ```
 
 ### Verify
