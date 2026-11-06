@@ -2,46 +2,40 @@
 
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Amirreza%20Ashouri-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/amirreza-ashouri-229019156)
 [![Gmail](https://img.shields.io/badge/Gmail-amirashouri72%40gmail.com-EA4335?logo=gmail&logoColor=white)](mailto:amirashouri72@gmail.com)
+![Go](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white)
+![Database](https://img.shields.io/badge/database-Postgres%20%7C%20SQLite-4169E1?logo=postgresql&logoColor=white)
 
-Self-hosted backend for the [`TaskTrackerKMP`](../TaskTrackerKMP) client.
+> **Own your task tracker.**
+> The self-hosted backend for the [TaskTracker](../TaskTrackerKMP) client. One Go binary, one database, on a server you control — no cluster, no SaaS, no telemetry. It handles auth, users, and the offline sync engine that keeps every client in step. Companies run their own copy; you can too, in one command.
 
-One Go binary, one database. Companies run their own copy on their own server,
-so the deployment target is a single process plus Postgres or SQLite — not a
-cluster of services. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for why
-that shape was chosen and what still needs building.
+---
 
-## Quick start — one curl command, no cloning
+## ⚡ Quick start — one command
 
-Don't want to read the rest? Fetch the `tt` CLI, install the server, and reach
-it from your phone in three steps:
+Fetch the `tt` CLI, install the server, and reach it from your phone:
 
 ```bash
-# 1. Fetch the Linux amd64 CLI bundle:
+# 1. Install the tt CLI (Linux amd64)
 curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-amd64.tar.gz \
   | tar -xz -C /usr/local/bin tt-linux-amd64
-sudo mv /usr/local/bin/tt-linux-amd64 /usr/local/bin/tt
-chmod +x /usr/local/bin/tt
+sudo mv /usr/local/bin/tt-linux-amd64 /usr/local/bin/tt && chmod +x /usr/local/bin/tt
 
-# 2. Install — it only asks for an admin email and password:
+# 2. Install — asks only for an admin email and password
 tt install
 
-# 3. Reach it from other devices on the network:
+# 3. Publish it so other devices can connect
 tt expose --provider=lan
 ```
 
-The tarball contains `tt` and the `server` binary it supervises, so a native
-install needs no Docker and no clone:
+`tt install` sets up Docker (and installs it for you if missing), picks SQLite or Postgres, renders the compose file, waits for the server to answer `/readyz`, and creates the first admin account. `tt expose` prints a pairing link and QR code — scan it in the [app](../TaskTrackerKMP) and sign in.
+
+Prefer a native install with no Docker? The tarball already ships the server binary:
 
 ```bash
-# No Docker, no cloning — the tarball already has the server binary:
 tt install --runtime native --server-binary ./server
 ```
 
-`tt install` handles Docker for you when you want it: if it is missing it
-offers to install it and start the daemon, renders the compose file, waits for
-the server to answer `/readyz`, and creates the first admin account. SQLite or
-Postgres, the port, and the data directory all have defaults and can be passed
-as flags for a non-interactive run:
+Automate the whole thing with flags:
 
 ```bash
 tt install --yes \
@@ -50,240 +44,85 @@ tt install --yes \
   --provider lan
 ```
 
-On a tagged release, CI builds the `tt` binaries and publishes the
-Linux/amd64 curl-installable bundle (`dist/tt-linux-amd64.tar.gz`). See
-[`docs/INSTALL.md`](docs/INSTALL.md) for the full customer guide, including
-Tailscale and Cloudflare exposure, Day 2 operations, and troubleshooting.
+> Full operator guide — exposure providers, Day 2 operations, backups, and troubleshooting — lives in [`docs/INSTALL.md`](docs/INSTALL.md). Prefer systemd over Docker? See [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md).
 
-## Status
+---
 
-The server compiles, boots, and serves requests: configuration, JWT auth with
-refresh-token rotation and sign-in throttling, admin-managed user provisioning,
-middleware (security headers, request IDs, structured logging), and the sync
-engine are all wired in.
+## 🐳 Run with Docker Compose
 
-Active work lives in [`specs/`](specs/README.md) — one spec per unit of work,
-with its own `status:` — and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) holds
-the design decisions retained from completed work.
+The fastest path if you already have the repo checked out. Two profiles cover both deployment shapes:
 
-Verified: `gofmt`, `go build ./...`, `go vet ./...` and `go test ./...` all pass,
-and an end-to-end run signs in, pushes a project and a work item, pulls them back
-and cascades a delete.
-
-## Requirements
-
-- **Go 1.27** — the version in `go.mod`.
-- **CGO** — `mattn/go-sqlite3` is a cgo driver. Build with `CGO_ENABLED=1` and a
-  C compiler available, or set `DATABASE_URL` to Postgres and drop the SQLite
-  driver from `internal/db`.
-- **Postgres 14+** for a shared deployment, or SQLite for a single-node one.
-
-## Configuration and secrets
-
-Configuration is read from the environment. For convenience the server seeds the
-environment from a file at `ENV_FILE` (default `.env`) at startup.
-
-`.env` is git-ignored on purpose: **no secret ever belongs in this repository.**
-Only `.env.example`, which contains no real values, is committed.
-
-### Local setup
-
-```bash
-cp .env.example .env
-openssl rand -hex 32          # copy the output into JWT_SECRET
-mkdir -p data                 # SQLite does not create the parent directory
-```
-
-The server refuses to start if `JWT_SECRET` is missing or shorter than 32 bytes.
-
-### Adding a secret
-
-1. Add the variable to `.env.example` with an empty or example value, so the
-   next operator knows it exists.
-2. Read it in `internal/config/config.go` via `getEnv` / `getDurationEnv` /
-   `getCSVEnv`, and reject a bad value in `Config.validate`.
-3. Set the real value in your `.env` (never commit it).
-
-### Production
-
-Real environment variables always win over `.env`, so a host can inject secrets
-without any file on disk:
-
-- **systemd** — `EnvironmentFile=/etc/tasktracker/secrets.env` (mode `0640`,
-  owned by `root:tasktracker`). See
-  [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) for the full unit.
-- **Docker / Compose** — see [Docker](#docker) below. Pass `JWT_SECRET`
-  as an environment variable or via `.env`; Docker secrets also work.
-- **GitLab CI/CD** — project *Settings → CI/CD → Variables*, marked *Masked* and
-  *Protected*.
-
-If you keep a `.env` file on a server, restrict it to `chmod 600`. Rotating
-`JWT_SECRET` invalidates every issued token.
-
-## Running
-
-```bash
-go run ./cmd/server
-```
-
-Then `GET /healthz` should return `ok`, and `GET /readyz` should too once the
-database answers. `/healthz` is liveness — it never touches the database, so a
-database outage does not get the process restarted. `/readyz` is readiness: it
-pings the database and returns `503` when that fails, which is what a load
-balancer or container orchestrator should watch.
-
-## Docker
-
-The fastest way to run the server locally. Two profiles cover both
-deployment shapes:
-
-| Profile | What starts | When to use |
-| --- | --- | --- |
+| Profile | What starts | Use when |
+| :--- | :--- | :--- |
 | `postgres` | server + Postgres 16 | shared, multi-user, or you already run Postgres |
 | `sqlite` | server only | single-node, zero external dependencies |
 
-`make` with no target lists the same operations as targets: `make up` starts the
-`postgres` profile, `make up PROFILE=sqlite` starts the other one, `make down`
-stops and removes whichever is running, and `make rebuild` adds `--build`. Each
-one reads the same `.env` as the commands below.
-
-### Quick start
-
-1. **Create a `.env` file** (Docker Compose reads it automatically):
-
-   ```bash
-   cp .env.example .env
-   ```
-
-   Edit `.env` and set the required values:
-
-   ```dotenv
-   # Required — at least 32 bytes. The server refuses to start without it.
-   JWT_SECRET=<paste output of: openssl rand -hex 32>
-
-   # Only needed for the postgres profile. Change the default.
-   POSTGRES_PASSWORD=change-me
-   ```
-
-   All other variables (`SERVER_BIND`, `SERVER_PORT`, `CORS_ORIGINS`,
-   `LOG_LEVEL`, etc.) have sensible defaults in `.env.example` — override them
-   only if your setup requires it.
-
-2. **Pick a profile and start:**
-
-   ```bash
-   # Postgres — server + database, ready in seconds
-   docker compose --profile postgres up -d
-
-   # SQLite — single container, data in a Docker volume
-   docker compose --profile sqlite up -d
-   ```
-
-3. **Verify:**
-
-   ```bash
-   curl http://localhost:8080/healthz    # → ok
-   curl http://localhost:8080/readyz     # → ok once the database answers
-   ```
-
-   Both containers define a healthcheck against `/readyz`.
-
-4. **Create the first admin.** There is no self-signup: an admin provisions
-   every user, and the first one has to be created from the command line. Run
-   the subcommand inside the running server container, where it inherits the
-   compose environment (`DATABASE_URL`, `JWT_SECRET`) and needs nothing else:
-
-   ```bash
-   docker compose --profile postgres exec server-pg \
-     /app/server user-create \
-     --email admin@example.com \
-     --password 'a-strong-password' \
-     --display-name 'Admin' \
-     --admin
-   ```
-
-   Use `server-sqlite` in place of `server-pg` for the SQLite profile. It
-   prints `Created user … (role=admin)`. See
-   [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) for the flags and how
-   the admin then creates everyone else through the API.
-
-5. **Stop:**
-
-   ```bash
-   docker compose --profile postgres down       # or: sqlite
-   ```
-
-   Add `-v` to also delete the database volume — **this destroys all
-   data**, so use it only for a fresh start.
-
-### After changing the code
-
-`up -d` recreates the *container* from the image that already exists. It does
-**not** rebuild the image, so after editing the server a plain `up -d` brings
-the old binary back and the change looks like it had no effect at all:
-
 ```bash
-# Rebuild the image from the working tree, then recreate the container.
-docker compose --profile postgres up -d --build
+# 1. Create your config and set the required values
+cp .env.example .env
+openssl rand -hex 32          # paste into JWT_SECRET in .env
+                              # set POSTGRES_PASSWORD too for the postgres profile
+
+# 2. Start a profile
+docker compose --profile postgres up -d     # or: --profile sqlite up -d
+
+# 3. Verify
+curl http://localhost:8080/healthz          # → ok
+curl http://localhost:8080/readyz           # → ok once the database answers
 ```
 
-The database lives in a named volume (`pg-data` / `sqlite-data`) and is
-untouched by a rebuild. To check which build is actually running, compare the
-image's creation time against your last edit:
+There is no self-signup, so create the first admin inside the running container:
 
 ```bash
-docker images --format '{{.Repository}}\t{{.CreatedAt}}' | grep tasktracker
+docker compose --profile postgres exec server-pg \
+  /app/server user-create \
+  --email admin@example.com \
+  --password 'a-strong-password' \
+  --display-name 'Admin' \
+  --admin
 ```
 
-This is the Docker counterpart to the bare-metal upgrade steps in
-[`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) — § 10, Upgrades.
+Use `server-sqlite` instead of `server-pg` for the SQLite profile. After editing code, rebuild before restarting: `docker compose --profile postgres up -d --build`.
 
-### Environment variables
+`make` wraps the common operations: `make up`, `make up PROFILE=sqlite`, `make down`, `make rebuild`. See [`.env.example`](.env.example) for every variable.
 
-Docker Compose reads `.env` in the project root automatically. Every
-variable you set there is passed through to the container, and the same
-defaults from `.env.example` apply. You can also set variables inline:
+---
+
+## 🔧 Run from source
 
 ```bash
-JWT_SECRET=$(openssl rand -hex 32) docker compose --profile sqlite up -d
+# 1. Requirements: Go 1.27, a C compiler for CGO (SQLite), and Postgres 14+ or SQLite
+
+# 2. Configure
+cp .env.example .env
+openssl rand -hex 32          # paste into JWT_SECRET (min 32 bytes)
+mkdir -p data                 # SQLite won't create the parent directory
+
+# 3. Run
+go run ./cmd/server
 ```
 
-Real environment variables always win over `.env`, so a host can inject
-secrets without any file on disk — see [Production](#production) below.
+Then `GET /healthz` returns `ok`, and `GET /readyz` returns `ok` once the database answers. Liveness vs. readiness is deliberate — `/healthz` never touches the database, `/readyz` does.
 
-### What Docker handles for you
+### Required configuration
 
-- **CGO and the C compiler** — `mattn/go-sqlite3` needs one; the Docker
-  image includes it, so users don't install `gcc` on their machines.
-- **Postgres** — the `postgres` profile starts a Postgres 16 container
-  with a healthcheck; the server waits for it before booting.
-- **SQLite data and attachments** — the `sqlite` profile mounts a Docker volume
-  at `/data`, so the database and the attachment blobs survive container
-  restarts. The Postgres profile mounts a separate `blob-data` volume there for
-  the blobs; its database lives in `pg-data`.
-- **Non-root user** — the server runs as `app`, not `root`.
+| Variable | Purpose |
+| :--- | :--- |
+| `JWT_SECRET` | Signing key, **at least 32 bytes**. The server refuses to start without it. |
+| `DATABASE_URL` | `sqlite:///data/tasktracker.db` or `postgres://user:pass@host:5432/tasktracker` |
+| `SERVER_BIND` / `SERVER_PORT` | Default `127.0.0.1:8080` — loopback by default so a forgotten install isn't exposed |
 
-### Building without Compose
+Real environment variables always win over `.env`, so a host can inject secrets with no file on disk (systemd, Docker secrets, CI/CD variables).
 
-```bash
-docker build -t tasktracker-server .
-docker run -p 8080:8080 -e JWT_SECRET=$(openssl rand -hex 32) \
-  -e SERVER_BIND=0.0.0.0 \
-  -e DATABASE_URL=sqlite:///data/tasktracker.db \
-  -v tt-data:/data tasktracker-server
-```
+---
 
-Not using Docker? [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) covers running
-the binary directly on a Linux host under systemd — the unit file, secrets,
-TLS termination, and backups.
-
-## Verifying
+## ✅ Verify
 
 ```bash
 gofmt -l . && go build ./... && go vet ./... && go test ./...
 ```
 
-Tests run on SQLite by default. To run the same suite against Postgres:
+Tests run on SQLite by default. Point them at Postgres with a throwaway server:
 
 ```bash
 docker run -d --name tt-pg -e POSTGRES_PASSWORD=postgres \
@@ -293,68 +132,36 @@ TASKTRACKER_TEST_POSTGRES_URL="postgres://postgres:postgres@localhost:55432/task
   go test ./...
 ```
 
-Each test creates and drops its own schema, so the database must be disposable.
-CI runs this as the `test-postgres` job.
+For day-to-day work, the fast loop is the packages you touched: `go test ./internal/<pkg>`. `scripts/check.sh all` (or `race`) is the release gate, not a per-change check.
 
-Covered today: `internal/config` (secrets), `internal/db` (migrations, driver
-branching, statement splitting), `internal/entities` (repository round-trips,
-version conflicts, cascade deletes), `internal/sync` (push/pull, conflict and
-rejected verdicts), `internal/auth` (sign-in, refresh rotation, reuse detection,
-family revocation, sign-out), `internal/ratelimit` (window, per-key isolation,
-eviction), and `internal/middleware` (`Auth`, `AdminOnly`, `CORS`, security
-headers, request IDs, logging levels, panic recovery).
+---
 
-## Database and migrations
+## 🗄 Database & migrations
 
-Migrations live in `internal/db/migrations/`, one file per driver sharing a
-version number:
+Schema is versioned SQL in `internal/db/migrations/`, one file per driver sharing a version number (`0001_initial.postgres.sql`, `0001_initial.sqlite.sql`). Files are embedded in the binary and applied on startup, each in its own transaction. New changes add the next version for **both** drivers — `go test ./internal/db` fails if one dialect is missing.
 
-```
-0001_initial.postgres.sql
-0001_initial.sqlite.sql
-```
+---
 
-`0001` is the **pre-release baseline**: the development versions were squashed
-before the first release, when there was no installed database to upgrade. New
-schema changes add the next version; they do not rewrite the baseline.
+## 📚 Documentation
 
-They are embedded in the binary (`go:embed`) and applied on startup in version
-order; each version runs in its own transaction and is recorded in
-`schema_migrations`, so re-running applies nothing. To add one, create the next
-number for **both** drivers — a version missing a dialect file fails
-`go test ./internal/db`. Statements keep `IF NOT EXISTS` so a database created
-before the runner existed is adopted on the next start.
+- [`docs/INSTALL.md`](docs/INSTALL.md) — **customer install guide**: `tt install`, `tt expose` (LAN/Tailscale/Cloudflare), Day 2 ops, troubleshooting.
+- [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) — bare-metal/systemd deployment without Docker.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture and durable decisions.
+- [`docs/API.md`](docs/API.md) — the HTTP contract, checked against the client's DTOs.
+- [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) — roles, CLI bootstrap, and token lifecycle.
+- [`specs/`](specs/README.md) — the task index; one spec per unit of work in progress.
+- [`AGENTS.md`](AGENTS.md) — working agreement and wire-compatibility policy.
 
-## CI/CD
+---
 
-`.gitlab-ci.yml` runs three stages on every push: `lint` (gofmt + `go vet`),
-`build`, and `test`. The `test` job runs the suite under the race detector
-(`go test -race`) and reports coverage, with a `test-postgres` job alongside it
-for dialect parity. Race detection is on because the sync engine, the rate
-limiter and refresh-token rotation are concurrent, and a data race there is a
-correctness bug a plain run cannot see. Coverage is a reported trend, not a
-gate. It is intentionally minimal — a gate, not a release pipeline. Build and
-test are green, so a red run is a real regression.
-
-## Documentation
-
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture, code review, and decisions retained from completed task specs.
-- [`docs/API.md`](docs/API.md) — the HTTP contract: auth, users, and the sync endpoints, checked against the client's own DTOs.
-- [`specs/`](specs/README.md) — the only task index; one spec per unit of work in progress.
-- [`docs/INSTALL.md`](docs/INSTALL.md) — **customer-facing install guide**: what you need, `tt install`, `tt expose` for LAN/Tailscale/Cloudflare, Day 2 operations, and troubleshooting.
-- [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) — the bare-metal/systemd deployment path, without Docker.
-- [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) — roles, CLI bootstrap, token lifecycle, and how a user gets provisioned.
-- [`AGENTS.md`](AGENTS.md) — working agreement for this repository, including the wire-compatibility policy.
-- [`.env.example`](.env.example) — every configuration variable.
-
-## License
+## 📄 License
 
 [MIT + Commons Clause](LICENSE), plus one extra term: no rebranding.
 
-You can run, host, and deploy the backend in your own team — personal,
-commercial, or in production — and you can change the code. What you cannot do
-is sell it, or repackage it under your own name and brand: the code stays the
-author's, and the "TaskTracker" name and logos are the author's trademarks.
+Run, host, and deploy the backend for your own team — personal, commercial, or in production — and change the code. You may not sell it or repackage it under your own name and brand; the code stays the author's, and the "TaskTracker" name and logos are the author's trademarks.
 
-The full text is in [`LICENSE`](LICENSE). The same license covers the
-[client](https://github.com/amirashouri/TaskTrackerKMP).
+The full text is in [`LICENSE`](LICENSE). The same license covers the [client](https://github.com/amirashouri/TaskTrackerKMP).
+
+---
+
+*Made by [Amirreza Ashouri](https://www.linkedin.com/in/amirreza-ashouri-229019156) — stars and issues welcome.*

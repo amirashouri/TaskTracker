@@ -83,11 +83,12 @@ release-tt: release
 		os=$${platform%/*}; arch=$${platform#*/}; \
 		tt=tt-$$os-$$arch; \
 		if [ "$$os" = "windows" ]; then tt=$$tt.exe; fi; \
+		cp $(DIST)/$$tt $(DIST)/bundle/$$tt || exit 1; \
 		CGO_ENABLED=1 GOOS=$$os GOARCH=$$arch go build -trimpath \
 			-ldflags "-s -w -X main.version=$(VERSION)" \
 			-o $(DIST)/bundle/server ./cmd/server || exit 1; \
 		tar -C $(DIST)/bundle -czf $(DIST)/tt-$$os-$$arch.tar.gz \
-			$$tt server; \
-		rm -f $(DIST)/bundle/server; \
+			$$tt server || exit 1; \
+		rm -f $(DIST)/bundle/$$tt $(DIST)/bundle/server; \
 		echo "bundled $$tt + server -> $(DIST)/tt-$$os-$$arch.tar.gz"; \
 	done
