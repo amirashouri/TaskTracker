@@ -1,7 +1,9 @@
 package entities
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"sync"
@@ -251,6 +253,36 @@ func TestProjectWithoutTagsScansAnEmptySlice(t *testing.T) {
 	// decode; an empty slice is the wire contract.
 	if got.Tags == nil || len(got.Tags) != 0 {
 		t.Errorf("Tags = %#v, want an empty non-nil slice", got.Tags)
+	}
+}
+
+func TestProjectWithoutMembersMarshalsAnEmptyList(t *testing.T) {
+	database := newTestDB(t)
+	projects := NewProjectRepository(database.DB)
+	ctx := context.Background()
+
+	project := &Project{KeyPrefix: "TT", Name: "Demo"}
+	if err := projects.Create(ctx, project); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := projects.GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.MemberIDs == nil {
+		t.Fatalf("MemberIDs = %#v, want an empty non-nil slice", got.MemberIDs)
+	}
+
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// The admin list and the sync feed re-serve this struct. A nil slice marshals
+	// as `null`, and the client's `memberIds` is a non-nullable list, so one
+	// project without members would fail the decode of the whole response.
+	if !bytes.Contains(encoded, []byte(`"memberIds":[]`)) {
+		t.Errorf("payload = %s, want an empty memberIds list", encoded)
 	}
 }
 

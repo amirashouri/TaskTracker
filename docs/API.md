@@ -426,6 +426,42 @@ removing a tag does not rewrite the items that referenced it.
 | `404` | `{"error": "project not found"}` |
 | `409` | `{"error": "the project changed since it was read"}` |
 
+### `DELETE /v1/admin/projects/{id}` — admin only
+
+Removes the project and everything filed under it — work items, sprints and
+comments go with it through the schema's cascade. The caller does not have to be
+a member of it, which is why this is an admin route rather than a sync push.
+
+The delete is applied through the sync engine, so the row and its change-feed
+entry commit together: the project's members pull the deletion and retire it
+locally, exactly as they would a delete one of their own clients pushed. The
+login row's payload is the bare id, the shape a client's own delete carries.
+
+| Status | Body |
+| --- | --- |
+| `204` | none |
+| `401` | no bearer token |
+| `404` | `{"error": "project not found"}` |
+
+The response is deliberately empty: there is no project left to describe.
+
+### `GET /v1/admin/projects/{id}/open-items` — admin only
+
+How many of the project's work items are neither `done` nor `closed`. The admin
+projects screen reads it before offering a removal, because a project with open
+work is archived instead of deleted — the rule the member list already applies.
+
+```json
+{"openItemCount": 2}
+```
+
+A zero means the project has nothing to lose, so the offer is a delete. The
+count is a route of its own rather than a field on the project object: the
+project payload is the sync entity contract, and a response that gained a key
+would fail the decode of every installed client.
+
+`404` if the project is absent.
+
 ## Sync
 
 The client is offline-first: it queues local changes in an outbox, pushes them

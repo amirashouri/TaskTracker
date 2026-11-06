@@ -189,7 +189,11 @@ func newTestMux(t *testing.T) *http.ServeMux {
 		admin.NewHandler(users, tokens),
 		profile.NewHandler(users),
 		me.NewHandler(users),
-		admin.NewProjectHandler(entities.NewProjectRepository(database.DB), sync.NewEngine(database.DB, "")),
+		admin.NewProjectHandler(
+			entities.NewProjectRepository(database.DB),
+			entities.NewWorkItemRepository(database.DB),
+			sync.NewEngine(database.DB, ""),
+		),
 		sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),
 		agent.NewHandler(entities.NewAgentRepository(database.DB), time.Minute),
 		agent.NewAppHandler(

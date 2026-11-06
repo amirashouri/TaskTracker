@@ -103,6 +103,20 @@ func (r *WorkItemRepository) Update(ctx context.Context, w *WorkItem) error {
 		w.SprintID, w.Rank, w.UpdatedAt, w.ResolvedAt, w.Version, w.StatusKey, w.ID, previous)
 }
 
+// OpenCount counts a project's unfinished work: everything that is not done or
+// closed. The admin projects screen asks for it before offering a removal,
+// because a project with open work is archived instead of deleted -- the same
+// rule the member list applies. It is a route of its own rather than a field on
+// the project payload, since a response that gained a key would fail the decode
+// of every installed client.
+func (r *WorkItemRepository) OpenCount(ctx context.Context, projectID ProjectID) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM work_items WHERE project_id = $1 AND status NOT IN ($2, $3)`,
+		projectID, WorkItemStatusDone, WorkItemStatusClosed).Scan(&count)
+	return count, err
+}
+
 func (r *WorkItemRepository) Delete(ctx context.Context, id WorkItemID) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM work_items WHERE id = $1`, id)
 	return err

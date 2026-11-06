@@ -240,7 +240,10 @@ func (r *ProjectRepository) memberIDs(ctx context.Context, projectID ProjectID) 
 	}
 	defer rows.Close()
 
-	var ids []UserID
+	// Non-nil on purpose: the project re-serves this as JSON, and a project with no
+	// members must send `"memberIds":[]`, not `null` — the client's list is
+	// non-nullable and a null there fails the decode of the whole admin page.
+	ids := []UserID{}
 	for rows.Next() {
 		var id UserID
 		if err := rows.Scan(&id); err != nil {

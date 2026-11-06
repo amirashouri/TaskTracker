@@ -165,7 +165,11 @@ func newContractEnv(t *testing.T) *contractEnv {
 			admin.NewHandler(users, tokens),
 			profile.NewHandler(users),
 			me.NewHandler(users),
-			admin.NewProjectHandler(entities.NewProjectRepository(database.DB), sync.NewEngine(database.DB, "")),
+			admin.NewProjectHandler(
+				entities.NewProjectRepository(database.DB),
+				entities.NewWorkItemRepository(database.DB),
+				sync.NewEngine(database.DB, ""),
+			),
 			sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),
 			agent.NewHandler(entities.NewAgentRepository(database.DB), time.Minute),
 			agent.NewAppHandler(
@@ -1426,6 +1430,134 @@ func TestAdminProjectListSplitsActiveFromArchived(t *testing.T) {
 	bad := env.do(t, http.MethodGet, "/v1/admin/projects?status=deleted", admin.AccessToken, nil)
 	if bad.Code != http.StatusBadRequest {
 		t.Errorf("listing an unknown bucket = %d, want 400 (body %s)", bad.Code, bad.Body.String())
+	}
+}
+
+// Deleting through the admin route is the sync path's project delete authorized by
+// the admin role rather than by membership, so it has to remove the row and write the
+// change-feed entry in one go: the members the project had learn about it from the
+// feed and from nowhere else.
+func TestAdminProjectDeleteRemovesItAndReachesTheFeed(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+
+	id := string(env.project.ID)
+	rec := env.do(t, http.MethodDelete, "/v1/admin/projects/"+id, admin.AccessToken, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete project = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); body != "" {
+		t.Errorf("delete returned body %q, want none on a 204", body)
+	}
+
+	// Gone from the seed screen and from both buckets, so a stale row cannot be reopened.
+	if got := env.do(t, http.MethodGet, "/v1/admin/projects/"+id, admin.AccessToken, nil); got.Code != http.StatusNotFound {
+		t.Errorf("reading the deleted project = %d, want 404 (body %s)", got.Code, got.Body.String())
+	}
+	for _, bucket := range []string{"", "?status=archived"} {
+		listed := decodeInto[[]struct {
+			ID string `json:"id"`
+		}](t, env.do(t, http.MethodGet, "/v1/admin/projects"+bucket, admin.AccessToken, nil))
+		for _, p := range listed {
+			if p.ID == id {
+				t.Errorf("the bucket %q still holds the deleted project %s", bucket, id)
+			}
+		}
+	}
+
+	// The feed is the only way the project's members retire it locally.
+	page := decodeInto[clientChangesPage](t, env.do(t, http.MethodGet, "/v1/sync/changes/projects", admin.AccessToken, nil))
+	var deletions int
+	for _, change := range page.Changes {
+		if change.Entity == "project" && change.EntityID == id && change.Operation == "delete" {
+			deletions++
+		}
+	}
+	if deletions != 1 {
+		t.Fatalf("the feed holds %d delete rows for %s, want one: %+v", deletions, id, page.Changes)
+	}
+
+	// A second delete is the same request twice: absent is the answer, and it must not
+	// append a second log row that would replay on every member's next pull.
+	again := env.do(t, http.MethodDelete, "/v1/admin/projects/"+id, admin.AccessToken, nil)
+	if again.Code != http.StatusNotFound {
+		t.Errorf("deleting an absent project = %d, want 404 (body %s)", again.Code, again.Body.String())
+	}
+	after := decodeInto[clientChangesPage](t, env.do(t, http.MethodGet, "/v1/sync/changes/projects", admin.AccessToken, nil))
+	var deletesAfter int
+	for _, change := range after.Changes {
+		if change.Entity == "project" && change.EntityID == id && change.Operation == "delete" {
+			deletesAfter++
+		}
+	}
+	if deletesAfter != 1 {
+		t.Errorf("the refused second delete wrote %d delete rows, want the original one", deletesAfter)
+	}
+
+	// The route is admin-only, like the rest of /v1/admin: no token is refused.
+	if unauthenticated := env.do(t, http.MethodDelete, "/v1/admin/projects/"+id, "", nil); unauthenticated.Code != http.StatusUnauthorized {
+		t.Errorf("an unauthenticated delete = %d, want 401", unauthenticated.Code)
+	}
+}
+
+// The admin projects screen offers the archive when a project still has work
+// open, so this count is what stands between a safe offer and a destructive one.
+// The key set is pinned because the client decodes strictly: `openItemCount` is
+// the only key its DTO declares, so a second one fails the whole response.
+func TestAdminProjectOpenItemsCountsUnfinishedWork(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+	items := entities.NewWorkItemRepository(env.database.DB)
+
+	// Two finished states and one that is neither: the count must exclude done and
+	// closed, and count everything else, review columns included.
+	for i, status := range []entities.WorkItemStatus{
+		entities.WorkItemStatusTodo,
+		entities.WorkItemStatusInReview,
+		entities.WorkItemStatusDone,
+		entities.WorkItemStatusClosed,
+	} {
+		item := &entities.WorkItem{
+			ProjectID: env.project.ID,
+			Key:       fmt.Sprintf("%s-%d", env.project.KeyPrefix, i+1),
+			Title:     "Item",
+			Status:    status,
+			Priority:  entities.PriorityMedium,
+		}
+		if err := items.Create(context.Background(), item); err != nil {
+			t.Fatalf("create work item in %s: %v", status, err)
+		}
+	}
+
+	path := "/v1/admin/projects/" + string(env.project.ID) + "/open-items"
+	rec := env.do(t, http.MethodGet, path, admin.AccessToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("open-items = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	assertWireKeys(t, "the open-items count", rec.Body.Bytes(), []string{"openItemCount"}, nil)
+
+	var body struct {
+		OpenItemCount int `json:"openItemCount"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode open-items: %v", err)
+	}
+	if body.OpenItemCount != 2 {
+		t.Errorf("open-items = %d, want 2 (todo and in review; done and closed are finished)", body.OpenItemCount)
+	}
+
+	// An absent project is a 404, not a zero: the screen treats zero as "safe to
+	// delete", which would be the wrong offer for a row that is already gone. The
+	// id is a well-formed UUID because Postgres casts the path segment to the
+	// column's type before it looks anything up.
+	absentID := "00000000-0000-4000-8000-000000000000"
+	if missing := env.do(t, http.MethodGet, "/v1/admin/projects/"+absentID+"/open-items", admin.AccessToken, nil); missing.Code != http.StatusNotFound {
+		t.Errorf("open-items for an unknown project = %d, want 404", missing.Code)
+	}
+
+	// Admin-only, like the rest of /v1/admin.
+	if unauthenticated := env.do(t, http.MethodGet, path, "", nil); unauthenticated.Code != http.StatusUnauthorized {
+		t.Errorf("an unauthenticated count = %d, want 401", unauthenticated.Code)
 	}
 }
 

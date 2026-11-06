@@ -16,12 +16,13 @@ import (
 // member of; these routes are what let an admin see, edit and archive every
 // project on the server, member or not.
 type ProjectHandler struct {
-	projects *entities.ProjectRepository
-	engine   *sync.Engine
+	projects  *entities.ProjectRepository
+	workItems *entities.WorkItemRepository
+	engine    *sync.Engine
 }
 
-func NewProjectHandler(projects *entities.ProjectRepository, engine *sync.Engine) *ProjectHandler {
-	return &ProjectHandler{projects: projects, engine: engine}
+func NewProjectHandler(projects *entities.ProjectRepository, workItems *entities.WorkItemRepository, engine *sync.Engine) *ProjectHandler {
+	return &ProjectHandler{projects: projects, workItems: workItems, engine: engine}
 }
 
 // The buckets the projects screen's segmented control switches between. They
@@ -84,6 +85,44 @@ func (h *ProjectHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, project)
+}
+
+// ── Open items ──────────────────────────────────────────────────────
+
+// openItemsResponse is the one number the admin projects screen needs to decide
+// between offering the archive and offering the delete.
+type openItemsResponse struct {
+	OpenItemCount int `json:"openItemCount"`
+}
+
+// OpenItems counts the project's unfinished work -- everything not done or
+// closed -- so the projects screen can offer the archive when there is something
+// to lose, exactly as the member list does. It makes its own request rather than
+// riding the project object, because a response that gained a key would fail the
+// decode of every installed client.
+func (h *ProjectHandler) OpenItems(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+
+	project, err := h.projects.GetByID(r.Context(), entities.ProjectID(id))
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	if project == nil {
+		httpx.WriteError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	count, err := h.workItems.OpenCount(r.Context(), project.ID)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not count work items")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, openItemsResponse{OpenItemCount: count})
 }
 
 // ── Create ──────────────────────────────────────────────────────────
@@ -299,4 +338,60 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, stored)
+}
+
+// ── Delete ──────────────────────────────────────────────────────────
+
+// Delete removes a project the way a sync push does: the row and its change-feed
+// entry commit together, so its members pull the delete and retire it locally
+// instead of keeping a project the server no longer has. Work items, sprints and
+// comments go with it through the schema's cascade.
+//
+// It goes through ApplyAdminProject because the caller may not be a member of the
+// project they are administering, and membership is the one check a push relies
+// on. The admin route is the authorization here.
+func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "project id is required")
+		return
+	}
+
+	existing, err := h.projects.GetByID(r.Context(), entities.ProjectID(id))
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	if existing == nil {
+		httpx.WriteError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	// The payload is the bare id, the shape a client's own delete push carries; a
+	// pull's delete is read from the entity id and ignores it.
+	payload, err := json.Marshal(id)
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not encode project")
+		return
+	}
+
+	actorID, _ := auth.UserFrom(r.Context())
+	result := h.engine.ApplyAdminProject(r.Context(), actorID, entities.PushChange{
+		Entity:    entities.OutboxEntityProject,
+		EntityID:  id,
+		Operation: entities.OutboxOperationDelete,
+		Payload:   payload,
+	})
+
+	switch result.Status {
+	case sync.StatusAccepted:
+	case sync.StatusRejected:
+		httpx.WriteError(w, http.StatusBadRequest, result.Message)
+		return
+	default:
+		httpx.WriteError(w, http.StatusInternalServerError, "could not delete project")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

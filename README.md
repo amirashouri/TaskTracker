@@ -84,7 +84,7 @@ docker compose --profile postgres exec server-pg \
 
 Use `server-sqlite` instead of `server-pg` for the SQLite profile. After editing code, rebuild before restarting: `docker compose --profile postgres up -d --build`.
 
-`make` wraps the common operations: `make up`, `make up PROFILE=sqlite`, `make down`, `make rebuild`. See [`.env.example`](.env.example) for every variable.
+`make` wraps the common operations: `make up`, `make up PROFILE=sqlite`, `make down`, `make rebuild`. The same shortcuts run the admin server subcommands in the running container, so a dev instance needs no `tt` install state: `make admin` lists every account with its role, and `make admin-reset-password EMAIL=... PASSWORD=...` sets a new password. See [`.env.example`](.env.example) for every variable.
 
 ---
 

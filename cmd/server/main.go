@@ -140,7 +140,11 @@ func runServer() {
 
 	// Admin project screens read projects through the same engine, so an edit
 	// lands in the change feed the clients pull.
-	projectHandler := admin.NewProjectHandler(entities.NewProjectRepository(database.DB), syncEngine)
+	projectHandler := admin.NewProjectHandler(
+		entities.NewProjectRepository(database.DB),
+		entities.NewWorkItemRepository(database.DB),
+		syncEngine,
+	)
 
 	// Setup HTTP handlers
 	mux := mount(authHandler, adminHandler, profileHandler, meHandler, projectHandler, syncHandler, agentHandler, agentApp, jwtManager, database.DB, syncEngine, cfg.AttachmentRoot, cfg.AttachmentMaxBytes, cfg.AttachmentDeadline())
@@ -308,6 +312,11 @@ func mount(
 	mux.Handle("GET /v1/admin/projects", adminMW(http.HandlerFunc(projectHandler.List)))
 	mux.Handle("GET /v1/admin/projects/{id}", adminMW(http.HandlerFunc(projectHandler.Get)))
 	mux.Handle("PATCH /v1/admin/projects/{id}", adminMW(http.HandlerFunc(projectHandler.Update)))
+	mux.Handle("DELETE /v1/admin/projects/{id}", adminMW(http.HandlerFunc(projectHandler.Delete)))
+	// The unfinished count behind "archive instead of delete". Its own route
+	// rather than a key on the project payload, which installed clients decode
+	// strictly.
+	mux.Handle("GET /v1/admin/projects/{id}/open-items", adminMW(http.HandlerFunc(projectHandler.OpenItems)))
 
 	// Agent fleet controls. Stop is a server-side pause, not a process kill: the
 	// worker runs on the customer's own machine, so the server can only refuse it
