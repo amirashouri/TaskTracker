@@ -6,7 +6,7 @@
 ![Database](https://img.shields.io/badge/database-Postgres%20%7C%20SQLite-4169E1?logo=postgresql&logoColor=white)
 
 > **Own your task tracker.**
-> The self-hosted backend for the [TaskTracker](../TaskTrackerKMP) client. One Go binary, one database, on a server you control — no cluster, no SaaS, no telemetry. It handles auth, users, and the offline sync engine that keeps every client in step. Companies run their own copy; you can too, in one command.
+> The self-hosted backend for the [TaskTracker](https://github.com/amirashouri/TaskTrackerKMP) client. One Go binary, one database, on a server you control — no cluster, no SaaS, no telemetry. It handles auth, users, and the offline sync engine that keeps every client in step. Companies run their own copy; you can too, in one command.
 
 ---
 
@@ -27,7 +27,7 @@ tt install
 tt expose --provider=lan
 ```
 
-`tt install` sets up Docker (and installs it for you if missing), picks SQLite or Postgres, renders the compose file, waits for the server to answer `/readyz`, and creates the first admin account. `tt expose` prints a pairing link and QR code — scan it in the [app](../TaskTrackerKMP) and sign in.
+`tt install` sets up Docker (and installs it for you if missing), picks SQLite or Postgres, renders the compose file, waits for the server to answer `/readyz`, and creates the first admin account. `tt expose` prints a pairing link and QR code — scan it in the [app](https://github.com/amirashouri/TaskTrackerKMP) and sign in.
 
 Prefer a native install with no Docker? The tarball already ships the server binary:
 
