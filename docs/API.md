@@ -306,6 +306,9 @@ model decodes either:
   "tags": [
     { "id": "660e8400-e29b-41d4-a716-446655440000", "name": "Bug", "color": "red", "icon": "bug" }
   ],
+  "statuses": [
+    { "id": "s-todo", "name": "To do", "category": "todo", "order": 0, "color": "gray" }
+  ],
   "memberIds": ["550e8400-e29b-41d4-a716-446655440000"],
   "isArchived": false,
   "nextItemNumber": 1,
@@ -321,6 +324,17 @@ does not know one simply does not draw it. A work item carries only `tagIDs`,
 and a tag removed from the catalog leaves stale ids on items, which every reader
 drops when it cannot resolve them. The catalog travels with the project, so it
 has no route or sync entity of its own.
+
+`statuses` is the project's admin-defined workflow catalog, the same shape and
+the same rules. `category` is one of the fixed `WorkItemStatus` values
+(`backlog`, `todo`, `in_progress`, `in_review`, `done`, `closed`) and is the
+coarse axis the overdue, archive and terminal rules read, so renaming a status
+or adding one never changes whether an item is overdue or finished. A work item
+references one entry by `statusKey` and keeps its `category` in the existing
+`status` field. Both keys are **omitted when empty**, so a project that has not
+adopted a catalog adds no key to the response and an installed client that
+predates the field still decodes every payload. A new project starts with no
+catalog; it is written through the `PATCH` below, exactly as `tags` is.
 
 ### `POST /v1/admin/projects` — admin only
 

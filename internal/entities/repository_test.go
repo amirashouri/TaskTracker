@@ -370,6 +370,66 @@ func TestWorkItemRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStatusCatalogAndStatusKeyRoundTrip(t *testing.T) {
+	database := newTestDB(t)
+	projects := NewProjectRepository(database.DB)
+	workItems := NewWorkItemRepository(database.DB)
+	ctx := context.Background()
+
+	project := &Project{
+		KeyPrefix: "TT",
+		Name:      "Demo",
+		Statuses: []StatusDefinition{
+			{ID: "s-todo", Name: "To do", Category: WorkItemStatusTodo, Order: 0, Color: "gray"},
+			{ID: "s-review", Name: "In review", Category: WorkItemStatusInReview, Order: 1, Color: "blue"},
+		},
+	}
+	if err := projects.Create(ctx, project); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	stored, err := projects.GetByID(ctx, project.ID)
+	if err != nil {
+		t.Fatalf("get project: %v", err)
+	}
+	if len(stored.Statuses) != 2 || stored.Statuses[1].ID != "s-review" || stored.Statuses[1].Category != WorkItemStatusInReview {
+		t.Errorf("Statuses = %+v, want the catalog to round-trip", stored.Statuses)
+	}
+
+	item := &WorkItem{
+		ProjectID: project.ID,
+		Key:       "TT-1",
+		Title:     "In review",
+		Status:    WorkItemStatusInReview,
+		Priority:  PriorityMedium,
+		StatusKey: "s-review",
+	}
+	if err := workItems.Create(ctx, item); err != nil {
+		t.Fatalf("create item: %v", err)
+	}
+	got, err := workItems.GetByID(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("get item: %v", err)
+	}
+	if got.StatusKey != "s-review" {
+		t.Errorf("StatusKey = %q, want %q", got.StatusKey, "s-review")
+	}
+
+	// A project created without a catalog reads as none, and its items read an
+	// empty key — the state every pre-existing row is in after the migration.
+	plain := &Project{KeyPrefix: "PL", Name: "Plain"}
+	if err := projects.Create(ctx, plain); err != nil {
+		t.Fatalf("create plain project: %v", err)
+	}
+	reloaded, err := projects.GetByID(ctx, plain.ID)
+	if err != nil {
+		t.Fatalf("get plain project: %v", err)
+	}
+	if len(reloaded.Statuses) != 0 {
+		t.Errorf("Statuses = %+v, want none for a project that adopted no catalog", reloaded.Statuses)
+	}
+}
+
 func TestSprintLockPersists(t *testing.T) {
 	database := newTestDB(t)
 	projects := NewProjectRepository(database.DB)

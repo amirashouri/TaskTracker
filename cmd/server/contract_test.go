@@ -100,14 +100,14 @@ type clientChange struct {
 
 // clientUser mirrors the user object the client's TeamPort reads.
 type clientUser struct {
-	ID          string `json:"id"`
-	Email       string `json:"email"`
-	DisplayName string `json:"displayName"`
-	Position    string `json:"position"`
-	AvatarID    string `json:"avatarId"`
-	Status      string `json:"status"`
-	Role        string `json:"role"`
-	CreatedAt   entities.Timestamp  `json:"createdAt"`
+	ID          string             `json:"id"`
+	Email       string             `json:"email"`
+	DisplayName string             `json:"displayName"`
+	Position    string             `json:"position"`
+	AvatarID    string             `json:"avatarId"`
+	Status      string             `json:"status"`
+	Role        string             `json:"role"`
+	CreatedAt   entities.Timestamp `json:"createdAt"`
 }
 
 // clientProfile mirrors the KMP `UserProfileResponse`; the retained wire
@@ -802,9 +802,9 @@ func TestTheSelfProfileIsWhatTheClientDecodes(t *testing.T) {
 
 	rec = env.do(t, http.MethodPatch, "/v1/me", tokens.AccessToken, map[string]string{
 		"displayName":  "Ada Lovelace",
-		"position":      "Product owner",
+		"position":     "Product owner",
 		"avatarId":     "7",
-		"presence":      "away",
+		"presence":     "away",
 		"presenceNote": "At the dentist",
 	})
 	if rec.Code != http.StatusOK {
@@ -853,10 +853,10 @@ func TestDeletingAMemberEndsTheirSessionsAndBlocksSignIn(t *testing.T) {
 	admin := env.signIn(t)
 
 	created := env.do(t, http.MethodPost, "/v1/admin/users", admin.AccessToken, map[string]string{
-		"email":        "grace@example.com",
-		"password":     "grace-password",
+		"email":       "grace@example.com",
+		"password":    "grace-password",
 		"displayName": "Grace",
-		"role":         entities.RoleMember,
+		"role":        entities.RoleMember,
 	})
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create member = %d, body = %s", created.Code, created.Body.String())
@@ -1181,7 +1181,7 @@ func TestAdminProjectGetSeedsTheEditScreen(t *testing.T) {
 		[]string{
 			"id", "keyPrefix", "name", "details", "tags", "memberIds", "isArchived",
 			"agentEnabled", "nextItemNumber", "createdAt", "updatedAt", "version",
-		}, nil)
+		}, []string{"statuses"})
 
 	var stored map[string]json.RawMessage
 	if err := json.Unmarshal(got.Body.Bytes(), &stored); err != nil {
@@ -1200,6 +1200,70 @@ func TestAdminProjectGetSeedsTheEditScreen(t *testing.T) {
 	missing := env.do(t, http.MethodGet, "/v1/admin/projects/00000000-0000-0000-0000-000000000000", admin.AccessToken, nil)
 	if missing.Code != http.StatusNotFound {
 		t.Errorf("getting an unknown project = %d, want 404 (body %s)", missing.Code, missing.Body.String())
+	}
+}
+
+// The project status catalog is project configuration, like tags: an edit sets
+// it, the row stores it, and the same shape comes back. The key is omitted
+// entirely for a project with no catalog, so an installed client that predates
+// the field still decodes every response.
+func TestTheProjectStatusCatalogRoundTripsWithTheClientsKeys(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+
+	// A project with no catalog must not carry the key at all.
+	bare := env.do(t, http.MethodGet, "/v1/admin/projects/"+string(env.project.ID), admin.AccessToken, nil)
+	if bare.Code != http.StatusOK {
+		t.Fatalf("get project = %d, body = %s", bare.Code, bare.Body)
+	}
+	var bareFields map[string]json.RawMessage
+	if err := json.Unmarshal(bare.Body.Bytes(), &bareFields); err != nil {
+		t.Fatalf("decode project: %v", err)
+	}
+	if _, ok := bareFields["statuses"]; ok {
+		t.Errorf("a project with no catalog carries a `statuses` key; an installed client that predates it would fail to decode: %s", bare.Body)
+	}
+
+	// Set a catalog through the admin edit, echoing the project back like the app.
+	var stored entities.Project
+	if err := json.Unmarshal(bare.Body.Bytes(), &stored); err != nil {
+		t.Fatalf("decode stored project: %v", err)
+	}
+	stored.Statuses = []entities.StatusDefinition{
+		{ID: "s-todo", Name: "To do", Category: entities.WorkItemStatusTodo, Order: 0, Color: "gray"},
+		{ID: "s-review", Name: "In review", Category: entities.WorkItemStatusInReview, Order: 1, Color: "blue"},
+	}
+	updated := env.do(t, http.MethodPatch, "/v1/admin/projects/"+string(env.project.ID), admin.AccessToken, stored)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("update project = %d, body = %s", updated.Code, updated.Body)
+	}
+
+	// The catalog comes back with exactly the keys the client declares.
+	var raw struct {
+		Statuses []json.RawMessage `json:"statuses"`
+	}
+	if err := json.Unmarshal(updated.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode updated project: %v", err)
+	}
+	if len(raw.Statuses) != 2 {
+		t.Fatalf("statuses = %d, want 2: %s", len(raw.Statuses), updated.Body)
+	}
+	assertWireKeys(t, "a status definition", raw.Statuses[0],
+		[]string{"id", "name", "category", "order", "color"}, nil)
+
+	var got entities.Project
+	if err := json.Unmarshal(updated.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode the saved project: %v", err)
+	}
+	if len(got.Statuses) != 2 || got.Statuses[1].Name != "In review" || got.Statuses[1].Category != entities.WorkItemStatusInReview {
+		t.Errorf("the catalog did not round-trip: %+v", got.Statuses)
+	}
+
+	// And it survives a plain reload, proving the row stored it rather than the
+	// response echoing the request.
+	reread := env.do(t, http.MethodGet, "/v1/admin/projects/"+string(env.project.ID), admin.AccessToken, nil)
+	if !strings.Contains(reread.Body.String(), `"name":"In review"`) {
+		t.Errorf("the catalog did not persist: %s", reread.Body)
 	}
 }
 
@@ -1237,7 +1301,7 @@ func TestAdminProjectCreateLandsTheProjectAndReachesTheFeed(t *testing.T) {
 		[]string{
 			"id", "keyPrefix", "name", "details", "tags", "memberIds", "isArchived",
 			"agentEnabled", "nextItemNumber", "createdAt", "updatedAt", "version",
-		}, nil)
+		}, []string{"statuses"})
 
 	var created map[string]json.RawMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
@@ -1370,7 +1434,7 @@ func TestAdminProjectListSplitsActiveFromArchived(t *testing.T) {
 // back rather than emailing it — the project owns no mail infrastructure
 // (AGENTS.md §7) — so these two keys are the entire response.
 type clientResetCodeResponse struct {
-	Code      string `json:"code"`
+	Code      string             `json:"code"`
 	ExpiresAt entities.Timestamp `json:"expiresAt"`
 }
 
@@ -1397,7 +1461,7 @@ func TestChangePasswordFlowOverTheMountedRoutes(t *testing.T) {
 	// The route is mounted and auth-gated: without a token it is 401, not 404.
 	denied := env.do(t, http.MethodPost, "/v1/me/password", "", map[string]string{
 		"oldPasswordOrCode": "correct horse battery",
-		"newPassword":         "brand new secret",
+		"newPassword":       "brand new secret",
 	})
 	if denied.Code != http.StatusUnauthorized {
 		t.Fatalf("change-password without a token = %d, want 401 (body %s)", denied.Code, denied.Body.String())
@@ -1406,7 +1470,7 @@ func TestChangePasswordFlowOverTheMountedRoutes(t *testing.T) {
 	// A wrong credential refuses with a 400 the client renders verbatim.
 	wrong := env.do(t, http.MethodPost, "/v1/me/password", member.AccessToken, map[string]string{
 		"oldPasswordOrCode": "not-the-password",
-		"newPassword":         "brand new secret",
+		"newPassword":       "brand new secret",
 	})
 	if wrong.Code != http.StatusBadRequest {
 		t.Fatalf("change-password with a wrong credential = %d, want 400 (body %s)", wrong.Code, wrong.Body.String())
@@ -1430,7 +1494,7 @@ func TestChangePasswordFlowOverTheMountedRoutes(t *testing.T) {
 	// The member spends the code on a new password.
 	changed := env.do(t, http.MethodPost, "/v1/me/password", member.AccessToken, map[string]string{
 		"oldPasswordOrCode": code.Code,
-		"newPassword":         "brand new secret",
+		"newPassword":       "brand new secret",
 	})
 	if changed.Code != http.StatusOK {
 		t.Fatalf("change-password with the code = %d, want 200 (body %s)", changed.Code, changed.Body.String())
@@ -1445,7 +1509,7 @@ func TestChangePasswordFlowOverTheMountedRoutes(t *testing.T) {
 	// Single use: the spent code cannot authorise a second change.
 	replay := env.do(t, http.MethodPost, "/v1/me/password", member.AccessToken, map[string]string{
 		"oldPasswordOrCode": code.Code,
-		"newPassword":         "another secret 1",
+		"newPassword":       "another secret 1",
 	})
 	if replay.Code != http.StatusBadRequest {
 		t.Fatalf("replaying the spent code = %d, want 400 (body %s)", replay.Code, replay.Body.String())

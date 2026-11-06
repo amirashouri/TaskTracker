@@ -123,21 +123,43 @@ type ProjectTag struct {
 	Icon  string `json:"icon"`
 }
 
+// StatusDefinition is one admin-defined workflow status on a project.
+//
+// Statuses are project configuration, like ProjectTag: they travel and version
+// with the project, and a work item references one by its ID. Category is the
+// coarse WorkItemStatus the overdue, archive and board-column rules read, so an
+// admin renaming a status or adding one never changes whether an item is
+// terminal or overdue. Color is the client's design-system key, stored verbatim.
+//
+// omitempty on the project's slice keeps the key off the wire for a project that
+// has not adopted a catalog, so an installed client that predates this field
+// still decodes every response.
+type StatusDefinition struct {
+	ID       string         `json:"id"`
+	Name     string         `json:"name"`
+	Category WorkItemStatus `json:"category"`
+	Order    int            `json:"order"`
+	Color    string         `json:"color"`
+}
+
 type Project struct {
-	ID             ProjectID    `json:"id"`
-	KeyPrefix      string       `json:"keyPrefix"`
-	Name           string       `json:"name"`
-	Details        string       `json:"details"`
-	Tags           []ProjectTag `json:"tags"`
-	MemberIDs      []UserID     `json:"memberIds"`
-	IsArchived     bool         `json:"isArchived"`
+	ID        ProjectID    `json:"id"`
+	KeyPrefix string       `json:"keyPrefix"`
+	Name      string       `json:"name"`
+	Details   string       `json:"details"`
+	Tags      []ProjectTag `json:"tags"`
+	// Statuses is the project's workflow catalog. Omitted when empty so a
+	// response gains no key for a project that has not adopted one.
+	Statuses   []StatusDefinition `json:"statuses,omitempty"`
+	MemberIDs  []UserID           `json:"memberIds"`
+	IsArchived bool               `json:"isArchived"`
 	// AgentEnabled is the admin's per-project switch for whether a work item here
 	// may be dispatched to an agent. It is project-scoped, not server-scoped.
-	AgentEnabled bool `json:"agentEnabled"`
-	NextItemNumber int          `json:"nextItemNumber"`
-	CreatedAt      Timestamp    `json:"createdAt"`
-	UpdatedAt      Timestamp    `json:"updatedAt"`
-	Version        string       `json:"version,omitempty"`
+	AgentEnabled   bool      `json:"agentEnabled"`
+	NextItemNumber int       `json:"nextItemNumber"`
+	CreatedAt      Timestamp `json:"createdAt"`
+	UpdatedAt      Timestamp `json:"updatedAt"`
+	Version        string    `json:"version,omitempty"`
 }
 
 // Key formats a work-item key. Numbers are decimal, so item 10 is "TT-10"
@@ -191,12 +213,16 @@ type WorkItem struct {
 	StoryPoints  *int           `json:"storyPoints,omitempty"`
 	BlockedByIDs []WorkItemID   `json:"blockedByIds"`
 	TagIDs       []TagID        `json:"tagIDs"`
-	SprintID     *SprintID      `json:"sprintId,omitempty"`
-	Rank         int            `json:"rank"`
-	CreatedAt    Timestamp      `json:"createdAt"`
-	UpdatedAt    Timestamp      `json:"updatedAt"`
-	ResolvedAt   *Timestamp     `json:"resolvedAt,omitempty"`
-	Version      string         `json:"version"` // optimistic lock
+	// StatusKey names the project's StatusDefinition this item sits in. Empty is
+	// "no catalog adopted" and the client derives the column from Status; omitted
+	// when empty so an installed client that predates the field still decodes.
+	StatusKey  string     `json:"statusKey,omitempty"`
+	SprintID   *SprintID  `json:"sprintId,omitempty"`
+	Rank       int        `json:"rank"`
+	CreatedAt  Timestamp  `json:"createdAt"`
+	UpdatedAt  Timestamp  `json:"updatedAt"`
+	ResolvedAt *Timestamp `json:"resolvedAt,omitempty"`
+	Version    string     `json:"version"` // optimistic lock
 }
 
 func (w *WorkItem) IsTerminal() bool {

@@ -14,19 +14,19 @@ func NewWorkItemRepository(db Querier) *WorkItemRepository {
 	return &WorkItemRepository{db: db}
 }
 
-const workItemColumns = `id, project_id, key, title, details, status, priority, assignee_id, due_date, recurrence, story_points, blocked_by_ids, tag_ids, sprint_id, rank, created_at, updated_at, resolved_at, version`
+const workItemColumns = `id, project_id, key, title, details, status, priority, assignee_id, due_date, recurrence, story_points, blocked_by_ids, tag_ids, sprint_id, rank, created_at, updated_at, resolved_at, version, status_key`
 
 // scanWorkItem reads one row selected with workItemColumns. Both GetByID and
 // the list queries scan through it, so the column order and the nullable
 // conversions are stated once.
 func scanWorkItem(row scanner, w *WorkItem) error {
 	var blockedJSON, tagJSON, recurrenceJSON []byte
-	var assigneeID, sprintID sql.NullString
+	var assigneeID, sprintID, statusKey sql.NullString
 	var dueDate, resolvedAt, storyPoints sql.NullInt64
 
 	if err := row.Scan(&w.ID, &w.ProjectID, &w.Key, &w.Title, &w.Details, &w.Status, &w.Priority,
 		&assigneeID, &dueDate, &recurrenceJSON, &storyPoints, &blockedJSON, &tagJSON, &sprintID, &w.Rank,
-		&w.CreatedAt, &w.UpdatedAt, &resolvedAt, &w.Version); err != nil {
+		&w.CreatedAt, &w.UpdatedAt, &resolvedAt, &w.Version, &statusKey); err != nil {
 		return err
 	}
 
@@ -35,6 +35,9 @@ func scanWorkItem(row scanner, w *WorkItem) error {
 	}
 	if sprintID.Valid {
 		w.SprintID = (*SprintID)(&sprintID.String)
+	}
+	if statusKey.Valid {
+		w.StatusKey = statusKey.String
 	}
 	w.DueDate = timestampOrNil(dueDate)
 	w.ResolvedAt = timestampOrNil(resolvedAt)
@@ -70,11 +73,11 @@ func (r *WorkItemRepository) Create(ctx context.Context, w *WorkItem) error {
 	recurrenceJSON, _ := json.Marshal(w.Recurrence)
 
 	query := `INSERT INTO work_items (` + workItemColumns + `)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`
 	_, err := r.db.ExecContext(ctx, query,
 		w.ID, w.ProjectID, w.Key, w.Title, w.Details, w.Status, w.Priority,
 		w.AssigneeID, w.DueDate, recurrenceJSON, w.StoryPoints, blockedJSON, tagJSON,
-		w.SprintID, w.Rank, w.CreatedAt, w.UpdatedAt, w.ResolvedAt, w.Version)
+		w.SprintID, w.Rank, w.CreatedAt, w.UpdatedAt, w.ResolvedAt, w.Version, w.StatusKey)
 	return err
 }
 
@@ -92,12 +95,12 @@ func (r *WorkItemRepository) Update(ctx context.Context, w *WorkItem) error {
 	tagJSON, _ := json.Marshal(w.TagIDs)
 	recurrenceJSON, _ := json.Marshal(w.Recurrence)
 
-	query := `UPDATE work_items SET project_id=$1, key=$2, title=$3, details=$4, status=$5, priority=$6, assignee_id=$7, due_date=$8, recurrence=$9, story_points=$10, blocked_by_ids=$11, tag_ids=$12, sprint_id=$13, rank=$14, updated_at=$15, resolved_at=$16, version=$17
-	          WHERE id=$18 AND version=$19`
+	query := `UPDATE work_items SET project_id=$1, key=$2, title=$3, details=$4, status=$5, priority=$6, assignee_id=$7, due_date=$8, recurrence=$9, story_points=$10, blocked_by_ids=$11, tag_ids=$12, sprint_id=$13, rank=$14, updated_at=$15, resolved_at=$16, version=$17, status_key=$18
+	          WHERE id=$19 AND version=$20`
 	return execOneRow(ctx, r.db, conflict("work item", w.ID), query,
 		w.ProjectID, w.Key, w.Title, w.Details, w.Status, w.Priority,
 		w.AssigneeID, w.DueDate, recurrenceJSON, w.StoryPoints, blockedJSON, tagJSON,
-		w.SprintID, w.Rank, w.UpdatedAt, w.ResolvedAt, w.Version, w.ID, previous)
+		w.SprintID, w.Rank, w.UpdatedAt, w.ResolvedAt, w.Version, w.StatusKey, w.ID, previous)
 }
 
 func (r *WorkItemRepository) Delete(ctx context.Context, id WorkItemID) error {

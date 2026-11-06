@@ -1,6 +1,6 @@
 # configurable-statuses — project-defined workflow statuses (server)
 
-- **status:** pending
+- **status:** in-progress
 - **priority:** P1
 - **context:** Server half of the cross-repo configurable-statuses feature. Read the client
   spec `TaskTrackerKMP/specs/configurable-statuses.md` and `../AGENTS.md` §1/§2 first: wire
@@ -15,20 +15,19 @@ algorithm, or middleware changes.
 
 ## Files
 
-`to confirm` before implementation.
-
-- `internal/db/migrations/000X_configurable_statuses.postgres.sql` and `.sqlite.sql` — one
-  version, both dialects, `IF NOT EXISTS`: a project status catalog and a per-item reference,
-  seeded per project with the current six statuses so nothing changes meaning.
-- `internal/entities/project*.go` — persist/read the catalog.
-- `internal/entities/workitem*.go` — persist/read the status reference; keep the category the
-  terminal/board rules read.
-- `internal/db/migrations/*` — the current `work_items_status_check` (`CHECK (status IN
-  (...))`) is the hard wall; the additive shape keeps the coarse category in that column and
-  adds the catalog reference, so the constraint is not loosened and no migration rewrites
-  existing rows.
-- `cmd/server/*.go` — serde for project and work-item payloads.
-- `docs/API.md` + `cmd/server/contract_test.go` — pin the client's declared keys.
+- `internal/entities/models.go` — added `StatusDefinition{id,name,category,order,color}`,
+  `Project.Statuses` (`json:"statuses,omitempty"`), `WorkItem.StatusKey`
+  (`json:"statusKey,omitempty"`); `WorkItemStatus` stays the coarse category.
+- `internal/db/migrations/0002_project_statuses.postgres.sql` + `.sqlite.sql` — add
+  `projects.statuses TEXT` and `work_items.status_key TEXT`.
+- `internal/entities/project_repository.go` — `statuses` column, `decodeStatuses`,
+  `normalisedStatuses`, insert/update marshal.
+- `internal/entities/workitem_repository.go` — `status_key` column, scan, insert/update.
+- `cmd/server/contract_test.go` — allow `statuses` on the project key set; added
+  `TestTheProjectStatusCatalogRoundTripsWithTheClientsKeys`.
+- `internal/entities/repository_test.go` — added
+  `TestStatusCatalogAndStatusKeyRoundTrip`.
+- `docs/API.md` — `statuses`/`statusKey` documented, omit-when-empty noted.
 
 ## Contract
 
@@ -59,14 +58,19 @@ algorithm, or middleware changes.
 
 ## Handoff
 
-- **Done:** Scope and additive design direction agreed (planning only).
-- **Pending:** Phase 1 `ACK`; catalog storage shape; seed migration; whether a catalog
-  endpoint is needed or the catalog only rides the project payload.
-- **Next step:** Write the dual-contract Phase 1 plan (migration + payload ↔ KMP `Project` /
-  `WorkItem`) with the client spec, then request `ACK`.
-- **Gotchas:** `work_items_status_check` is `CHECK (status IN
-  ('backlog','todo','in_progress','in_review','done','closed'))` — a renamed status must not
-  be written into that column. Keep the category there and add the reference beside it.
+- **Done:** Server layer implemented and verified. `StatusDefinition` +
+  `Project.Statuses` + `WorkItem.StatusKey` on the model; `0002` migration for both drivers;
+  project and work-item repositories read/write the new columns; contract and repository tests
+  added; `docs/API.md` updated. `go test ./...` green.
+- **Pending:** Client half (domain, database, mapping, remote DTO, board/editor, admin catalog
+  UI) — the client spec `TaskTrackerKMP/specs/configurable-statuses.md` owns it. Not yet
+  committed to any branch.
+- **Next step:** Implement the client model + data layer against the now-verified server
+  contract, then the presentation.
+- **Gotchas:** `statuses`/`statusKey` use `omitempty`, so a catalog-free project adds no key
+  and installed clients still decode. Once a project adopts a catalog, the key is emitted —
+  the client build must reach users before that happens (client-first rule). `isTerminal`,
+  the archive, and `work_items_status_check` still read the coarse `status` category.
 
 ## Risks / notes
 

@@ -16,19 +16,20 @@ func NewProjectRepository(db Querier) *ProjectRepository {
 	return &ProjectRepository{db: db}
 }
 
-const projectColumns = `id, key_prefix, name, details, tags, is_archived, next_item_number, created_at, updated_at, version, agent_enabled`
+const projectColumns = `id, key_prefix, name, details, tags, statuses, is_archived, next_item_number, created_at, updated_at, version, agent_enabled`
 
 // scanProject reads one row selected with projectColumns. MemberIDs is not a
 // column: membership lives in project_members and is loaded separately.
 func scanProject(row scanner, p *Project) error {
-	var tagsJSON []byte
-	if err := row.Scan(&p.ID, &p.KeyPrefix, &p.Name, &p.Details, &tagsJSON, &p.IsArchived, &p.NextItemNumber, &p.CreatedAt, &p.UpdatedAt, &p.Version, &p.AgentEnabled); err != nil {
+	var tagsJSON, statusesJSON []byte
+	if err := row.Scan(&p.ID, &p.KeyPrefix, &p.Name, &p.Details, &tagsJSON, &statusesJSON, &p.IsArchived, &p.NextItemNumber, &p.CreatedAt, &p.UpdatedAt, &p.Version, &p.AgentEnabled); err != nil {
 		return err
 	}
 	// A malformed blob costs the project its tags, not the row: the rest of the
 	// project is still worth returning, the same trade the work-item scan makes
 	// for blockers.
 	p.Tags = decodeTags(tagsJSON)
+	p.Statuses = decodeStatuses(statusesJSON)
 	return nil
 }
 
@@ -43,6 +44,27 @@ func decodeTags(data []byte) []ProjectTag {
 		tags = []ProjectTag{}
 	}
 	return tags
+}
+
+// decodeStatuses reads the project's workflow catalog. A missing or unreadable
+// blob is an empty catalog, matching decodeTags; the project response omits the
+// key entirely when the catalog is empty.
+func decodeStatuses(data []byte) []StatusDefinition {
+	statuses := []StatusDefinition{}
+	_ = json.Unmarshal(data, &statuses)
+	if statuses == nil {
+		statuses = []StatusDefinition{}
+	}
+	return statuses
+}
+
+// normalisedStatuses keeps the slice non-nil so the stored JSON is `[]` rather
+// than `null` when a project clears its catalog.
+func normalisedStatuses(statuses []StatusDefinition) []StatusDefinition {
+	if statuses == nil {
+		return []StatusDefinition{}
+	}
+	return statuses
 }
 
 // scanMember reads the reduced projection GetMembers selects: a membership
@@ -67,9 +89,10 @@ func (r *ProjectRepository) Create(ctx context.Context, p *Project) error {
 	// The row and its member set must land together.
 	return inTx(ctx, r.db, func(q Querier) error {
 		tagsJSON, _ := json.Marshal(normalisedTags(p.Tags))
+		statusesJSON, _ := json.Marshal(normalisedStatuses(p.Statuses))
 		if _, err := q.ExecContext(ctx, `INSERT INTO projects (`+projectColumns+`)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-			p.ID, p.KeyPrefix, p.Name, p.Details, tagsJSON, p.IsArchived, p.NextItemNumber, p.CreatedAt, p.UpdatedAt, p.Version, p.AgentEnabled); err != nil {
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+			p.ID, p.KeyPrefix, p.Name, p.Details, tagsJSON, statusesJSON, p.IsArchived, p.NextItemNumber, p.CreatedAt, p.UpdatedAt, p.Version, p.AgentEnabled); err != nil {
 			return err
 		}
 		// No replay is owed here: a brand-new project has no history behind anyone's
@@ -103,9 +126,10 @@ func (r *ProjectRepository) Update(ctx context.Context, p *Project) error {
 	return inTx(ctx, r.db, func(q Querier) error {
 		// Placeholders ascend in text order: SQLite numbers them by appearance.
 		tagsJSON, _ := json.Marshal(normalisedTags(p.Tags))
-		if err := execOneRow(ctx, q, conflict("project", p.ID), `UPDATE projects SET key_prefix=$1, name=$2, details=$3, tags=$4, is_archived=$5, next_item_number=$6, updated_at=$7, version=$8, agent_enabled=$9
-          WHERE id=$10 AND version=$11`,
-			p.KeyPrefix, p.Name, p.Details, tagsJSON, p.IsArchived, p.NextItemNumber, p.UpdatedAt, p.Version, p.AgentEnabled, p.ID, previous); err != nil {
+		statusesJSON, _ := json.Marshal(normalisedStatuses(p.Statuses))
+		if err := execOneRow(ctx, q, conflict("project", p.ID), `UPDATE projects SET key_prefix=$1, name=$2, details=$3, tags=$4, statuses=$5, is_archived=$6, next_item_number=$7, updated_at=$8, version=$9, agent_enabled=$10
+          WHERE id=$11 AND version=$12`,
+			p.KeyPrefix, p.Name, p.Details, tagsJSON, statusesJSON, p.IsArchived, p.NextItemNumber, p.UpdatedAt, p.Version, p.AgentEnabled, p.ID, previous); err != nil {
 			return err
 		}
 		// This project has a history, so a member who is new to it is owed a replay.
