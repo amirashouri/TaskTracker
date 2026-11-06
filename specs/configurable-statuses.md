@@ -62,11 +62,12 @@ algorithm, or middleware changes.
   `Project.Statuses` + `WorkItem.StatusKey` on the model; `0002` migration for both drivers;
   project and work-item repositories read/write the new columns; contract and repository tests
   added; `docs/API.md` updated. `go test ./...` green.
-- **Pending:** Client half (domain, database, mapping, remote DTO, board/editor, admin catalog
-  UI) — the client spec `TaskTrackerKMP/specs/configurable-statuses.md` owns it. Not yet
-  committed to any branch.
-- **Next step:** Implement the client model + data layer against the now-verified server
-  contract, then the presentation.
+- **Pending:** Client verification on the iOS and Android hosts, and a release
+  `scripts/check.sh full` on the client. The client half (domain, database, mapping, remote
+  DTO, board/editor, admin catalog UI) is implemented and green on the JVM host and committed
+  to `main`; `TaskTrackerKMP/specs/configurable-statuses.md` owns the detail.
+- **Next step:** Run the client host matrix and the release gate before shipping the pair
+  together.
 - **Gotchas:** `statuses`/`statusKey` use `omitempty`, so a catalog-free project adds no key
   and installed clients still decode. Once a project adopts a catalog, the key is emitted —
   the client build must reach users before that happens (client-first rule). `isTerminal`,
