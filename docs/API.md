@@ -663,11 +663,11 @@ widen what a machine is allowed to execute.
 
 | Route | Body / query | Result |
 | --- | --- | --- |
-| `POST /v1/agent/runs` | `{"workItemId": "…", "idempotencyKey": "…"}` | `201` new run, `200` replay of the same key. `404` unknown item, `403` non-member, `409` not `in_progress`, `409` a live run exists, `409` the project's agent switch is off |
+| `POST /v1/agent/runs` | `{"workItemId": "…", "idempotencyKey": "…", "runnerId": "…"}` | `201` new run, `200` replay of the same key. `404` unknown item, `403` non-member, `409` not `in_progress`, `409` a live run exists, `409` the project's agent switch is off, `409` the chosen runner is unavailable |
 | `GET /v1/agent/runs?workItemId=&limit=` | `limit` default 20, max 50 | `{"runs": [...]}`, newest first |
 | `GET /v1/agent/runs/{id}?afterSeq=` | `afterSeq` default 0 | `{"run": …, "events": [...], "hasMore": bool}` |
 | `POST /v1/agent/runs/{id}/cancel` | — | `{"run": …}` with `cancelRequested` |
-| `POST /v1/agent/runners/pairing-codes` | `{"projectId": "…"}` | `201 {"code": "ttpc_…", "projectId": …, "expiresAt": …}`; member only, expires in 10 minutes |
+| `POST /v1/agent/runners/pairing-codes` | `{"projectId": "…", "host": "desktop"\|"remote"}` | `201 {"code": "ttpc_…", "projectId": …, "host": …, "expiresAt": …}`; member only, expires in 10 minutes |
 | `POST /v1/agent/runners` | `{"name", "provider", "modelLabel"}` | `201 {"runner": …, "token": "ttag_…"}` — token shown once; legacy machine-wide scope |
 | `GET /v1/agent/runners` | — | `{"runners": [...]}`, revoked and paused included |
 | `DELETE /v1/agent/runners/{id}` | — | `204`, idempotent; `404` for an unknown or another user's runner |
@@ -681,6 +681,47 @@ so a retry after a lost response cannot create duplicate work. A replay returns
 the stored run even when it is terminal; dispatching again after a failure needs
 a new key. A different key while a run is live still answers `409`. The run id is
 minted before the brief and stays stable across the replay.
+
+### Host, targeting and the result diff
+
+Three of the four keys below are **request** fields and one is on both sides of
+the wire. All are optional. They are the names the shipped server and the shipped
+client use; the spec's earlier `requestedRunnerID` and `resultDiff` spellings were
+not adopted, because renaming a response key breaks installed builds that leave
+`ignoreUnknownKeys` off.
+
+| Contract | Wire name | Where |
+| --- | --- | --- |
+| Host kind | `host` | `POST /v1/agent/runners/pairing-codes` request and response; the runner objects returned by `/v1/agent/pair`, `POST /v1/agent/runners`, `GET /v1/agent/runners` and stop/start |
+| Target machine | request `runnerId` → response `requestedRunnerId` | `POST /v1/agent/runs` → every app-shape run object |
+| Result diff | `diff` | `POST /v1/agent/runs/{id}/finish` request → every app-shape run object |
+
+`host` is `desktop` or `remote` (a remote/VPS machine). Empty or omitted means
+"not stated" — a legacy machine or a code from an older client — and is not a
+third kind. The pairing code owns the choice: redeeming it copies `host` and
+`projectId` onto the runner, which cannot name its own project.
+
+`runnerId` on dispatch is the machine the target picker chose. The server
+validates that it exists, belongs to the caller, is neither revoked nor paused,
+and is scoped to the item's project; otherwise the dispatch is `409`. The stored
+run carries it as `requested_runner_id`, and the claim query admits only that
+runner. `NULL` keeps the pre-targeting behavior: any eligible machine may claim.
+Note the asymmetry: the **request** key is `runnerId` while the **response** key
+is `requestedRunnerId`. A run that has been claimed also reports its actual
+holder as `runnerId`.
+
+`diff` is the worker's captured workspace diff. `finish` truncates it at 200,000
+bytes, stores it in `result_diff`, and every app-shape run response returns it as
+`diff`. An older worker that omits `diff` finishes exactly as before, with an
+empty string. `diff` is a review aid, not a credential or a patch the server
+applies.
+
+**Rollout.** The client shipped a DTO declaring `host`, `requestedRunnerId` and
+`diff` with defaults first; only then did the server start emitting them. Because
+`omitempty` applies, a run with no target and no diff gains no key, so older
+installed builds still decode those responses. `cmd/server/contract_test.go`
+pins each closed key set by exact name and walks one pairing code through to a
+finished run, so a gained, lost or case-renamed response key is a hard failure.
 
 ### Fleet controls — admin token
 
@@ -708,11 +749,11 @@ unknown runner, so a stop cannot be used to probe for ids.
 
 | Route | Body | Result |
 | --- | --- | --- |
-| `POST /v1/agent/pair` | `{"code", "name", "provider", "modelLabel"}` | `201 {"runner": …, "token": "ttag_…"}`; `401` for an unknown, spent or expired code. **No bearer token** — the code is the credential |
+| `POST /v1/agent/pair` | `{"code", "name", "provider", "modelLabel"}` | `201 {"runner": …, "token": "ttag_…"}`; the runner carries the code's `projectId` and `host`. `401` for an unknown, spent or expired code. **No bearer token** — the code is the credential |
 | `POST /v1/agent/runs/claim` | `{"waitSeconds": 25}` (default 25, max 30) | `200 {"run": …}` or `204` when idle |
 | `POST /v1/agent/runs/{id}/events` | `{"events":[{"kind","message","payload"}]}`, max 200 | `200 {"accepted": n, "nextSeq": seq}` |
 | `POST /v1/agent/runs/{id}/heartbeat` | — | `200 {"cancelRequested": bool, "leaseExpiresAt": …}` |
-| `POST /v1/agent/runs/{id}/finish` | `{"outcome":"succeeded"\|"failed"\|"cancelled", "summary", "error"}` | `200 {"run": …}`, idempotent by status |
+| `POST /v1/agent/runs/{id}/finish` | `{"outcome":"succeeded"\|"failed"\|"cancelled", "summary", "error", "diff"}` | `200 {"run": …}`, idempotent by status; `diff` optional and truncated at 200,000 bytes |
 | `POST /v1/agent/runners/self/revoke` | — | `204`; retires the machine that presented the token, and only that one. This is what `tt agent disconnect` calls, because the CLI holds a runner token rather than a user JWT |
 
 All four run routes answer `409` when the run is not held by that runner, so a
@@ -785,6 +826,7 @@ Run, app shape:
   "projectId": "22222222-2222-2222-2222-222222222222",
   "status": "queued",
   "requestedBy": "550e8400-e29b-41d4-a716-446655440000",
+  "requestedRunnerId": "66666666-6666-6666-6666-666666666666",
   "cancelRequested": false,
   "createdAt": "2026-11-03T12:00:00Z",
   "summary": "",
@@ -792,10 +834,12 @@ Run, app shape:
 }
 ```
 
-`runnerId`, `startedAt` and `finishedAt` are omitted until they exist, and the
-client declares them with defaults. `status` is `queued`, `claimed`, `running`,
-`succeeded`, `failed` or `cancelled`. `cancelRequested` is a request, not a
-result: the worker stops at its next heartbeat.
+`runnerId`, `requestedRunnerId`, `startedAt`, `finishedAt` and `diff` are omitted
+until they exist, and the client declares them with defaults. `requestedRunnerId`
+is the machine chosen at dispatch; `runnerId` is the one that actually claimed.
+`diff` appears once a worker reports one. `status` is `queued`, `claimed`,
+`running`, `succeeded`, `failed` or `cancelled`. `cancelRequested` is a request,
+not a result: the worker stops at its next heartbeat.
 
 Event:
 
@@ -813,17 +857,22 @@ Runner, app shape:
 ```json
 {
   "id": "66666666-6666-6666-6666-666666666666",
+  "projectId": "22222222-2222-2222-2222-222222222222",
   "name": "dev-machine",
   "provider": "openai-compatible",
   "modelLabel": "llama3.1",
+  "host": "remote",
   "lastSeenAt": "2026-11-03T12:00:00Z",
   "pausedAt": "2026-11-03T12:05:00Z",
   "createdAt": "2026-11-03T11:00:00Z"
 }
 ```
 
-`lastSeenAt`, `revokedAt` and `pausedAt` are omitted until they exist, and the
-client declares them with defaults. `pausedAt` is the reversible stop;
+`projectId`, `host`, `lastSeenAt`, `revokedAt` and `pausedAt` are omitted until
+they exist, and the client declares them with defaults. A runner with no
+`projectId` is a legacy machine-wide registration, not an unassigned one.
+`host` is `desktop` or `remote`; omitted means the pairing choice was not stated.
+`pausedAt` is the reversible stop;
 `revokedAt` is retirement. The client derives "running" from `lastSeenAt`
 against its own read time (two minutes), because the server touches that column
 on every claim long poll and does not answer freshness itself.
@@ -854,9 +903,10 @@ A breaking change that cannot follow that order is a new `/v1` version and a
 migration path. The full policy is in [`AGENTS.md`](../AGENTS.md).
 
 `cmd/server/contract_test.go` holds the request and response pairs that pin this
-document to the code, including the agent run and event key sets. It compares **key names**, not just decoded values, because
-Go matches JSON keys case-insensitively and a decode-based check cannot see a
-rename like `entityId` → `entityID`.
+document to the code, including the agent run, event, runner and pairing-code key
+sets. It compares **key names**, not just decoded values, because Go matches JSON
+keys case-insensitively and a decode-based check cannot see a rename like
+`entityId` → `entityID` — or `requestedRunnerId` → `requestedRunnerID`.
 
 ### The contract test can drift too
 

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -174,6 +175,98 @@ func TestMigrateUpgradesDatabaseWithoutVersionTable(t *testing.T) {
 	}
 	if got := countRows(t, database.DB, "schema_migrations"); got != len(expected) {
 		t.Errorf("recorded %d versions, want %d", got, len(expected))
+	}
+}
+
+// The migration runner records versions, not checksums of the SQL. A 0004 file
+// that exists but forgets an ALTER still "applies" cleanly, so pin the resulting
+// columns rather than the file's presence. The defaults matter too: a legacy row
+// has no host or diff, and a scan that meets NULL where the repository expects a
+// string fails long after the migration looked successful.
+func TestAgentTargetingMigrationAddsItsColumns(t *testing.T) {
+	database, err := New("sqlite://" + filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer database.Close()
+
+	if err := Migrate(database); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	type wantColumn struct {
+		kind    string
+		notNull int
+		dflt    sql.NullString
+	}
+	emptyDefault := sql.NullString{String: "''", Valid: true}
+	wanted := map[string]map[string]wantColumn{
+		"agent_runners": {
+			"host": {kind: "TEXT", notNull: 1, dflt: emptyDefault},
+		},
+		"agent_pairing_codes": {
+			"host": {kind: "TEXT", notNull: 1, dflt: emptyDefault},
+		},
+		"agent_runs": {
+			"requested_runner_id": {kind: "TEXT", notNull: 0},
+			"result_diff":         {kind: "TEXT", notNull: 1, dflt: emptyDefault},
+		},
+	}
+
+	for table, columns := range wanted {
+		rows, err := database.Query("PRAGMA table_info(" + table + ")")
+		if err != nil {
+			t.Fatalf("describe %s: %v", table, err)
+		}
+		found := map[string]wantColumn{}
+		for rows.Next() {
+			var cid, notNull, pk int
+			var name, kind string
+			var dflt sql.NullString
+			if err := rows.Scan(&cid, &name, &kind, &notNull, &dflt, &pk); err != nil {
+				t.Fatalf("scan %s column: %v", table, err)
+			}
+			found[name] = wantColumn{kind: kind, notNull: notNull, dflt: dflt}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate %s columns: %v", table, err)
+		}
+		rows.Close()
+
+		for name, want := range columns {
+			got, ok := found[name]
+			if !ok {
+				t.Errorf("%s has no %q column; it has %d columns", table, name, len(found))
+				continue
+			}
+			if got.kind != want.kind || got.notNull != want.notNull || got.dflt != want.dflt {
+				t.Errorf("%s.%s = %+v, want %+v", table, name, got, want)
+			}
+		}
+	}
+
+	// Both drivers must declare the same four columns. SQLite uses a plain
+	// ALTER and PostgreSQL an IF NOT EXISTS one, so a driver-specific edit can
+	// drift without either migration test noticing.
+	for _, driver := range []string{DriverSQLite, DriverPostgres} {
+		migrations, err := loadMigrations(driver)
+		if err != nil {
+			t.Fatalf("load %s migrations: %v", driver, err)
+		}
+		var sql0004 string
+		for _, m := range migrations {
+			if m.version == "0004" {
+				sql0004 = m.sql
+			}
+		}
+		if sql0004 == "" {
+			t.Fatalf("%s has no 0004 migration", driver)
+		}
+		for _, column := range []string{"agent_runners", "agent_pairing_codes", "requested_runner_id", "result_diff"} {
+			if !strings.Contains(sql0004, column) {
+				t.Errorf("%s 0004 does not mention %q", driver, column)
+			}
+		}
 	}
 }
 

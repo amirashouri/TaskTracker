@@ -77,8 +77,10 @@ func NewAppHandler(
 
 // appRunResponse is the run as the app sees it: no task snapshot and no lease,
 // which are the worker's business. The Kotlin DTO declares `runnerId`,
-// `startedAt` and `finishedAt` with defaults, so those keys may be omitted; every
-// other key is required and always present.
+// `requestedRunnerId`, `startedAt`, `finishedAt` and `diff` with defaults, so
+// those keys may be omitted; every other key is required and always present.
+// The key set is pinned by cmd/server/contract_test.go: with ignoreUnknownKeys
+// off, even a case-only rename breaks an installed client.
 type appRunResponse struct {
 	ID                entities.AgentRunID     `json:"id"`
 	WorkItemID        entities.WorkItemID     `json:"workItemId"`

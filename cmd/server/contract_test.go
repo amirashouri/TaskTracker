@@ -276,6 +276,14 @@ func assertWireKeys(t *testing.T, what string, raw []byte, required, optional []
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		t.Fatalf("decode %s: %v", what, err)
 	}
+	assertWireKeySet(t, what, fields, required, optional)
+}
+
+// assertWireKeySet is the same pin for an object already decoded as part of an
+// envelope. Nested responses (a `run`, a `runner`) are where a gained key hides,
+// and re-marshalling them only to read the keys back would be noise.
+func assertWireKeySet(t *testing.T, what string, fields map[string]json.RawMessage, required, optional []string) {
+	t.Helper()
 
 	for _, key := range required {
 		if _, ok := fields[key]; !ok {
@@ -338,23 +346,54 @@ func TestARunnerTokenIsRefusedOnAUserRoute(t *testing.T) {
 }
 
 // clientAgentRun mirrors the KMP `AgentRunDto`; the retained agent-run wire
-// contract is in docs/ARCHITECTURE.md. The three nullable members have Kotlin
-// defaults, so those keys may be omitted; every other key is required and must
-// always be present.
+// contract is in docs/ARCHITECTURE.md. `requestedRunnerId` and `diff` are the
+// shipped spellings: the spec once called them `requestedRunnerID` and
+// `resultDiff`, but renaming them now would break builds already installed with
+// ignoreUnknownKeys off. Both are declared with Kotlin defaults, so the server
+// may omit them (and does, until a machine is targeted / a run has a diff).
 type clientAgentRun struct {
-	ID              string  `json:"id"`
-	WorkItemID      string  `json:"workItemId"`
-	ProjectID       string  `json:"projectId"`
-	Status          string  `json:"status"`
-	RequestedBy     string  `json:"requestedBy"`
-	RunnerID        *string `json:"runnerId"`
-	CancelRequested bool    `json:"cancelRequested"`
-	CreatedAt       string  `json:"createdAt"`
-	StartedAt       *string `json:"startedAt"`
-	FinishedAt      *string `json:"finishedAt"`
-	Summary         string  `json:"summary"`
-	Error           string  `json:"error"`
+	ID                string  `json:"id"`
+	WorkItemID        string  `json:"workItemId"`
+	ProjectID         string  `json:"projectId"`
+	Status            string  `json:"status"`
+	RequestedBy       string  `json:"requestedBy"`
+	RunnerID          *string `json:"runnerId"`
+	RequestedRunnerID *string `json:"requestedRunnerId"`
+	CancelRequested   bool    `json:"cancelRequested"`
+	CreatedAt         string  `json:"createdAt"`
+	StartedAt         *string `json:"startedAt"`
+	FinishedAt        *string `json:"finishedAt"`
+	Summary           string  `json:"summary"`
+	Error             string  `json:"error"`
+	Diff              string  `json:"diff"`
 }
+
+// The three closed key sets of the agent API. required is what the server always
+// emits; optional is what the client declares with a default and the server may
+// omit. Anything outside both is a hard decode failure on an installed build.
+var (
+	agentRunWireKeys = struct{ required, optional []string }{
+		required: []string{
+			"id", "workItemId", "projectId", "status", "requestedBy",
+			"cancelRequested", "createdAt", "summary", "error",
+		},
+		optional: []string{"runnerId", "requestedRunnerId", "startedAt", "finishedAt", "diff"},
+	}
+	agentRunnerWireKeys = struct{ required, optional []string }{
+		required: []string{"id", "name", "provider", "modelLabel", "createdAt"},
+		optional: []string{"projectId", "host", "lastSeenAt", "revokedAt", "pausedAt"},
+	}
+	// The pair route answers the CLI, not the app, and its runner shape is
+	// deliberately smaller than the settings screen's.
+	pairedRunnerWireKeys = struct{ required, optional []string }{
+		required: []string{"id", "name", "provider", "modelLabel", "createdAt"},
+		optional: []string{"projectId", "host"},
+	}
+	pairingCodeWireKeys = struct{ required, optional []string }{
+		required: []string{"code", "projectId", "expiresAt"},
+		optional: []string{"host"},
+	}
+)
 
 // signInToken signs in over the mounted route, so the test needs no JWT manager.
 func signInToken(t *testing.T, env *contractEnv) string {
@@ -414,27 +453,13 @@ func TestTheAgentRunProgressIsWhatTheClientDecodes(t *testing.T) {
 	}
 
 	var raw struct {
-		Run map[string]any `json:"run"`
+		Run map[string]json.RawMessage `json:"run"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("decode raw run: %v", err)
 	}
-	for _, key := range []string{"id", "workItemId", "projectId", "status", "requestedBy", "cancelRequested", "createdAt", "summary", "error"} {
-		if _, ok := raw.Run[key]; !ok {
-			t.Errorf("run is missing the required key %q", key)
-		}
-	}
-	allowed := map[string]bool{
-		"id": true, "workItemId": true, "projectId": true, "status": true,
-		"requestedBy": true, "runnerId": true, "cancelRequested": true,
-		"createdAt": true, "startedAt": true, "finishedAt": true,
-		"summary": true, "error": true,
-	}
-	for key := range raw.Run {
-		if !allowed[key] {
-			t.Errorf("run carries an undeclared key %q", key)
-		}
-	}
+	assertWireKeys(t, "the dispatch response", rec.Body.Bytes(), []string{"run"}, nil)
+	assertWireKeySet(t, "an agent run", raw.Run, agentRunWireKeys.required, agentRunWireKeys.optional)
 
 	repo := entities.NewAgentRepository(env.database)
 	runner := &entities.AgentRunner{UserID: env.user.ID, Name: "contract-machine"}
@@ -1858,27 +1883,28 @@ func TestTheAdminCanStopAndStartAPairedMachine(t *testing.T) {
 		t.Fatalf("register: status %d; body %s", registered.Code, registered.Body)
 	}
 	var created struct {
-		Runner map[string]any `json:"runner"`
+		Runner map[string]json.RawMessage `json:"runner"`
+		Token  string                     `json:"token"`
 	}
 	if err := json.Unmarshal(registered.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode register: %v", err)
 	}
-	runnerID, _ := created.Runner["id"].(string)
+	var runnerID string
+	if err := json.Unmarshal(created.Runner["id"], &runnerID); err != nil {
+		t.Fatalf("decode runner id: %v", err)
+	}
 	if runnerID == "" {
 		t.Fatal("registered runner has no id")
 	}
-	for _, key := range []string{"id", "name", "provider", "modelLabel", "createdAt"} {
-		if _, ok := created.Runner[key]; !ok {
-			t.Errorf("runner is missing the required key %q", key)
-		}
-	}
+	assertWireKeys(t, "the registration response", registered.Body.Bytes(), []string{"runner", "token"}, nil)
+	assertWireKeySet(t, "a registered runner", created.Runner, agentRunnerWireKeys.required, agentRunnerWireKeys.optional)
 
 	stopped := env.do(t, http.MethodPost, "/v1/agent/runners/"+runnerID+"/stop", adminToken, nil)
 	if stopped.Code != http.StatusOK {
 		t.Fatalf("stop: status %d; body %s", stopped.Code, stopped.Body)
 	}
 	var pauseBody struct {
-		Runner map[string]any `json:"runner"`
+		Runner map[string]json.RawMessage `json:"runner"`
 	}
 	if err := json.Unmarshal(stopped.Body.Bytes(), &pauseBody); err != nil {
 		t.Fatalf("decode stop: %v", err)
@@ -1886,15 +1912,8 @@ func TestTheAdminCanStopAndStartAPairedMachine(t *testing.T) {
 	if _, ok := pauseBody.Runner["pausedAt"]; !ok {
 		t.Error("stop did not carry pausedAt; the screen has no state to show")
 	}
-	allowed := map[string]bool{
-		"id": true, "name": true, "provider": true, "modelLabel": true,
-		"lastSeenAt": true, "revokedAt": true, "pausedAt": true, "createdAt": true,
-	}
-	for key := range pauseBody.Runner {
-		if !allowed[key] {
-			t.Errorf("runner carries an undeclared key %q", key)
-		}
-	}
+	assertWireKeys(t, "the stop response", stopped.Body.Bytes(), []string{"runner"}, nil)
+	assertWireKeySet(t, "a stopped runner", pauseBody.Runner, agentRunnerWireKeys.required, agentRunnerWireKeys.optional)
 
 	started := env.do(t, http.MethodPost, "/v1/agent/runners/"+runnerID+"/start", adminToken, nil)
 	if started.Code != http.StatusOK {
@@ -1932,5 +1951,191 @@ func TestTheAdminCanStopAndStartAPairedMachine(t *testing.T) {
 	}
 	if refused := env.do(t, http.MethodPost, "/v1/agent/runners/"+runnerID+"/stop", pair.AccessToken, nil); refused.Code != http.StatusForbidden {
 		t.Errorf("a member stopping a runner = %d, want 403", refused.Code)
+	}
+}
+
+// wireString reads one string key that must be present. Go's case-insensitive
+// JSON matching means decoding into a struct cannot tell `requestedRunnerId`
+// from `requestedRunnerID`; asking the raw map by exact name can.
+func wireString(t *testing.T, what string, fields map[string]json.RawMessage, key string) string {
+	t.Helper()
+	raw, ok := fields[key]
+	if !ok {
+		t.Fatalf("%s carries no %q; it has %s", what, key, strings.Join(keysOf(fields), ", "))
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatalf("decode %s.%s: %v", what, key, err)
+	}
+	return value
+}
+
+// The 0004 contracts use the shipped spellings `host`, request `runnerId` →
+// response `requestedRunnerId`, and `diff` — not the spec's earlier
+// `requestedRunnerID` / `resultDiff`. Renaming them now would break installed
+// builds, which decode with ignoreUnknownKeys off. This walks one project-scoped
+// machine from its pairing code to a finished run and pins every key set on the
+// way; the exact keys are also required where the value is non-empty.
+func TestTheAgentHostTargetingAndDiffKeysAreWhatTheClientDeclares(t *testing.T) {
+	env := newContractEnv(t)
+	ctx := context.Background()
+	token := signInToken(t, env)
+
+	// 1. The app mints a code for a remote machine.
+	issued := env.do(t, http.MethodPost, "/v1/agent/runners/pairing-codes", token, map[string]any{
+		"projectId": env.project.ID, "host": entities.RunnerHostRemote,
+	})
+	if issued.Code != http.StatusCreated {
+		t.Fatalf("issue pairing code: status %d; body %s", issued.Code, issued.Body)
+	}
+	var codeFields map[string]json.RawMessage
+	if err := json.Unmarshal(issued.Body.Bytes(), &codeFields); err != nil {
+		t.Fatalf("decode pairing code: %v", err)
+	}
+	assertWireKeySet(t, "a pairing code", codeFields,
+		pairingCodeWireKeys.required, pairingCodeWireKeys.optional)
+	code := wireString(t, "a pairing code", codeFields, "code")
+	if !strings.HasPrefix(code, "ttpc_") {
+		t.Errorf("code = %q, want the ttpc_ prefix", code)
+	}
+	if host := wireString(t, "a pairing code", codeFields, "host"); host != entities.RunnerHostRemote {
+		t.Errorf("pairing code host = %q, want %q", host, entities.RunnerHostRemote)
+	}
+
+	// 2. The CLI spends the code. The runner inherits the code's host and project
+	// rather than choosing its own.
+	paired := env.do(t, http.MethodPost, "/v1/agent/pair", "", map[string]any{
+		"code": code, "name": "vps-box", "provider": "echo", "modelLabel": "",
+	})
+	if paired.Code != http.StatusCreated {
+		t.Fatalf("pair: status %d; body %s", paired.Code, paired.Body)
+	}
+	assertWireKeys(t, "the pair response", paired.Body.Bytes(), []string{"runner", "token"}, nil)
+	var pairEnvelope struct {
+		Runner map[string]json.RawMessage `json:"runner"`
+		Token  string                     `json:"token"`
+	}
+	if err := json.Unmarshal(paired.Body.Bytes(), &pairEnvelope); err != nil {
+		t.Fatalf("decode pair: %v", err)
+	}
+	assertWireKeySet(t, "a paired runner", pairEnvelope.Runner,
+		pairedRunnerWireKeys.required, pairedRunnerWireKeys.optional)
+	runnerID := wireString(t, "a paired runner", pairEnvelope.Runner, "id")
+	if host := wireString(t, "a paired runner", pairEnvelope.Runner, "host"); host != entities.RunnerHostRemote {
+		t.Errorf("paired runner host = %q, want the code's %q", host, entities.RunnerHostRemote)
+	}
+	if projectID := wireString(t, "a paired runner", pairEnvelope.Runner, "projectId"); projectID != string(env.project.ID) {
+		t.Errorf("paired runner projectId = %q, want %q", projectID, env.project.ID)
+	}
+
+	// 3. The settings roster reads the same host through the app shape.
+	roster := env.do(t, http.MethodGet, "/v1/agent/runners", token, nil)
+	if roster.Code != http.StatusOK {
+		t.Fatalf("list runners: status %d; body %s", roster.Code, roster.Body)
+	}
+	assertWireKeys(t, "the runner roster", roster.Body.Bytes(), []string{"runners"}, nil)
+	var rosterBody struct {
+		Runners []map[string]json.RawMessage `json:"runners"`
+	}
+	if err := json.Unmarshal(roster.Body.Bytes(), &rosterBody); err != nil {
+		t.Fatalf("decode roster: %v", err)
+	}
+	if len(rosterBody.Runners) != 1 {
+		t.Fatalf("roster has %d runners, want the one just paired", len(rosterBody.Runners))
+	}
+	assertWireKeySet(t, "a listed runner", rosterBody.Runners[0],
+		agentRunnerWireKeys.required, agentRunnerWireKeys.optional)
+	if host := wireString(t, "a listed runner", rosterBody.Runners[0], "host"); host != entities.RunnerHostRemote {
+		t.Errorf("listed runner host = %q, want %q — the settings label would be blank", host, entities.RunnerHostRemote)
+	}
+
+	// 4. Dispatch names that machine. The request key is `runnerId`; the response
+	// key is `requestedRunnerId`, and a capital-D spelling would NOT be the same
+	// key to the Kotlin decoder.
+	item := &entities.WorkItem{
+		ProjectID: env.project.ID,
+		Key:       "TT-1",
+		Title:     "Fix the thing",
+		Status:    entities.WorkItemStatusInProgress,
+		Priority:  entities.PriorityHigh,
+	}
+	if err := entities.NewWorkItemRepository(env.database).Create(ctx, item); err != nil {
+		t.Fatalf("create work item: %v", err)
+	}
+	dispatch := env.do(t, http.MethodPost, "/v1/agent/runs", token, map[string]any{
+		"workItemId": item.ID, "runnerId": runnerID,
+	})
+	if dispatch.Code != http.StatusCreated {
+		t.Fatalf("targeted dispatch: status %d; body %s", dispatch.Code, dispatch.Body)
+	}
+	assertWireKeys(t, "the dispatch response", dispatch.Body.Bytes(), []string{"run"}, nil)
+	var dispatchBody struct {
+		Run map[string]json.RawMessage `json:"run"`
+	}
+	if err := json.Unmarshal(dispatch.Body.Bytes(), &dispatchBody); err != nil {
+		t.Fatalf("decode dispatched run: %v", err)
+	}
+	assertWireKeySet(t, "a targeted run", dispatchBody.Run,
+		agentRunWireKeys.required, agentRunWireKeys.optional)
+	if got := wireString(t, "a targeted run", dispatchBody.Run, "requestedRunnerId"); got != runnerID {
+		t.Errorf("requestedRunnerId = %q, want %q — the picker's choice was dropped", got, runnerID)
+	}
+	if _, ok := dispatchBody.Run["requestedRunnerID"]; ok {
+		t.Error("the run carries requestedRunnerID; the shipped key is requestedRunnerId")
+	}
+	runID := wireString(t, "a targeted run", dispatchBody.Run, "id")
+
+	// 5. Claim with the runner token and finish with a diff.
+	claimed := env.do(t, http.MethodPost, "/v1/agent/runs/claim", pairEnvelope.Token, map[string]any{"waitSeconds": 0})
+	if claimed.Code != http.StatusOK {
+		t.Fatalf("claim: status %d; body %s", claimed.Code, claimed.Body)
+	}
+	const diffText = "diff --git a/app.go b/app.go\n+one line\n"
+	finished := env.do(t, http.MethodPost, "/v1/agent/runs/"+runID+"/finish", pairEnvelope.Token, map[string]any{
+		"outcome": "succeeded", "summary": "done", "error": "", "diff": diffText,
+	})
+	if finished.Code != http.StatusOK {
+		t.Fatalf("finish: status %d; body %s", finished.Code, finished.Body)
+	}
+
+	detail := env.do(t, http.MethodGet, "/v1/agent/runs/"+runID+"?afterSeq=0", token, nil)
+	if detail.Code != http.StatusOK {
+		t.Fatalf("run detail: status %d; body %s", detail.Code, detail.Body)
+	}
+	assertWireKeys(t, "the run detail", detail.Body.Bytes(), []string{"run", "events", "hasMore"}, nil)
+	var detailBody struct {
+		Run map[string]json.RawMessage `json:"run"`
+	}
+	if err := json.Unmarshal(detail.Body.Bytes(), &detailBody); err != nil {
+		t.Fatalf("decode run detail: %v", err)
+	}
+	assertWireKeySet(t, "a finished run", detailBody.Run,
+		agentRunWireKeys.required, agentRunWireKeys.optional)
+	if got := wireString(t, "a finished run", detailBody.Run, "diff"); got != diffText {
+		t.Errorf("diff = %q, want the runner's captured diff verbatim", got)
+	}
+	if _, ok := detailBody.Run["resultDiff"]; ok {
+		t.Error("the run carries resultDiff; the shipped key is diff")
+	}
+
+	// The editor's run list uses the same shape, so the diff sheet sees it there
+	// too rather than only on the progress sheet.
+	list := env.do(t, http.MethodGet, "/v1/agent/runs?workItemId="+string(item.ID), token, nil)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list runs: status %d; body %s", list.Code, list.Body)
+	}
+	var listBody struct {
+		Runs []map[string]json.RawMessage `json:"runs"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &listBody); err != nil {
+		t.Fatalf("decode run list: %v", err)
+	}
+	if len(listBody.Runs) != 1 {
+		t.Fatalf("run list has %d runs, want one", len(listBody.Runs))
+	}
+	assertWireKeySet(t, "a listed run", listBody.Runs[0],
+		agentRunWireKeys.required, agentRunWireKeys.optional)
+	if got := wireString(t, "a listed run", listBody.Runs[0], "diff"); got != diffText {
+		t.Errorf("listed run diff = %q, want the captured diff", got)
 	}
 }
