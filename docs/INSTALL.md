@@ -490,6 +490,26 @@ either a local model server or an API key for a hosted one.
 
 ### 1. Pair the machine
 
+**Pair with a project-scoped code (preferred).** In the app's Agent panel, state
+whether this machine is a `desktop` or a `remote` host, mint a one-use `ttpc_…`
+code, and copy the command it shows. Run it on the machine holding the checkout:
+
+```bash
+tt agent connect --pairing-code ttpc_… \
+  --name workstation --provider openai-compatible --model llama3.1
+```
+
+The code is the credential for that one call: the server spends it, binds the
+runner to the code's project and host, and returns the runner token. No email or
+password is read, and the machine keeps only the token. Leave `--server` out and
+connect asks for the server URL; do not pass `--email` together with
+`--pairing-code`. Codes expire in ten minutes, and invalid, spent and expired
+codes are all refused identically — get a fresh code from the app rather than
+retrying the same one.
+
+**Older machine-wide registration.** Without a code, `tt agent connect` can sign
+in once with an account email and password:
+
 ```bash
 tt agent connect \
   --server http://192.168.1.20:8080 \
@@ -500,27 +520,16 @@ tt agent connect \
   --base-url http://localhost:11434/v1
 ```
 
-It signs in once, registers this machine, and writes the runner credential to
-`~/.config/tasktracker/agent.json` (mode `0600`), or to `$TT_AGENT_CONFIG` when
-that is set. The password is used once and is not stored. Run
+That registers a machine with no project assignment or host. It can still claim
+untargeted runs, but it does not appear in a project's Agent panel machine
+roster, cannot be chosen as a dispatch target, and its host reads "not stated".
+Use a pairing code whenever you want the machine tied to one project and visible
+in the target picker.
+
+Both paths write the same credential to `~/.config/tasktracker/agent.json`
+(mode `0600`), or to `$TT_AGENT_CONFIG` when that is set. A password is used once
+and is not stored; `tt agent run` cannot tell how the machine was paired. Run
 `tt agent connect --force` to replace an existing pairing.
-
-**Pairing with a project-scoped code (preferred).** The app's Agent panel can
-mint a one-use `ttpc_…` code and shows the command to copy. Run it on the machine
-that holds the checkout:
-
-```bash
-tt agent connect --pairing-code ttpc_… \
-  --name workstation --provider openai-compatible --model llama3.1
-```
-
-The code is the credential for that one call: the server spends it, binds the
-runner to the code's project, and returns the runner token. No email or password
-is read, and the machine keeps only the token. Leave `--server` out and connect
-asks for the server URL; do not pass `--email` together with `--pairing-code`.
-Codes expire in ten minutes, and invalid, spent and expired codes are all refused
-identically — get a fresh code from the app rather than retrying the same one.
-Both paths write the same config, so `tt agent run` works either way.
 
 | Provider | Reaches | Needs |
 | --- | --- | --- |
@@ -554,13 +563,21 @@ one run, `--max-steps` (default 25) to bound a run that never finishes, and
 configuration. Without `--api-key`, `TT_AGENT_API_KEY` is used.
 
 While the worker is connected, a task in progress in the app offers **Send to
-agent**. The editor then shows the run's status, its latest step, the event log,
-and **Cancel run**. Cancel is cooperative: the runner observes it at its next
-heartbeat (20 s by default), so the status stays live for a moment after the tap.
+agent**. The target picker lets you choose one machine: the server pins the run
+to that machine, and only it may claim it. A machine that is revoked, paused, or
+belongs to another project is refused with `409` before the run is queued; leave
+the picker unset and any eligible machine may claim the run. The editor then
+shows the run's status, its latest step, the event log, and **Cancel run**; a
+finished run with a diff also opens the diff sheet.
 
-Review the diff before committing. The agent writes real files and runs real
-commands in the workspace; treat it as a colleague's uncommitted branch, not as
-a trusted build step.
+Cancel is cooperative: the runner observes it at its next heartbeat (20 s by
+default), so the status stays live for a moment after the tap.
+
+Review the diff before committing. A finished run carries the workspace diff the
+worker captured (truncated at 200,000 bytes) and the app shows it in the diff
+sheet; the server stores it for review and never applies it. The agent writes
+real files and runs real commands in the workspace; treat it as a colleague's
+uncommitted branch, not as a trusted build step.
 
 ### 4. Stop or unpair
 
@@ -577,6 +594,12 @@ could not be retired; use **Revoke** in the app once it is back.
 | Symptom | Cause | Fix |
 | --- | --- |
 | `tt agent run: not connected` | No pairing on this machine | `tt agent connect` |
+| `already connected (…)` | A config already exists on this machine | `tt agent disconnect`, or `tt agent connect --force` |
+| `pairing code is invalid or expired` | The `ttpc_…` code was spent, mistyped, or is older than ten minutes | Mint a fresh code in the app; retrying the same one is always refused |
+| `--pairing-code needs a ttpc_… code` | The flag was passed with an empty value | Paste the whole code, or use `--email` instead |
+| `--pairing-code replaces --email` | Both credentials were supplied | Pass one or the other, not both |
+| Machine missing from the Agent panel | The older `--email` path registers no project | Re-pair with a project-scoped code (step 1) |
+| `runner is not available for this project` | The chosen target is revoked, paused, or not scoped to the project | Re-pair that machine, or dispatch without a target |
 | `unknown provider` | A provider name this build does not run | Use `openai-compatible`, `anthropic` or `echo` |
 | `provider … needs a model` | No `--model` at connect or run time | Pass `--model`, or `tt agent connect --force --model …` |
 | `model endpoint answered 404` | `--base-url` is not the API root | Ollama is `http://localhost:11434/v1`; OpenAI is `https://api.openai.com/v1` |
