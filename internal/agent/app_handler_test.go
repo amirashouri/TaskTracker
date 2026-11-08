@@ -546,7 +546,7 @@ func TestPairingCodeIsSingleUseAndProjectScoped(t *testing.T) {
 	}
 
 	expiredCode := pairingTokenPrefix + "expired"
-	if err := e.repo.CreatePairingCode(ctx, HashRunnerToken(expiredCode), e.project.ID, e.user.ID, entities.Timestamp(1)); err != nil {
+	if err := e.repo.CreatePairingCode(ctx, HashRunnerToken(expiredCode), e.project.ID, e.user.ID, entities.RunnerHostRemote, entities.Timestamp(1)); err != nil {
 		t.Fatalf("create expired code: %v", err)
 	}
 	expired := e.do(t, http.HandlerFunc(e.handler.Pair), http.MethodPost, "/v1/agent/pair", "", "", map[string]any{

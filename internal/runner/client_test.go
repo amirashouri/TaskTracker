@@ -85,7 +85,7 @@ func TestClientSendsTheRunnerContract(t *testing.T) {
 		t.Errorf("Heartbeat = %v, %v; want true", cancelRequested, err)
 	}
 
-	if err := client.Finish(ctx, run.ID, "succeeded", "done", ""); err != nil {
+	if err := client.Finish(ctx, run.ID, "succeeded", "done", "", ""); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
 	if err := client.RevokeSelf(ctx); err != nil {

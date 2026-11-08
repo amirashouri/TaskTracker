@@ -18,6 +18,7 @@ var ErrPairingCodeInvalid = errors.New("pairing code is invalid or expired")
 type AgentPairing struct {
 	ProjectID ProjectID
 	CreatedBy UserID
+	Host      string
 	ExpiresAt Timestamp
 	CreatedAt Timestamp
 }
@@ -27,7 +28,7 @@ type AgentPairing struct {
 // The caller mints the code, hashes it, and keeps the plaintext only long enough
 // to return it once. The repository never sees the value, which is the same
 // arrangement RegisterRunner uses for a runner token.
-func (r *AgentRepository) CreatePairingCode(ctx context.Context, codeHash string, projectID ProjectID, createdBy UserID, expiresAt Timestamp) error {
+func (r *AgentRepository) CreatePairingCode(ctx context.Context, codeHash string, projectID ProjectID, createdBy UserID, host string, expiresAt Timestamp) error {
 	if strings.TrimSpace(codeHash) == "" {
 		return errors.New("pairing code hash is required")
 	}
@@ -39,9 +40,9 @@ func (r *AgentRepository) CreatePairingCode(ctx context.Context, codeHash string
 	}
 
 	_, err := r.db.ExecContext(ctx, `INSERT INTO agent_pairing_codes
-	          (code_hash, project_id, created_by, expires_at, created_at)
-	          VALUES ($1, $2, $3, $4, $5)`,
-		codeHash, projectID, createdBy, expiresAt, Now())
+	          (code_hash, project_id, created_by, host, expires_at, created_at)
+	          VALUES ($1, $2, $3, $4, $5, $6)`,
+		codeHash, projectID, createdBy, host, expiresAt, Now())
 	return err
 }
 
@@ -63,8 +64,8 @@ func (r *AgentRepository) PairRunner(ctx context.Context, codeHash string, now T
 		err := q.QueryRowContext(ctx, `UPDATE agent_pairing_codes
 		          SET used_at = $1
 		          WHERE code_hash = $2 AND used_at IS NULL AND expires_at > $1
-		          RETURNING project_id, created_by, expires_at, created_at`,
-			now, codeHash).Scan(&pairing.ProjectID, &pairing.CreatedBy, &pairing.ExpiresAt, &pairing.CreatedAt)
+		          RETURNING project_id, created_by, host, expires_at, created_at`,
+			now, codeHash).Scan(&pairing.ProjectID, &pairing.CreatedBy, &pairing.Host, &pairing.ExpiresAt, &pairing.CreatedAt)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrPairingCodeInvalid
 		}
@@ -77,6 +78,7 @@ func (r *AgentRepository) PairRunner(ctx context.Context, codeHash string, now T
 		runner.UserID = pairing.CreatedBy
 		projectID := pairing.ProjectID
 		runner.ProjectID = &projectID
+		runner.Host = pairing.Host
 		return insertRunner(ctx, q, runner, tokenHash)
 	})
 	if err != nil {

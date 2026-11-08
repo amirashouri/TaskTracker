@@ -23,6 +23,10 @@ const (
 	// maxEventsPerBatch keeps one request from carrying an unbounded log. A
 	// worker batches its stream and sends what is here.
 	maxEventsPerBatch = 200
+	// maxRunDiffLength bounds what one finish may store. A diff is a review aid,
+	// not an artifact store; the client renders plain text and does not download
+	// an unbounded workspace.
+	maxRunDiffLength = 200_000
 )
 
 // Handler serves the runner API. It owns no lifecycle rules the repository does
@@ -265,6 +269,9 @@ type finishRequest struct {
 	Outcome string `json:"outcome"`
 	Summary string `json:"summary"`
 	Error   string `json:"error"`
+	// Diff is the runner's captured workspace diff. It is optional, so an older
+	// worker finishes exactly as before.
+	Diff string `json:"diff"`
 }
 
 type finishResponse struct {
@@ -293,7 +300,11 @@ func (h *Handler) Finish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, err := h.repo.FinishRun(r.Context(), entities.AgentRunID(r.PathValue("id")), runner.ID, status, req.Summary, req.Error)
+	diff := req.Diff
+	if len(diff) > maxRunDiffLength {
+		diff = diff[:maxRunDiffLength]
+	}
+	run, err := h.repo.FinishRun(r.Context(), entities.AgentRunID(r.PathValue("id")), runner.ID, status, req.Summary, req.Error, diff)
 	switch {
 	case errors.Is(err, entities.ErrAgentRunNotClaimed):
 		httpx.WriteError(w, http.StatusConflict, "run is not claimed by this runner")
@@ -342,6 +353,7 @@ type pairedRunnerResponse struct {
 	Name       string                 `json:"name"`
 	Provider   string                 `json:"provider"`
 	ModelLabel string                 `json:"modelLabel"`
+	Host       string                 `json:"host,omitempty"`
 	CreatedAt  entities.Timestamp     `json:"createdAt"`
 }
 
@@ -405,6 +417,7 @@ func (h *Handler) Pair(w http.ResponseWriter, r *http.Request) {
 			Name:       paired.Name,
 			Provider:   paired.Provider,
 			ModelLabel: paired.ModelLabel,
+			Host:       paired.Host,
 			CreatedAt:  paired.CreatedAt,
 		},
 		Token: token,

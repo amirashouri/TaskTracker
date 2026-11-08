@@ -29,6 +29,9 @@ type Result struct {
 	Outcome string
 	Summary string
 	Detail  string
+	// Diff is the workspace's git diff after a successful run, when the
+	// workspace is a git checkout. Empty otherwise.
+	Diff string
 }
 
 // EchoProvider reports the task it was given and finishes. It is deterministic,
@@ -196,7 +199,7 @@ func (w *Worker) execute(ctx context.Context, run *Run) {
 		outcome = "failed"
 	}
 
-	if err := w.Client.Finish(reportCtx, run.ID, outcome, result.Summary, result.Detail); err != nil {
+	if err := w.Client.Finish(reportCtx, run.ID, outcome, result.Summary, result.Detail, result.Diff); err != nil {
 		w.logf("finish %s: %v", run.ID, err)
 		return
 	}

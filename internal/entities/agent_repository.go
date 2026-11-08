@@ -64,6 +64,13 @@ func (s AgentRunStatus) IsTerminal() bool {
 type AgentRunID string
 type AgentRunnerID string
 
+// The two host kinds the pairing sheet offers. Empty is a legacy or
+// older-client registration whose host was never stated.
+const (
+	RunnerHostDesktop = "desktop"
+	RunnerHostRemote  = "remote"
+)
+
 func NewAgentRunID() AgentRunID       { return AgentRunID(newVersion()) }
 func NewAgentRunnerID() AgentRunnerID { return AgentRunnerID(newVersion()) }
 
@@ -83,6 +90,9 @@ type AgentRunner struct {
 	Name       string     `json:"name"`
 	Provider   string     `json:"provider"`
 	ModelLabel string     `json:"modelLabel"`
+	// Host is the pairing sheet's desktop/remote choice. Empty means the code
+	// predates the choice or the machine was registered by the legacy CLI.
+	Host       string     `json:"host,omitempty"`
 	LastSeenAt *Timestamp `json:"lastSeenAt,omitempty"`
 	RevokedAt  *Timestamp `json:"revokedAt,omitempty"`
 	// PausedAt is the reversible stop. A paused machine keeps its token and can
@@ -105,24 +115,30 @@ func (r *AgentRunner) Paused() bool { return r.PausedAt != nil }
 // rather than typed columns so a detail added later cannot change a response
 // key set a pinned client is decoding.
 type AgentRun struct {
-	ID              AgentRunID     `json:"id"`
-	WorkItemID      WorkItemID     `json:"workItemId"`
-	ProjectID       ProjectID      `json:"projectId"`
-	RequestedBy     UserID         `json:"requestedBy"`
-	RunnerID        *AgentRunnerID `json:"runnerId,omitempty"`
-	Status          AgentRunStatus `json:"status"`
-	CancelRequested bool           `json:"cancelRequested"`
-	TaskDocument    string         `json:"-"`
-	LeaseExpiresAt  *Timestamp     `json:"-"`
+	ID          AgentRunID     `json:"id"`
+	WorkItemID  WorkItemID     `json:"workItemId"`
+	ProjectID   ProjectID      `json:"projectId"`
+	RequestedBy UserID         `json:"requestedBy"`
+	RunnerID    *AgentRunnerID `json:"runnerId,omitempty"`
+	// RequestedRunnerID is the machine the dispatcher chose. It is not the same
+	// as RunnerID, which is only set once a machine actually claims the run.
+	RequestedRunnerID *AgentRunnerID `json:"requestedRunnerId,omitempty"`
+	Status            AgentRunStatus `json:"status"`
+	CancelRequested   bool           `json:"cancelRequested"`
+	TaskDocument      string         `json:"-"`
+	LeaseExpiresAt    *Timestamp     `json:"-"`
 	// IdempotencyKey is the client's per-dispatch key. It never leaves the
 	// server: the run it names is returned as the normal run object. Empty
 	// means the caller sent none, which is the pre-idempotency behaviour.
-	IdempotencyKey string     `json:"-"`
-	Summary        string     `json:"summary"`
-	Error          string     `json:"error"`
-	CreatedAt      Timestamp  `json:"createdAt"`
-	StartedAt      *Timestamp `json:"startedAt,omitempty"`
-	FinishedAt     *Timestamp `json:"finishedAt,omitempty"`
+	IdempotencyKey string `json:"-"`
+	Summary        string `json:"summary"`
+	Error          string `json:"error"`
+	// Diff is the runner's git diff, captured after a successful run. Empty on
+	// failures, cancellations, and workspaces that are not git repositories.
+	Diff       string     `json:"diff,omitempty"`
+	CreatedAt  Timestamp  `json:"createdAt"`
+	StartedAt  *Timestamp `json:"startedAt,omitempty"`
+	FinishedAt *Timestamp `json:"finishedAt,omitempty"`
 }
 
 // AgentRunEvent is one line in the run's progress log.
@@ -147,15 +163,15 @@ func NewAgentRepository(db Querier) *AgentRepository {
 	return &AgentRepository{db: db}
 }
 
-const agentRunColumns = `id, work_item_id, project_id, requested_by, runner_id, status, cancel_requested, task_document, lease_expires_at, summary, error, created_at, started_at, finished_at, idempotency_key`
+const agentRunColumns = `id, work_item_id, project_id, requested_by, runner_id, requested_runner_id, status, cancel_requested, task_document, lease_expires_at, summary, error, result_diff, created_at, started_at, finished_at, idempotency_key`
 
 func scanAgentRun(row scanner, run *AgentRun) error {
-	var runnerID sql.NullString
+	var runnerID, requestedRunnerID sql.NullString
 	var lease, started, finished sql.NullInt64
 
 	if err := row.Scan(&run.ID, &run.WorkItemID, &run.ProjectID, &run.RequestedBy, &runnerID,
-		&run.Status, &run.CancelRequested, &run.TaskDocument, &lease, &run.Summary, &run.Error,
-		&run.CreatedAt, &started, &finished, &run.IdempotencyKey); err != nil {
+		&requestedRunnerID, &run.Status, &run.CancelRequested, &run.TaskDocument, &lease,
+		&run.Summary, &run.Error, &run.Diff, &run.CreatedAt, &started, &finished, &run.IdempotencyKey); err != nil {
 		return err
 	}
 
@@ -163,20 +179,24 @@ func scanAgentRun(row scanner, run *AgentRun) error {
 		id := AgentRunnerID(runnerID.String)
 		run.RunnerID = &id
 	}
+	if requestedRunnerID.Valid {
+		id := AgentRunnerID(requestedRunnerID.String)
+		run.RequestedRunnerID = &id
+	}
 	run.LeaseExpiresAt = timestampOrNil(lease)
 	run.StartedAt = timestampOrNil(started)
 	run.FinishedAt = timestampOrNil(finished)
 	return nil
 }
 
-const agentRunnerColumns = `id, user_id, project_id, name, provider, model_label, last_seen_at, revoked_at, created_at, paused_at`
+const agentRunnerColumns = `id, user_id, project_id, name, provider, model_label, last_seen_at, revoked_at, created_at, paused_at, host`
 
 func scanAgentRunner(row scanner, runner *AgentRunner) error {
 	var projectID sql.NullString
 	var lastSeen, revoked, paused sql.NullInt64
 
 	if err := row.Scan(&runner.ID, &runner.UserID, &projectID, &runner.Name, &runner.Provider, &runner.ModelLabel,
-		&lastSeen, &revoked, &runner.CreatedAt, &paused); err != nil {
+		&lastSeen, &revoked, &runner.CreatedAt, &paused, &runner.Host); err != nil {
 		return err
 	}
 	if projectID.Valid {
@@ -206,9 +226,9 @@ func (r *AgentRepository) CreateRun(ctx context.Context, run *AgentRun) error {
 	}
 
 	_, err := r.db.ExecContext(ctx, `INSERT INTO agent_runs (`+agentRunColumns+`)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-		run.ID, run.WorkItemID, run.ProjectID, run.RequestedBy, run.RunnerID, run.Status,
-		run.CancelRequested, run.TaskDocument, run.LeaseExpiresAt, run.Summary, run.Error,
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+		run.ID, run.WorkItemID, run.ProjectID, run.RequestedBy, run.RunnerID, run.RequestedRunnerID, run.Status,
+		run.CancelRequested, run.TaskDocument, run.LeaseExpiresAt, run.Summary, run.Error, run.Diff,
 		run.CreatedAt, run.StartedAt, run.FinishedAt, run.IdempotencyKey)
 	if err != nil && agentRunAlreadyActive(err) {
 		return ErrAgentRunActive
@@ -287,10 +307,10 @@ func (r *AgentRepository) ClaimRun(ctx context.Context, runnerID AgentRunnerID, 
 	              lease_expires_at = $2,
 	              started_at = COALESCE(started_at, $3)
 	          WHERE id = (
-	                  SELECT id FROM agent_runs
-	                   WHERE status = 'queued'
-	                     AND requested_by = $4
-	                     AND project_id IN (SELECT project_id FROM project_members WHERE user_id = $4)
+	                  SELECT id FROM agent_runs				   WHERE status = 'queued'
+				     AND requested_by = $4
+				     AND (requested_runner_id IS NULL OR requested_runner_id = $1)
+				     AND project_id IN (SELECT project_id FROM project_members WHERE user_id = $4)
 	                     -- A project-scoped machine sees only its own project's
 	                     -- queue. The condition belongs inside the candidate
 	                     -- selection: after LIMIT 1 it would let an older run from
@@ -398,7 +418,7 @@ func (r *AgentRepository) HeartbeatRun(ctx context.Context, runID AgentRunID, ru
 // finish and gets the stored run back instead of an error, because the work is
 // already done and re-reporting it must not fail. It is not open to a worker
 // that never held the run.
-func (r *AgentRepository) FinishRun(ctx context.Context, runID AgentRunID, runnerID AgentRunnerID, status AgentRunStatus, summary, detail string) (*AgentRun, error) {
+func (r *AgentRepository) FinishRun(ctx context.Context, runID AgentRunID, runnerID AgentRunnerID, status AgentRunStatus, summary, detail, diff string) (*AgentRun, error) {
 	switch status {
 	case AgentRunSucceeded, AgentRunFailed, AgentRunCancelled:
 	default:
@@ -406,10 +426,10 @@ func (r *AgentRepository) FinishRun(ctx context.Context, runID AgentRunID, runne
 	}
 
 	row := r.db.QueryRowContext(ctx, `UPDATE agent_runs
-	          SET status = $1, summary = $2, error = $3, finished_at = $4, lease_expires_at = NULL
-	          WHERE id = $5 AND runner_id = $6 AND status IN ('claimed', 'running')
+	          SET status = $1, summary = $2, error = $3, result_diff = $4, finished_at = $5, lease_expires_at = NULL
+	          WHERE id = $6 AND runner_id = $7 AND status IN ('claimed', 'running')
 	          RETURNING `+agentRunColumns,
-		status, summary, detail, Now(), runID, runnerID)
+		status, summary, detail, diff, Now(), runID, runnerID)
 
 	run, err := oneOrNil(row, scanAgentRun)
 	if err != nil {
@@ -549,6 +569,14 @@ func (r *AgentRepository) RegisterRunner(ctx context.Context, runner *AgentRunne
 	return insertRunner(ctx, r.db, runner, tokenHash)
 }
 
+// GetRunner reads one machine by id. The caller authorizes the read; this is
+// used by dispatch to check that a chosen machine belongs to the project and
+// the requester before it is written onto the run.
+func (r *AgentRepository) GetRunner(ctx context.Context, id AgentRunnerID) (*AgentRunner, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT `+agentRunnerColumns+` FROM agent_runners WHERE id = $1`, id)
+	return oneOrNil(row, scanAgentRunner)
+}
+
 // insertRunner is shared by registration and pairing so the two paths cannot
 // disagree about the columns, the id hash, or the timestamps. The write names
 // token_hash explicitly: agentRunnerColumns is the read projection, and that
@@ -563,10 +591,10 @@ func insertRunner(ctx context.Context, q Querier, runner *AgentRunner, tokenHash
 	}
 
 	_, err := q.ExecContext(ctx, `INSERT INTO agent_runners
-	          (id, user_id, project_id, name, token_hash, provider, model_label, last_seen_at, revoked_at, created_at, paused_at)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+	          (id, user_id, project_id, name, token_hash, provider, model_label, last_seen_at, revoked_at, created_at, paused_at, host)
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		runner.ID, runner.UserID, nullableProjectID(runner.ProjectID), runner.Name, tokenHash, runner.Provider, runner.ModelLabel,
-		runner.LastSeenAt, runner.RevokedAt, runner.CreatedAt, runner.PausedAt)
+		runner.LastSeenAt, runner.RevokedAt, runner.CreatedAt, runner.PausedAt, runner.Host)
 	return err
 }
 

@@ -136,12 +136,13 @@ func (h *ProjectHandler) OpenItems(w http.ResponseWriter, r *http.Request) {
 // being created has no archived state and no items, so a client has nothing to
 // say about them, and the create's own default is the only correct one.
 type createProjectRequest struct {
-	ID        string   `json:"id"`
-	KeyPrefix string   `json:"keyPrefix"`
-	Name      string   `json:"name"`
-	Details   string   `json:"details"`
-	RepoURL   string   `json:"repoUrl"`
-	MemberIDs []string `json:"memberIds"`
+	ID           string   `json:"id"`
+	KeyPrefix    string   `json:"keyPrefix"`
+	Name         string   `json:"name"`
+	Details      string   `json:"details"`
+	RepoURL      string   `json:"repoUrl"`
+	AgentEnabled bool     `json:"agentEnabled"`
+	MemberIDs    []string `json:"memberIds"`
 }
 
 // Create writes a project and its change-feed entry in one transaction, so the
@@ -178,12 +179,13 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	project := &entities.Project{
-		ID:        entities.ProjectID(strings.TrimSpace(req.ID)),
-		KeyPrefix: keyPrefix,
-		Name:      name,
-		Details:   req.Details,
-		RepoURL:   repoURL,
-		MemberIDs: members,
+		ID:           entities.ProjectID(strings.TrimSpace(req.ID)),
+		KeyPrefix:    keyPrefix,
+		Name:         name,
+		Details:      req.Details,
+		RepoURL:      repoURL,
+		AgentEnabled: req.AgentEnabled,
+		MemberIDs:    members,
 		// The first key a new project issues is `-1`, which is the column's
 		// default as well -- but an insert names the column, so a zero here would
 		// start the project at `-0` and never consult that default.

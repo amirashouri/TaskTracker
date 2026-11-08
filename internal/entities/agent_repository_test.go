@@ -98,7 +98,7 @@ func TestCreateRunRefusesASecondLiveRun(t *testing.T) {
 	if _, err := f.repo.ClaimRun(ctx, runner.ID, f.user.ID, lease()); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	if _, err := f.repo.FinishRun(ctx, first.ID, runner.ID, AgentRunSucceeded, "done", ""); err != nil {
+	if _, err := f.repo.FinishRun(ctx, first.ID, runner.ID, AgentRunSucceeded, "done", "", ""); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
 
@@ -326,7 +326,7 @@ func TestEventsAndFinishRequireTheClaimingRunner(t *testing.T) {
 	if _, _, err := f.repo.HeartbeatRun(ctx, run.ID, stranger.ID, lease()); !errors.Is(err, ErrAgentRunNotClaimed) {
 		t.Errorf("heartbeat by another runner = %v, want ErrAgentRunNotClaimed", err)
 	}
-	if _, err := f.repo.FinishRun(ctx, run.ID, stranger.ID, AgentRunSucceeded, "done", ""); !errors.Is(err, ErrAgentRunNotClaimed) {
+	if _, err := f.repo.FinishRun(ctx, run.ID, stranger.ID, AgentRunSucceeded, "done", "", ""); !errors.Is(err, ErrAgentRunNotClaimed) {
 		t.Errorf("finish by another runner = %v, want ErrAgentRunNotClaimed", err)
 	}
 }
@@ -343,7 +343,7 @@ func TestFinishRunIsIdempotentAndFreesTheSlot(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 
-	finished, err := f.repo.FinishRun(ctx, run.ID, runner.ID, AgentRunSucceeded, "TT-12 is implemented", "")
+	finished, err := f.repo.FinishRun(ctx, run.ID, runner.ID, AgentRunSucceeded, "TT-12 is implemented", "", "")
 	if err != nil {
 		t.Fatalf("finish: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestFinishRunIsIdempotentAndFreesTheSlot(t *testing.T) {
 		t.Error("a finished run must not keep a lease")
 	}
 
-	replayed, err := f.repo.FinishRun(ctx, run.ID, runner.ID, AgentRunSucceeded, "TT-12 is implemented", "")
+	replayed, err := f.repo.FinishRun(ctx, run.ID, runner.ID, AgentRunSucceeded, "TT-12 is implemented", "", "")
 	if err != nil {
 		t.Fatalf("retried finish = %v, want success", err)
 	}
@@ -362,7 +362,7 @@ func TestFinishRunIsIdempotentAndFreesTheSlot(t *testing.T) {
 		t.Error("a retried finish restamped finishedAt instead of returning the stored run")
 	}
 
-	if _, err := f.repo.FinishRun(ctx, run.ID, runner.ID, AgentRunQueued, "", ""); err == nil {
+	if _, err := f.repo.FinishRun(ctx, run.ID, runner.ID, AgentRunQueued, "", "", ""); err == nil {
 		t.Error("finishing as a non-terminal status should be refused")
 	}
 }
@@ -535,7 +535,7 @@ func TestListRunsByWorkItemReturnsNewestFirst(t *testing.T) {
 		if _, err := f.repo.ClaimRun(ctx, runner.ID, f.user.ID, lease()); err != nil {
 			t.Fatalf("claim: %v", err)
 		}
-		if _, err := f.repo.FinishRun(ctx, run.ID, runner.ID, AgentRunFailed, "", "boom"); err != nil {
+		if _, err := f.repo.FinishRun(ctx, run.ID, runner.ID, AgentRunFailed, "", "boom", ""); err != nil {
 			t.Fatalf("finish: %v", err)
 		}
 	}
@@ -588,7 +588,7 @@ func TestPausingARunnerStopsClaimsAndFlagsTheLiveRun(t *testing.T) {
 		t.Error("the live run was not flagged for cancel by the stop")
 	}
 
-	if _, err := f.repo.FinishRun(ctx, run.ID, runner.ID, AgentRunCancelled, "stopped", ""); err != nil {
+	if _, err := f.repo.FinishRun(ctx, run.ID, runner.ID, AgentRunCancelled, "stopped", "", ""); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
 	next := f.mustQueueRun(t, f.item.ID, 0)
@@ -704,7 +704,7 @@ func TestClaimRunIsScopedToTheRunnersProject(t *testing.T) {
 	// The legacy registration has no project, so it still sees both projects'
 	// queues. Existing machines cannot be broken by the new scope.
 	legacy := f.mustRegisterRunner(t, f.user, "legacy-machine", "hash-legacy")
-	if _, err := f.repo.FinishRun(ctx, claimed.ID, scoped.ID, AgentRunSucceeded, "done", ""); err != nil {
+	if _, err := f.repo.FinishRun(ctx, claimed.ID, scoped.ID, AgentRunSucceeded, "done", "", ""); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
 	other, err := f.repo.ClaimRun(ctx, legacy.ID, f.user.ID, lease())
