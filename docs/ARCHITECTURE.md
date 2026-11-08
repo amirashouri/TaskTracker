@@ -450,3 +450,35 @@ validation runs, counts, handoffs and per-task file lists were dropped.
   line on older releases — keep both paths or it works only on the author's
   machine. Fake-Docker e2e must put an executable `docker` on `PATH` and isolate
   `HOME`, or it writes to the developer's real install state.
+
+### Agent execution
+
+- **Agents reach out; the server never dials in.** A runner long-polls
+  `POST /v1/agent/runs/claim` and reports progress through `events`,
+  `heartbeat` and `finish`, authenticated by its `ttag_…` machine token — no
+  inbound connectivity to an admin workstation is assumed. Pairing codes
+  (`ttpc_…`) are short-lived, single-use and project-scoped; both kinds of
+  credential are stored only as SHA-256 hashes, which is sufficient for 32
+  random bytes.
+- **Dispatch is not a start.** A run is persisted `queued` before delivery and
+  only a claim moves it onward; the unique
+  `(work_item_id, requested_by, idempotency_key)` index makes a replay return the
+  stored run. A claim is a *lease*, not a lock: `RunLeaseReaper` fails runs whose
+  heartbeats stop, so a crashed worker cannot leave a task looking started.
+  `agentEnabled` on the project refuses dispatch with 409.
+- **`agent_runners.project_id` is nullable on purpose.** NULL is a legacy
+  machine-wide registration that claims across its owner's projects; a paired
+  runner sees only its own project. Claim, events and finish enforce both
+  project scope and the claiming-runner check.
+- **`repoUrl` is admin-only metadata, not a credential.** It is emitted only
+  when non-empty, and only after the client shipped a DTO declaring the key with
+  a default — an older installed client still fails on a project that has one,
+  so deployment order matters. An omitted `repoUrl` on `PATCH` preserves the
+  stored value and a membership sync push cannot write it. Private repository
+  access belongs to the agent's own credential store.
+- **`taskDocument` is a bounded, versioned graph, not a history dump.** Stable
+  namespaced node IDs and directional edges (`DEPENDS_ON` is task →
+  prerequisite), explicit node/tag/dependency/comment/rune limits, and
+  membership-filtered content. The worker receives the stored document
+  verbatim, so a new `schemaVersion` is additive; `targetBranch` stays omitted
+  until project metadata carries a branch.
