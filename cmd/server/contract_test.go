@@ -1167,12 +1167,12 @@ func TestAdminProjectEditSavesTheProjectAndReachesTheFeed(t *testing.T) {
 	}
 }
 
-// The repository URL is stored for the agent brief, but it is not a response key
-// yet: an installed client leaves ignoreUnknownKeys off, so emitting it before a
-// client that declares it ships would fail every project decode. This pins both
-// halves of that gate: the value reaches the row and an omitted key preserves it,
-// while the response keeps the exact key set the client already decodes.
-func TestProjectRepositoryURLIsStoredButNotExposedYet(t *testing.T) {
+// The repository URL is stored for the agent brief and, now that the KMP DTO
+// declares `repoUrl` with a default, emitted on project responses. This pins the
+// round trip: the value reaches the row and an omitted key preserves it, the
+// response carries the agreed key set, a credential-bearing URL is refused, and
+// a membership push cannot change the value.
+func TestProjectRepositoryURLRoundTripsThroughTheAdminRoute(t *testing.T) {
 	env := newContractEnv(t)
 	admin := env.signIn(t)
 	repoURL := "https://github.com/acme/demo.git"
