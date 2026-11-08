@@ -1193,12 +1193,9 @@ func TestProjectRepositoryURLIsStoredButNotExposedYet(t *testing.T) {
 	}
 	assertWireKeys(t, "the admin project with a repository", rec.Body.Bytes(),
 		[]string{
-			"id", "keyPrefix", "name", "details", "tags", "memberIds", "isArchived",
+			"id", "keyPrefix", "name", "details", "repoUrl", "tags", "memberIds", "isArchived",
 			"agentEnabled", "nextItemNumber", "createdAt", "updatedAt", "version",
 		}, []string{"statuses"})
-	if strings.Contains(rec.Body.String(), `"repoUrl"`) {
-		t.Error("the project response gained repoUrl before the client declares it")
-	}
 
 	projects := entities.NewProjectRepository(env.database)
 	stored, err := projects.GetByID(context.Background(), env.project.ID)
@@ -1253,7 +1250,7 @@ func TestProjectRepositoryURLIsStoredButNotExposedYet(t *testing.T) {
 	}
 	assertWireKeys(t, "the created project with a repository", created.Body.Bytes(),
 		[]string{
-			"id", "keyPrefix", "name", "details", "tags", "memberIds", "isArchived",
+			"id", "keyPrefix", "name", "details", "repoUrl", "tags", "memberIds", "isArchived",
 			"agentEnabled", "nextItemNumber", "createdAt", "updatedAt", "version",
 		}, []string{"statuses"})
 	createdStored, err := projects.GetByID(context.Background(), entities.ProjectID(newID))

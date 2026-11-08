@@ -148,13 +148,11 @@ type Project struct {
 	Name      string       `json:"name"`
 	Details   string       `json:"details"`
 	Tags      []ProjectTag `json:"tags"`
-	// RepoURL is where the project's code lives. It is deliberately off the wire:
-	// installed clients do not declare the key and JSONCoding leaves
-	// ignoreUnknownKeys off, so emitting it before a client that declares it
-	// ships would fail every project decode. The agent run graph carries it
-	// explicitly; this tag flips to `repoUrl,omitempty` in the release that
-	// ships the client half, and not before.
-	RepoURL string `json:"-"`
+	// RepoURL is where the project's code lives. It is omitted when empty, so a
+	// project without a repository gains no key. The KMP client now declares
+	// `repoUrl` as an optional field with a default, which is what makes emitting
+	// it safe; the agent run graph also carries it explicitly.
+	RepoURL string `json:"repoUrl,omitempty"`
 	// Statuses is the project's workflow catalog. Omitted when empty so a
 	// response gains no key for a project that has not adopted one.
 	Statuses   []StatusDefinition `json:"statuses,omitempty"`

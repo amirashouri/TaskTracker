@@ -337,13 +337,13 @@ predates the field still decodes every payload. A new project starts with no
 catalog; it is written through the `PATCH` below, exactly as `tags` is.
 
 `repoUrl` is the project's optional repository address. Create and `PATCH`
-accept it (`http`, `https` or `ssh`; a password in the URL is refused) and the
-server stores it for the agent brief, but it is **not a response key yet**:
-installed clients leave `ignoreUnknownKeys` off, so it ships to project
-responses only after a client that declares it with a default is installed.
-Until then every project response keeps its current key set. An omitted
-`repoUrl` in a `PATCH` preserves the stored value rather than clearing it, and
-only this admin route may write it — a membership sync push cannot change it.
+accept it (`http`, `https` or `ssh`; a password in the URL is refused), the
+server stores it for the agent brief, and project responses emit it as
+`repoUrl` **only when non-empty**. The KMP DTO declares the key with a default,
+so a project without a repository and a response from an older server both
+decode as "unset". An omitted `repoUrl` in a `PATCH` preserves the stored value
+rather than clearing it; send an empty string to clear it. Only this admin
+route may write it — a membership sync push cannot change it.
 
 ### `POST /v1/admin/projects` — admin only
 

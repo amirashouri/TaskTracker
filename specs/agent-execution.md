@@ -20,8 +20,8 @@ server-side repository execution. Prefer existing database and server patterns.
 
 Confirmed on `feat/agent-execution`:
 
-- `internal/entities/models.go` — `Project.RepoURL` (off the wire until the
-  client declares it) and the `PushChange.ProjectRepoURL` carrier.
+- `internal/entities/models.go` — `Project.RepoURL` (emitted as
+  `repoUrl,omitempty`) and the `PushChange.ProjectRepoURL` carrier.
 - `internal/entities/project_repository.go` — persist and load `repo_url`.
 - `internal/entities/repo_url.go` — URL validation (http/https/ssh, no password).
 - `internal/entities/agent_repository.go` — project assignment, idempotent
@@ -146,23 +146,26 @@ Tests live beside the code: `internal/entities/{agent_repository,repo_url}_test.
   admin-only validation; `0003` migrations for both drivers; project-scoped
   runner assignment and single-use pairing codes; idempotent dispatch; a
   versioned bounded context graph carried in `taskDocument`; routes, API docs,
-  and contract tests. Focused `go test` passes for `internal/entities`,
-  `internal/admin`, `internal/sync`, `internal/db`, `internal/agent` and
-  `cmd/server`.
-- **Pending:** Project-response `repoUrl` emission, which is gated on the KMP
-  slice; PostgreSQL migration/behavior run when a test URL is available;
+  and contract tests. The KMP DTO now declares `repoUrl` and the runner
+  `projectId` with defaults, so project responses emit `repoUrl,omitempty` and
+  the runner list names its project; the contract key sets were updated. Focused
+  `go test` passes for `internal/entities`, `internal/admin`, `internal/sync`,
+  `internal/db`, `internal/agent` and `cmd/server`.
+- **Pending:** PostgreSQL migration/behavior run when a test URL is available;
   `scripts/check.sh` remains a release gate. Optional follow-ups: `tt agent
-  connect --pairing-code` and a project default branch for `targetBranch`.
-- **Next step:** Implement the KMP half in `TaskTrackerKMP/specs/agent-management.md`:
-  first the defaulted `repoUrl` DTO/persistence/editor slice, then flip
-  `Project.RepoURL` to `repoUrl,omitempty` and update the contract test's pinned
-  key set.
-- **Gotchas:** Do not flip the JSON tag before the client ships —
-  `ignoreUnknownKeys` is off. `repoUrl` is admin-only; the sync `applyProject`
-  preserves it on membership pushes. `agentEnabled` now refuses dispatch with
-  `409`. Pairing codes are `ttpc_`, runner tokens are `ttag_`, and both are
-  stored as SHA-256 hashes only. The graph's `DEPENDS_ON` direction is task →
-  prerequisite.
+  connect --pairing-code`, a project default branch for `targetBranch`, and a
+  project-scoped runner list on the client.
+- **Next step:** Finish `TaskTrackerKMP/specs/agent-management.md`: render the
+  project's paired machines with health and host labels, add the CLI pairing
+  flag, and run the KMP full matrix gate.
+- **Gotchas:** The client declares both fields with defaults, which is the
+  rollout condition for emitting them; an older installed client still fails on
+  a project that *has* a `repoUrl`, so deployment order still matters until the
+  clients in the field ship the defaulted DTO. `repoUrl` is admin-only; the sync
+  `applyProject` preserves it on membership pushes. `agentEnabled` refuses
+  dispatch with `409`. Pairing codes are `ttpc_`, runner tokens are `ttag_`, and
+  both are stored as SHA-256 hashes only. The graph's `DEPENDS_ON` direction is
+  task → prerequisite.
 
 ## Risks / notes
 

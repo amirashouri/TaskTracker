@@ -120,12 +120,16 @@ type appEventResponse struct {
 }
 
 type appRunnerResponse struct {
-	ID         entities.AgentRunnerID `json:"id"`
-	Name       string                 `json:"name"`
-	Provider   string                 `json:"provider"`
-	ModelLabel string                 `json:"modelLabel"`
-	LastSeenAt *entities.Timestamp    `json:"lastSeenAt,omitempty"`
-	RevokedAt  *entities.Timestamp    `json:"revokedAt,omitempty"`
+	ID entities.AgentRunnerID `json:"id"`
+	// ProjectID is the project this machine was paired to. Omitted for a legacy
+	// machine-wide registration, which is still a valid runner. Additive: the
+	// client declares the key with a default, so the older shape decodes.
+	ProjectID  *entities.ProjectID `json:"projectId,omitempty"`
+	Name       string              `json:"name"`
+	Provider   string              `json:"provider"`
+	ModelLabel string              `json:"modelLabel"`
+	LastSeenAt *entities.Timestamp `json:"lastSeenAt,omitempty"`
+	RevokedAt  *entities.Timestamp `json:"revokedAt,omitempty"`
 	// PausedAt is the settings screen's stop state. It is additive: the client
 	// that reads this route declares it with a default, and the build shipped
 	// before this key never called the route at all.
@@ -136,6 +140,7 @@ type appRunnerResponse struct {
 func appRunnerFrom(runner entities.AgentRunner) appRunnerResponse {
 	return appRunnerResponse{
 		ID:         runner.ID,
+		ProjectID:  runner.ProjectID,
 		Name:       runner.Name,
 		Provider:   runner.Provider,
 		ModelLabel: runner.ModelLabel,
