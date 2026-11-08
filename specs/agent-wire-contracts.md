@@ -5,179 +5,149 @@
 - **context:** Completes the agent-execution / agent-management slice by landing the
   wire contracts that were deliberately deferred: the runner host kind (desktop vs
   VPS), per-dispatch runner targeting, the run result diff, and the pairing-code CLI
-  bootstrap. The client UI for all four already exists and is structurally tested
-  (`AgentManagementScenarios`), but it has no server backing yet, and one client DTO
-  gap means the diff never reaches the screen.
+  bootstrap. Implementation is complete; the remaining work is a green release
+  gate before this spec can be retired.
 
-## Current state (verified before writing this spec)
+## Current state (re-verified 2026-11-08)
 
-This is **not** a from-scratch task. Working-tree code already implements most of
-the server side; what is missing is completion, commitment, contract pinning, and a
-cross-repo ACK before any new key is emitted to installed clients.
+This spec was written against a working tree that no longer exists. The `0004`
+migration is committed on `main` for both dialects, the Go wiring for `host`,
+`requested_runner_id` and `result_diff` is in place, dispatch already persists the
+client's chosen `runnerId`, and `internal/runner/client.go` already sends `diff` on
+finish. On the KMP side the run DTO already declares `diff` and
+`requestedRunnerId` with defaults and maps them to `AgentRun`; both the runner and
+pairing DTOs already declare `host`. The "untracked migration", "client diff gap"
+and "silently dropped picker choice" were therefore already resolved before this
+session — and the KMP UI already renders the host label from a nullable `host`.
 
-Server (uncommitted `M` files on `feat/agent-execution`, not yet a clean commit):
-
-- `internal/entities/agent_repository.go` — `agentRunColumns` already lists
-  `requested_runner_id` and `result_diff`; the run scan maps `requestedRunnerID`,
-  the claim query filters `AND (requested_runner_id IS NULL OR requested_runner_id =
-  $1)`, and run completion writes `result_diff`. `agentRunnerColumns` already lists
-  `host`.
-- `internal/entities/agent_pairing.go` — `AgentPairingCode.Host` exists and
-  `CreatePairingCode(..., host string, ...)` already accepts it.
-- `internal/agent/app_handler.go` — dispatch derives `requestedRunnerID` from the
-  chosen runner; pairing-code create/response encode `host`.
-- `internal/db/migrations/0004_agent_targeting.{sqlite,postgres}.sql` — add
-  `agent_runners.host`, `agent_pairing_codes.host`, `agent_runs.requested_runner_id`,
-  `agent_runs.result_diff`. **Untracked (`??` in git):** not committed, so not part
-  of a release. The migration runner discovers files from disk, so they apply
-  locally, but they must be committed and ordered after `0003`.
-
-Client KMP (`TaskTrackerKMP`, see `specs/agent-management.md`):
-
-- `HttpAgentPairingRemote` already sends `host` on pairing-code creation and reads it
-  back; `HttpAgentRunsRemote` already reads `runnerId` and `requestedRunnerId` into
-  `AgentRun`. **Gap:** `HttpAgentRunsRemote`'s run DTO has no `diff`/`resultDiff`
-  field, so `AgentRun.diff` is never populated — the diff sheet (structurally
-  tested with a faked `AgentRun`) shows nothing real from the server.
-- `HttpAgentRunsRemote.dispatch` sends `runnerId`; must be confirmed to align with
-  the server's `requested_runner_id` semantics (the server currently derives
-  `requestedRunnerID` from the claiming runner, not from the request).
-
-Tooling:
-
-- `cmd/tt/agent_connect.go` has **no `--pairing-code` flag** — it is an email-based
-  connect. The pairing-code redemption path the client issues (`ttpc_…` codes) is
-  not implemented as a CLI bootstrap.
-
-Contract test:
-
-- `cmd/server/contract_test.go` does **not** pin `host`, `requestedRunnerID`/
-  `runnerId`, or `resultDiff`. The existing contract test pins response key sets by
-  name, so the new keys must be added there to lock the wire contract.
+The cross-repo ACK ratified the **shipped** names instead of the names this spec
+originally proposed: `host`, dispatch request `runnerId` → run response
+`requestedRunnerId`, and `diff`. `requestedRunnerID` and `resultDiff` were never on
+the wire and are not being adopted. **No KMP source file was edited.**
 
 ## Scope
 
-Server owns the runner host field, per-dispatch targeting, the result diff, the
-`0004` migration and its contract tests, and the `tt agent connect --pairing-code`
-flag. The KMP half owns the run-DTO `diff` mapping and the dispatch-field alignment,
-and is tracked in its own spec (`TaskTrackerKMP/specs/agent-management.md`). This
-branch edits the client only to the extent required to carry the four contracts.
+The server owns the runner host field, per-dispatch targeting, the result diff, the
+`0004` migration, its contract tests, and `tt agent connect --pairing-code`. The KMP
+half is tracked in its own spec (`TaskTrackerKMP/specs/agent-management.md`) and
+needed no DTO work — only a reconciled handoff.
 
-## Files
+## Files (verified or touched on `main`)
 
-Confirmed or to be touched:
-
-- `internal/db/migrations/0004_agent_targeting.{sqlite,postgres}.sql` — commit;
-  verify version order after `0003` and that both drivers are aligned.
-- `internal/entities/agent_repository.go` — verify `requested_runner_id` and
-  `result_diff` round-trip (write on callback, read on list/detail); verify
-  `agent_runners.host` / `agent_pairing_codes.host` are persisted and read.
-- `internal/entities/agent_pairing.go` — verify `CreatePairingCode` persists `host`.
-- `internal/agent/app_handler.go` — align dispatch request `runnerId` with
-  `requested_runner_id`; confirm `host` and `resultDiff` are emitted on the run
-  response.
-- `cmd/server/contract_test.go` — pin the new response keys (`host`,
-  `requestedRunnerID`/`runnerId`, `resultDiff`) and the compatibility gate.
-- `cmd/tt/agent_connect.go` — add `--pairing-code` to redeem a pairing code.
-- `TaskTrackerKMP/.../HttpAgentRunsRemote.kt` — add a defaulted `diff` field to the
-  run DTO and map it to `AgentRun.diff`; confirm dispatch `runnerId` maps to the
-  server's `requested_runner_id`.
+- `internal/db/migrations/0004_agent_targeting.{sqlite,postgres}.sql` — committed
+  and ordered after `0003`; `internal/db/migrate_test.go` now asserts the four
+  columns for both dialects.
+- `internal/entities/agent_repository.go`, `internal/entities/agent_pairing.go` —
+  verified: `host`, `requested_runner_id` and `result_diff` round-trip, and the
+  claim query honours the requested runner.
+- `internal/agent/app_handler.go` — verified: `runnerId` → `requestedRunnerId`,
+  `host` and `diff` emitted; its comment now names the defaulted client DTO.
+- `cmd/server/contract_test.go` — closed key-set pins built from
+  `map[string]json.RawMessage`, plus an end-to-end test walking pairing code →
+  `/v1/agent/pair` → roster → targeted dispatch → claim → finish → run detail/list.
+  A deliberate mutation to `requestedRunnerID` was confirmed to fail the pin and
+  then reverted.
+- `docs/API.md`, `docs/ARCHITECTURE.md` — the written wire contract, its rollout
+  order, and the durable decisions.
+- `cmd/tt/agent_connect.go`, `cmd/tt/agent.go`, `cmd/tt/main.go`,
+  `internal/runner/client.go`, `cmd/tt/agent_test.go`,
+  `internal/runner/client_test.go`, `docs/INSTALL.md` — `--pairing-code`, its
+  `runner.Pair` helper, usage text, install docs and tests.
+- `TaskTrackerKMP/specs/agent-management.md` — matching handoff; no code edits.
 
 ## Contract
 
-- [ ] A runner's host kind (desktop or remote/VPS) is stored on the runner and on
-  the pairing code, returned to the client, and rendered as the existing host label
-  in `ProjectAgentSection`. Empty/`null` means "not stated", not a third kind.
-- [ ] A dispatch can name a specific machine via `requested_runner_id`; the claim
-  query already honors it, and any machine may still claim when it is `NULL`. The
-  client's target picker sends the chosen runner and the server persists it as the
-  requested runner.
-- [ ] A succeeded run returns its git diff (`result_diff`) on the run response; the
-  client maps it to `AgentRun.diff` and the diff sheet shows it. The field is
-  additive and declared with a default on the client.
-- [ ] The `0004` migration is committed and ordered after `0003` for both SQLite and
-  PostgreSQL; migration and repository behavior stay aligned.
-- [ ] `cmd/server/contract_test.go` pins the added response keys so a renamed,
-  gained, or lost key is a hard failure (matching the existing key-set pins).
-- [ ] `tt agent connect --pairing-code <code>` redeems a client-issued pairing code
-  and pairs the local runner, as an alternative to the email flow.
-- [ ] Field names/casing and compatibility rollout are ACKed with the KMP spec
-  before emission: the client already declares `requestedRunnerID` and `diff` with
-  defaults, so the server may emit them; `ignoreUnknownKeys` is off, so no new
-  *required* key may be emitted to an installed client that lacks the defaulted DTO.
-- [ ] Focused server and client tests pin the new behavior and fail if it is removed.
+- [x] A runner's host kind (`desktop` or `remote`) is stored on the runner and on
+  the pairing code, returned to the client, and rendered as the host label in
+  `ProjectAgentSection`. Empty/`null` means "not stated", not a third kind.
+- [x] A dispatch names a specific machine via request `runnerId`; the server
+  persists it as `requested_runner_id`, the claim query honours it, and any machine
+  may still claim when it is `NULL`. The run reports it as `requestedRunnerId`.
+- [x] A succeeded run returns its git diff as `diff` on the run response; the
+  client maps it to `AgentRun.diff` and the diff sheet shows it. The key is additive,
+  `omitempty` on the server and defaulted on the client DTO.
+- [x] The `0004` migration is committed and ordered after `0003` for both SQLite
+  and PostgreSQL; `migrate_test.go` asserts all four columns on both dialects.
+- [x] `cmd/server/contract_test.go` pins the added response keys by exact name, so a
+  renamed, gained or lost key is a hard failure. Verified by a case-only mutation.
+- [x] `tt agent connect --pairing-code <code>` redeems a client-issued pairing code
+  without asking for email or password, refuses an empty code and refuses
+  `--pairing-code` together with `--email`.
+- [x] Field names, casing and the compatibility rollout were ACKed across both
+  repos. The client had already shipped `requestedRunnerId` and `diff` with
+  defaults, so the server may emit them; `ignoreUnknownKeys` stays off and no new
+  required key reaches an installed client.
+- [x] Focused server tests pin the new behavior and fail if it is removed; the KMP
+  agent scenarios and wire-DTO tests pass on the JVM.
 
 ## Subtasks and dependencies
 
-1. **Commit and verify the `0004` migration.** Stage the two `0004` files, confirm
-   they sort after `0003`, and confirm the runner discovers them. Add a SQLite
-   migration test; run PostgreSQL when `TASKTRACKER_TEST_POSTGRES_URL` is available.
-2. **Verify the host round-trip.** Confirm `CreatePairingCode` persists `host`, the
-   pairing-code and runner reads return it, and the run response emits it. The
-   client already sends and renders it.
-3. **Verify targeting and diff round-trip.** Confirm dispatch persists the requested
-   runner as `requested_runner_id`, the claim honors it, and the runner callback
-   writes `result_diff` that the response returns. Align the client dispatch
-   `runnerId` with the server column if the names diverge.
-4. **Close the client diff gap.** Add a defaulted `diff`/`resultDiff` field to the
-   KMP run DTO and map it to `AgentRun.diff` so the diff sheet is populated from the
-   server, not only from a faked `AgentRun`.
-5. **Pin the contract.** Extend `cmd/server/contract_test.go` to lock the new keys
-   and the compatibility gate; add/adjust KMP tests for the diff mapping.
-6. **Add the CLI flag.** Implement `tt agent connect --pairing-code` to redeem a
-   pairing code and pair the local runner.
-7. **Cross-repo ACK and release gate.** Agree the contract with
-   `agent-management.md`, then run `scripts/check.sh full` (KMP) and the server
-   `go test` release gate.
+All seven subtasks from the original plan are complete. The migration, host
+round-trip, targeting/diff round-trip, key pinning, API docs and CLI flag are
+committed on `main`; the "client diff gap" needed no edit because the DTO already
+declared `diff`. What remains is the release gate, not implementation.
 
 ## Non-goal
 
-- [ ] This does not change the agent connectivity model (outbound/poll already
-  supported); it only adds the host/targeting/diff fields and a CLI bootstrap.
-- [ ] It does not add a graph database, message bus, or second deployable.
-- [ ] It does not make the diff a required response field for installed clients that
-  predate the defaulted DTO.
+- [x] No change to the agent connectivity model (outbound/poll is unchanged).
+- [x] No graph database, message bus or second deployable.
+- [x] The diff is not a required response field for installed clients that predate
+  the defaulted DTO.
 
 ## Validation
 
-- Server: `go test ./internal/entities/... ./internal/agent/... ./internal/db/...
-  ./cmd/server/...`; `go test -race` on the claim/delivery path; PostgreSQL when a
-  test URL is available; run `cmd/server/contract_test.go`.
-- Client: `scripts/check.sh quick :packages:feature-projects-presentation
-  '*.aTerminalRunWithADiffOpensTheDiffSheet'` (now backed by a real DTO) and the
-  other `AgentManagementScenarios`; `scripts/check.sh full` as the release gate.
-- Confirm the migration test passes on both drivers and that the contract test pins
-  the new keys.
+- Server: focused `go test` on `./internal/entities/... ./internal/agent/...
+  ./internal/db/... ./cmd/server/... ./cmd/tt/... ./internal/runner/...`;
+  `go build ./...`, `go vet ./...`, `go test ./...`, focused `go test -race`, and
+  `scripts/check.sh race`.
+- Client: `scripts/check.sh quick` on the four `AgentManagementScenarios` entry
+  points, `HttpAgentRunsRemoteTest`, `HttpAgentPairingRemoteTest` and
+  `HttpAgentRunnersRemoteTest`; `scripts/check.sh full` as the release gate.
+- PostgreSQL integration when `TASKTRACKER_TEST_POSTGRES_URL` is available.
+
+**Results (2026-11-08):** all focused server tests, `go build`, `go vet`,
+`go test ./...` and `scripts/check.sh race` pass. All focused KMP agent tests pass
+on the JVM. `scripts/check.sh full` is **red** (see Handoff), and the server's
+default `scripts/check.sh` is red on pre-existing `gofmt` drift. `test-baseline.json`
+was **not** regenerated — a baseline generated from a red run would hide failures.
 
 ## Handoff
 
-- **Done:** (none yet — this spec consolidates the deferred work.) The server working
-  tree already contains most of the Go wiring for `host`, `requested_runner_id`, and
-  `result_diff`; the client already renders the host label and the target picker and
-  sends `host` on pairing.
-- **Pending:** Commit + verify the untracked `0004` migration on both drivers; pin
-  the new keys in `contract_test.go`; close the KMP run-DTO `diff` gap; add
-  `tt agent connect --pairing-code`; align the dispatch `runnerId` →
-  `requested_runner_id` contract; ACK the field names/casing and compatibility
-  rollout with `agent-management.md`; run both release gates.
-- **Next step:** Get the cross-repo ACK on the contract (names, casing, rollout),
-  then commit `0004`, pin the contract test, close the KMP `diff` DTO gap, add the
-  CLI flag, and run `scripts/check.sh full` plus the server `go test` gate.
-- **Gotchas:** The migration runner discovers files from disk, so the untracked
-  `0004` applies locally but is not release-clean until committed. The client
-  declares `requestedRunnerID` and `diff` with defaults — that is the rollout
-  condition for the server to emit them — but `ignoreUnknownKeys` is off, so a gained
-  or renamed response key is a hard break for installed builds; the contract test
-  must pin the key sets by name. The server currently derives `requestedRunnerID`
-  from the claiming runner, so the client's requested-runner choice must be mapped to
-  `requested_runner_id` on dispatch or the picker's choice is silently dropped.
+- **Done:** the shipped wire names were ratified by cross-repo ACK; `0004` is
+  committed and asserted; `host`, `runnerId` → `requestedRunnerId` and `diff` are
+  pinned by closed key sets in `cmd/server/contract_test.go` and documented in
+  `docs/API.md`; `tt agent connect --pairing-code` redeems a one-use code via
+  `runner.Pair` and writes the same `runner.Config` as the legacy flow. The durable
+  decisions are promoted into `docs/ARCHITECTURE.md` and
+  `TaskTrackerKMP/docs/DECISIONS.md`. No KMP DTO was edited.
+- **Pending:** `scripts/check.sh full` reports six failures per host (18 total) on
+  **pristine** KMP `main` — `SprintSummaryTest`, three `WorkItemGroupingTest`s, and
+  two `TaskTrackerWide*Test`s. Only a markdown file was modified when the gate ran,
+  and `WorkItemGroupingTest` was reproduced red by a focused run. These are not
+  this slice; `test-known-failures.json` is empty and `test-baseline.json` is stale.
+  The server's default `scripts/check.sh` fails `gofmt` on
+  `internal/admin/handler_test.go` and `internal/install/plan.go`, both already
+  unformatted at `origin/main`. PostgreSQL tests remain unrun: no
+  `TASKTRACKER_TEST_POSTGRES_URL`.
+- **Next step:** get a green KMP full gate (and decide whether to fix or explicitly
+  waive the two server `gofmt` files) under their own work, regenerate the baseline
+  only from a green run, then delete this spec and
+  `TaskTrackerKMP/specs/agent-management.md` in their final commits. No further
+  wire-contract work is outstanding.
+- **Gotchas:** the spec's original names `requestedRunnerID` / `resultDiff` are
+  wrong; a case-only rename breaks installed Kotlin builds because
+  `ignoreUnknownKeys` is off, and a decode-based Go test cannot see it. The pairing
+  CLI path is a bootstrap for a one-use credential, not a bypass — the runner still
+  authenticates with its `ttag_…` token. Keep `host` to two kinds plus "not
+  stated"; do not invent a third kind for legacy runners.
 
 ## Risks / notes
 
-- Emitting `host`/`requestedRunnerID`/`resultDiff` before the ACK and before the
-  client ships the defaulted DTO breaks installed clients; deployment order still
-  matters.
-- A runner that connects via `--pairing-code` must still authenticate and claim like
-  any other runner; the flag is a bootstrap path, not a bypass of pairing security.
-- Keep the host model to the two kinds (desktop, remote) plus "not stated"; do not
-  invent a third kind for legacy or older-client runners.
+- Deployment order still matters: the client shipped the defaulted DTOs first, the
+  server emitted second. `omitempty` means an untargeted run without a diff gains no
+  new key at all.
+- A runner connected via `--pairing-code` still authenticates and claims like any
+  other runner; the flag is a bootstrap path, not a bypass of pairing security.
+- The red release gates are pre-existing on `main` and must not be made green by
+  editing `test-baseline.json`, `test-known-failures.json`, or by deleting
+  assertions.

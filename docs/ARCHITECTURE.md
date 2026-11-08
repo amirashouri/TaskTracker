@@ -482,3 +482,22 @@ validation runs, counts, handoffs and per-task file lists were dropped.
   membership-filtered content. The worker receives the stored document
   verbatim, so a new `schemaVersion` is additive; `targetBranch` stays omitted
   until project metadata carries a branch.
+- **The agent wire names are the ones that shipped, not the ones a spec proposed.**
+  `host` (pairing-code request/response and runner objects), dispatch request
+  `runnerId` → run response `requestedRunnerId`, and `diff` (finish request → run
+  response) are the contract. `requestedRunnerID` and `resultDiff` were never on
+  the wire and are not being adopted: Go decodes case-insensitively but Kotlin does
+  not, so a case-only rename is a hard break for installed builds. This is why
+  `cmd/server/contract_test.go` pins closed key sets from raw JSON maps rather than
+  decode-based assertions, and `internal/db/migrate_test.go` pins the `0004`
+  columns on both dialects. All three response keys are `omitempty` and defaulted
+  in the client DTO, so an untargeted run with no diff gains no new key at all.
+- **`host` is a stated fact; `--pairing-code` is a credential, not a bypass.**
+  `desktop` and `remote` are the only kinds; empty or null means "not stated" for a
+  legacy machine or an older client's pairing code, and reading it as `desktop`
+  would mislabel every legacy machine. Redeeming a code copies its `host` and
+  `projectId` onto the runner, so the machine cannot name its own project.
+  `tt agent connect --pairing-code` spends the one-use `ttpc_…` code at
+  `POST /v1/agent/pair`, asks for no email or password, and saves the returned
+  `ttag_…` token into the same `runner.Config` as a legacy registration — the
+  runner then authenticates and claims exactly like any other.
