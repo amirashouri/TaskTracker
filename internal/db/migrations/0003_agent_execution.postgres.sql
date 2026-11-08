@@ -1,10 +1,10 @@
 -- Project repository metadata, project-scoped agents, single-use pairing codes,
 -- and idempotent dispatches.
 --
--- repo_url is additive and stays off the project JSON until the client that
--- declares it with a default ships: an installed client leaves
--- ignoreUnknownKeys off, so an added key is a decode failure. The column is
--- still written and read, because the agent brief needs it.
+-- repo_url is additive project metadata for the agent brief, not a credential.
+-- Project JSON emits it only when non-empty, and only because the client now
+-- declares the key with a default: an older installed build leaves
+-- ignoreUnknownKeys off, so it fails to decode a project that has a repo URL.
 --
 -- agent_runners.project_id is nullable on purpose. A NULL runner is a legacy
 -- machine-wide registration and keeps claiming across its owner's projects; a
