@@ -147,7 +147,7 @@ func TestPasswordResetCodeReturnsAFreshUsableCode(t *testing.T) {
 	// The key set is the client's DTO contract: no sent flag, no password — the
 	// code itself and when it dies, and nothing the client does not declare.
 	var resp struct {
-		Code      string              `json:"code"`
+		Code      string             `json:"code"`
 		ExpiresAt entities.Timestamp `json:"expiresAt"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {

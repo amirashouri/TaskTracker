@@ -11,10 +11,10 @@ import (
 type Action string
 
 const (
-	ActionInstall         Action = "install"
-	ActionLogs            Action = "logs"
-	ActionUninstall       Action = "uninstall"
-	ActionAdminList       Action = "admin-list"
+	ActionInstall            Action = "install"
+	ActionLogs               Action = "logs"
+	ActionUninstall          Action = "uninstall"
+	ActionAdminList          Action = "admin-list"
 	ActionAdminResetPassword Action = "admin-reset-password"
 )
 
@@ -68,16 +68,16 @@ const (
 
 	// Native runtime. The systemd unit, the env file, and the service account
 	// are the deployment; there is no image to pull and no compose file.
-	StepEnsureUser     StepKind = "ensure-user"
-	StepWriteEnv       StepKind = "write-env"
-	StepWriteUnit      StepKind = "write-unit"
-	StepStartService   StepKind = "start-service"
-	StepRestartService StepKind = "restart-service"
-	StepStopService    StepKind = "stop-service"
-	StepRemoveEnv      StepKind = "remove-env"
-	StepServiceLogs    StepKind = "service-logs"
-	StepAdminList           StepKind = "admin-list"
-	StepAdminResetPassword  StepKind = "admin-reset-password"
+	StepEnsureUser         StepKind = "ensure-user"
+	StepWriteEnv           StepKind = "write-env"
+	StepWriteUnit          StepKind = "write-unit"
+	StepStartService       StepKind = "start-service"
+	StepRestartService     StepKind = "restart-service"
+	StepStopService        StepKind = "stop-service"
+	StepRemoveEnv          StepKind = "remove-env"
+	StepServiceLogs        StepKind = "service-logs"
+	StepAdminList          StepKind = "admin-list"
+	StepAdminResetPassword StepKind = "admin-reset-password"
 )
 
 // Step is one action in a plan. Init marks the step that creates the state and
