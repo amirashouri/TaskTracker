@@ -71,3 +71,20 @@ func (r *CommentRepository) ListByWorkItem(ctx context.Context, workItemID WorkI
 
 	return collectRows(rows, scanComment)
 }
+
+// ListRecentByWorkItem returns the newest comments first. The agent brief uses
+// it so a long thread costs a bounded read; the caller reverses the page to
+// present it in reading order.
+func (r *CommentRepository) ListRecentByWorkItem(ctx context.Context, workItemID WorkItemID, limit int) ([]*Comment, error) {
+	if limit <= 0 {
+		return []*Comment{}, nil
+	}
+	query := `SELECT ` + commentColumns + ` FROM comments WHERE work_item_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`
+	rows, err := r.db.QueryContext(ctx, query, workItemID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return collectRows(rows, scanComment)
+}

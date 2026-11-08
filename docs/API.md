@@ -336,6 +336,15 @@ adopted a catalog adds no key to the response and an installed client that
 predates the field still decodes every payload. A new project starts with no
 catalog; it is written through the `PATCH` below, exactly as `tags` is.
 
+`repoUrl` is the project's optional repository address. Create and `PATCH`
+accept it (`http`, `https` or `ssh`; a password in the URL is refused) and the
+server stores it for the agent brief, but it is **not a response key yet**:
+installed clients leave `ignoreUnknownKeys` off, so it ships to project
+responses only after a client that declares it with a default is installed.
+Until then every project response keeps its current key set. An omitted
+`repoUrl` in a `PATCH` preserves the stored value rather than clearing it, and
+only this admin route may write it — a membership sync push cannot change it.
+
 ### `POST /v1/admin/projects` — admin only
 
 Creates a project. The body is the create form's fields plus the id the client
@@ -638,20 +647,38 @@ Agent state is **not** in the change feed. There is no `agentRun` entity, and no
 existing response gained a field. A run is server-owned, time-sensitive state a
 device cannot produce offline, so it is polled rather than synced.
 
+A machine can be scoped to one project with a pairing code. The code is
+short-lived, single-use and stored only as a hash; redeeming it mints the
+long-lived runner token and assigns the machine to the code's project. A machine
+registered through `POST /v1/agent/runners` has no project and keeps the older
+machine-wide scope, so already-installed CLIs keep working.
+
+The code is issued by a project member. The resulting machine is still scoped to
+that member's runs (`requested_by`) as well as to the project, so pairing cannot
+widen what a machine is allowed to execute.
+
 ### App routes — user token, scoped by project membership
 
 | Route | Body / query | Result |
 | --- | --- | --- |
-| `POST /v1/agent/runs` | `{"workItemId": "…"}` | `201` run. `404` unknown item, `403` non-member, `409` not `in_progress`, `409` a live run exists |
+| `POST /v1/agent/runs` | `{"workItemId": "…", "idempotencyKey": "…"}` | `201` new run, `200` replay of the same key. `404` unknown item, `403` non-member, `409` not `in_progress`, `409` a live run exists, `409` the project's agent switch is off |
 | `GET /v1/agent/runs?workItemId=&limit=` | `limit` default 20, max 50 | `{"runs": [...]}`, newest first |
 | `GET /v1/agent/runs/{id}?afterSeq=` | `afterSeq` default 0 | `{"run": …, "events": [...], "hasMore": bool}` |
 | `POST /v1/agent/runs/{id}/cancel` | — | `{"run": …}` with `cancelRequested` |
-| `POST /v1/agent/runners` | `{"name", "provider", "modelLabel"}` | `201 {"runner": …, "token": "ttag_…"}` — token shown once |
+| `POST /v1/agent/runners/pairing-codes` | `{"projectId": "…"}` | `201 {"code": "ttpc_…", "projectId": …, "expiresAt": …}`; member only, expires in 10 minutes |
+| `POST /v1/agent/runners` | `{"name", "provider", "modelLabel"}` | `201 {"runner": …, "token": "ttag_…"}` — token shown once; legacy machine-wide scope |
 | `GET /v1/agent/runners` | — | `{"runners": [...]}`, revoked and paused included |
 | `DELETE /v1/agent/runners/{id}` | — | `204`, idempotent; `404` for an unknown or another user's runner |
 
 `hasMore` is always present. The client declares it without a default, so a
 missing value would silently end a progress page.
+
+`idempotencyKey` is optional and opaque (at most 200 characters). The same
+work item, caller and key returns the run the first request created with `200`,
+so a retry after a lost response cannot create duplicate work. A replay returns
+the stored run even when it is terminal; dispatching again after a failure needs
+a new key. A different key while a run is live still answers `409`. The run id is
+minted before the brief and stays stable across the replay.
 
 ### Fleet controls — admin token
 
@@ -679,15 +706,71 @@ unknown runner, so a stop cannot be used to probe for ids.
 
 | Route | Body | Result |
 | --- | --- | --- |
+| `POST /v1/agent/pair` | `{"code", "name", "provider", "modelLabel"}` | `201 {"runner": …, "token": "ttag_…"}`; `401` for an unknown, spent or expired code. **No bearer token** — the code is the credential |
 | `POST /v1/agent/runs/claim` | `{"waitSeconds": 25}` (default 25, max 30) | `200 {"run": …}` or `204` when idle |
 | `POST /v1/agent/runs/{id}/events` | `{"events":[{"kind","message","payload"}]}`, max 200 | `200 {"accepted": n, "nextSeq": seq}` |
 | `POST /v1/agent/runs/{id}/heartbeat` | — | `200 {"cancelRequested": bool, "leaseExpiresAt": …}` |
 | `POST /v1/agent/runs/{id}/finish` | `{"outcome":"succeeded"\|"failed"\|"cancelled", "summary", "error"}` | `200 {"run": …}`, idempotent by status |
 | `POST /v1/agent/runners/self/revoke` | — | `204`; retires the machine that presented the token, and only that one. This is what `tt agent disconnect` calls, because the CLI holds a runner token rather than a user JWT |
 
-All four answer `409` when the run is not held by that runner, so a stale worker
-cannot report on work that was reassigned. If a worker stops heartbeating, the
-server fails the run with `"runner lost"` and frees the item's live slot.
+All four run routes answer `409` when the run is not held by that runner, so a
+stale worker cannot report on work that was reassigned. If a worker stops
+heartbeating, the server fails the run with `"runner lost"` and frees the item's
+live slot.
+
+A paired machine only claims runs in its assigned project. The filter sits
+inside the queue's candidate selection, so an older run in another project
+cannot hide this machine's own work. A legacy runner with no project keeps
+claiming across its owner's projects.
+
+### Agent brief
+
+`taskDocument` on a claimed run is an opaque JSON string with a versioned
+schema. It replaces the old flat snapshot; a new `schemaVersion` is additive and
+the worker receives the stored document verbatim.
+
+```json
+{
+  "schemaVersion": 1,
+  "runId": "550e8400-e29b-41d4-a716-446655440000",
+  "project": {
+    "id": "22222222-2222-2222-2222-222222222222",
+    "keyPrefix": "TT",
+    "name": "Demo",
+    "repoUrl": "https://github.com/acme/demo.git"
+  },
+  "task": {
+    "id": "44444444-4444-4444-4444-444444444444",
+    "key": "TT-12",
+    "title": "Fix the failing sync test",
+    "details": "…",
+    "status": "in_progress",
+    "priority": "high",
+    "tags": ["Bug"]
+  },
+  "nodes": [
+    { "id": "task:44444444-4444-4444-4444-444444444444", "type": "task", "key": "TT-12", "title": "Fix the failing sync test", "status": "in_progress" },
+    { "id": "project:22222222-2222-2222-2222-222222222222", "type": "project", "key": "TT", "title": "Demo" }
+  ],
+  "edges": [
+    { "from": "task:44444444-4444-4444-4444-444444444444", "to": "project:22222222-2222-2222-2222-222222222222", "type": "BELONGS_TO" }
+  ],
+  "limits": { "maxNodes": 64, "maxTags": 20, "maxDependencies": 10, "maxComments": 20, "maxCommentRunes": 4000, "maxTaskDetailsRunes": 20000 }
+}
+```
+
+Node IDs are stable and namespaced (`task:<id>`, `project:<id>`, `tag:<id>`,
+`comment:<id>`). Edges are directional: `task → prerequisite` is `DEPENDS_ON`,
+`task → project` is `BELONGS_TO`, `task → tag` is `TAGGED_WITH` and
+`task → comment` is `HAS_COMMENT`.
+
+The graph is bounded and permission-filtered. It contains the run's project, its
+task, direct prerequisites in the same project, the task's tags, and its most
+recent comments — no other project's history, no attachments, and no repository
+credential. The task's own `details` and each comment body are truncated at the
+stated rune limits. `targetBranch` is omitted until project metadata carries a
+branch; `repoUrl` names the repository but is not authorization for it. Private
+access belongs to the agent's own credential store.
 
 ### Objects
 

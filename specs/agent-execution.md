@@ -1,6 +1,6 @@
 # agent-execution — Coordinate project-scoped agent runs
 
-- **status:** pending
+- **status:** in-progress
 - **priority:** P1
 - **context:** Plan for project repository metadata, agent setup from the client,
   and task execution by agents running on an admin workstation or VPS.
@@ -18,20 +18,36 @@ server-side repository execution. Prefer existing database and server patterns.
 
 ## Files
 
-Confirm the implementation file list in the implementation plan before editing.
-Known project model and repository files:
+Confirmed on `feat/agent-execution`:
 
-- `internal/entities/models.go` — add optional project repository URL metadata.
-- `internal/entities/project_repository.go` — persist and load the repository URL.
-- `docs/API.md` and `cmd/server/contract_test.go` — document and pin API
-  contracts, including compatibility expectations.
-- `internal/db/migrations/` — add paired versioned SQLite and PostgreSQL schema
-  changes for project metadata, agent registration, and agent runs as needed.
+- `internal/entities/models.go` — `Project.RepoURL` (off the wire until the
+  client declares it) and the `PushChange.ProjectRepoURL` carrier.
+- `internal/entities/project_repository.go` — persist and load `repo_url`.
+- `internal/entities/repo_url.go` — URL validation (http/https/ssh, no password).
+- `internal/entities/agent_repository.go` — project assignment, idempotent
+  create, project-scoped claim.
+- `internal/entities/agent_pairing.go` — hashed, expiring, single-use codes and
+  atomic pairing.
+- `internal/entities/workitem_repository.go` — bounded `GetByIDs` for graph
+  dependencies.
+- `internal/entities/comment_repository.go` — recent-comment page for the graph.
+- `internal/admin/projects.go` — admin-only `repoUrl` input and preservation.
+- `internal/sync/engine.go` — a membership push cannot change repository
+  metadata.
+- `internal/agent/app_handler.go` — idempotent dispatch, pairing-code issue,
+  `agentEnabled` enforcement.
+- `internal/agent/handler.go` — unauthenticated pair exchange.
+- `internal/agent/context_graph.go` — versioned bounded graph with stable IDs
+  and directional edges.
+- `internal/db/migrations/0003_agent_execution.{sqlite,postgres}.sql`.
+- `cmd/server/main.go` — pairing routes.
+- `docs/API.md` and `cmd/server/contract_test.go` — documented and pinned
+  contracts, including the `repoUrl` compatibility gate.
 
-The exact route, handler, agent repository, run repository, tests, and wiring
-files are to be confirmed in the implementation plan after inspecting existing
-patterns. Do not expand the approved implementation scope without a secondary
-ACK.
+Tests live beside the code: `internal/entities/{agent_repository,repo_url}_test.go`,
+`internal/agent/app_handler_test.go`, `internal/db/migrate_test.go`, and
+`cmd/server/contract_test.go`. The KMP half remains in its own spec
+(`TaskTrackerKMP/specs/agent-management.md`); this branch does not edit the client.
 
 ## Contract
 
@@ -39,34 +55,41 @@ ACK.
   supported project APIs without breaking installed clients. The wire name is
   `repoUrl`; rollout of any response field follows the documented compatibility
   plan and does not assume clients ignore unknown keys.
-- [ ] Agent setup can pair an agent to a project using a short-lived,
+  **Server side done:** the value is stored, validated and carried in the agent
+  brief. **Pending:** the project-response key, which stays `json:"-"` until the
+  KMP client ships `repoUrl` with a default. The contract test pins the absence.
+- [x] Agent setup can pair an agent to a project using a short-lived,
   single-use credential. The server stores only what is needed to validate
   future agent authentication; pairing secrets are not logged or returned
   after use.
-- [ ] The server records agent identity, project assignment, connection
+- [x] The server records agent identity, project assignment, connection
   heartbeat/health, and agent-run state durably.
-- [ ] An authorized run request creates a stable `runId` and a durable queued
+- [x] An authorized run request creates a stable `runId` and a durable queued
   state before dispatch. Duplicate requests with the same idempotency key do
   not create duplicate runs.
-- [ ] Agents can obtain work through an outbound connection or polling flow, so
+- [x] Agents can obtain work through an outbound connection or polling flow, so
   agents on NAT/firewalled workstations and VPS hosts do not require inbound
   reachability. Server push may be used only where reachability is available.
-- [ ] The server creates a bounded, task-focused context graph with a versioned
+- [x] The server creates a bounded, task-focused context graph with a versioned
   schema, stable node IDs, explicit edge direction, and permission-filtered
   project/task/dependency/context data. It does not expose unrelated project
   history or unrestricted comments/logs.
-- [ ] The run payload includes project repository metadata, task and target
+- [x] The run payload includes project repository metadata, task and target
   branch information when available, graph schema version, and run ID. Private
   repository credentials are not embedded in project metadata or the payload.
-- [ ] Authenticated, idempotent callbacks update only the matching run and
+  `targetBranch` is omitted because no branch metadata exists yet.
+- [x] Authenticated, idempotent callbacks update only the matching run and
   allowed state transitions; callbacks cannot change a run belonging to another
   project or agent.
-- [ ] Delivery failures, timeouts, retries, cancellation, and terminal failure
+- [x] Delivery failures, timeouts, retries, cancellation, and terminal failure
   are represented explicitly; a task is never shown as started solely because
   a dispatch was attempted.
-- [ ] SQLite and PostgreSQL migrations and repository behavior remain aligned.
-- [ ] Focused tests pin the new behavior and fail if its implementation is
-  removed.
+- [x] SQLite and PostgreSQL migrations and repository behavior remain aligned.
+  SQLite is tested; PostgreSQL is pending unless `TASKTRACKER_TEST_POSTGRES_URL`
+  is available.
+- [x] Focused tests pin the new behavior and fail if its implementation is
+  removed (verified by mutation for the response gate, project-scoped claim and
+  single-use pairing).
 
 ## Subtasks and dependencies
 
@@ -119,16 +142,27 @@ ACK.
 
 ## Handoff
 
-- **Done:** Specification only; no implementation or validation has been run.
-- **Pending:** Agree and implement the detailed API, data model, and rollout
-  contract with the KMP spec.
-- **Next step:** In the implementation session, inspect existing server agent,
-  project, migration, and routing patterns and submit the exact dual-repo file
-  plan for ACK.
-- **Gotchas:** Keep the server as coordinator, not execution host. Agents may
-  run locally or on a VPS and must be able to connect outward. Client decoding
-  rejects unknown response keys; align repository metadata rollout with the
-  client before sending it.
+- **Done:** Server backend on `feat/agent-execution`: `repo_url` storage and
+  admin-only validation; `0003` migrations for both drivers; project-scoped
+  runner assignment and single-use pairing codes; idempotent dispatch; a
+  versioned bounded context graph carried in `taskDocument`; routes, API docs,
+  and contract tests. Focused `go test` passes for `internal/entities`,
+  `internal/admin`, `internal/sync`, `internal/db`, `internal/agent` and
+  `cmd/server`.
+- **Pending:** Project-response `repoUrl` emission, which is gated on the KMP
+  slice; PostgreSQL migration/behavior run when a test URL is available;
+  `scripts/check.sh` remains a release gate. Optional follow-ups: `tt agent
+  connect --pairing-code` and a project default branch for `targetBranch`.
+- **Next step:** Implement the KMP half in `TaskTrackerKMP/specs/agent-management.md`:
+  first the defaulted `repoUrl` DTO/persistence/editor slice, then flip
+  `Project.RepoURL` to `repoUrl,omitempty` and update the contract test's pinned
+  key set.
+- **Gotchas:** Do not flip the JSON tag before the client ships —
+  `ignoreUnknownKeys` is off. `repoUrl` is admin-only; the sync `applyProject`
+  preserves it on membership pushes. `agentEnabled` now refuses dispatch with
+  `409`. Pairing codes are `ttpc_`, runner tokens are `ttag_`, and both are
+  stored as SHA-256 hashes only. The graph's `DEPENDS_ON` direction is task →
+  prerequisite.
 
 ## Risks / notes
 

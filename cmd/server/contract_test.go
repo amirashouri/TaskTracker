@@ -154,6 +154,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 		Name:           "Demo",
 		MemberIDs:      []entities.UserID{user.ID},
 		NextItemNumber: 1,
+		AgentEnabled:   true,
 	}
 	if err := entities.NewProjectRepository(database.DB).Create(context.Background(), project); err != nil {
 		t.Fatalf("create project: %v", err)
@@ -1163,6 +1164,127 @@ func TestAdminProjectEditSavesTheProjectAndReachesTheFeed(t *testing.T) {
 	})
 	if missing.Code != http.StatusNotFound {
 		t.Errorf("editing an unknown project = %d, want 404 (body %s)", missing.Code, missing.Body.String())
+	}
+}
+
+// The repository URL is stored for the agent brief, but it is not a response key
+// yet: an installed client leaves ignoreUnknownKeys off, so emitting it before a
+// client that declares it ships would fail every project decode. This pins both
+// halves of that gate: the value reaches the row and an omitted key preserves it,
+// while the response keeps the exact key set the client already decodes.
+func TestProjectRepositoryURLIsStoredButNotExposedYet(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+	repoURL := "https://github.com/acme/demo.git"
+
+	rec := env.do(t, http.MethodPatch, "/v1/admin/projects/"+string(env.project.ID), admin.AccessToken, map[string]any{
+		"id":             string(env.project.ID),
+		"keyPrefix":      env.project.KeyPrefix,
+		"name":           env.project.Name,
+		"details":        env.project.Details,
+		"memberIds":      []string{string(env.user.ID)},
+		"isArchived":     false,
+		"nextItemNumber": env.project.NextItemNumber,
+		"repoUrl":        repoURL,
+		"version":        env.project.Version,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("saving repoUrl = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	assertWireKeys(t, "the admin project with a repository", rec.Body.Bytes(),
+		[]string{
+			"id", "keyPrefix", "name", "details", "tags", "memberIds", "isArchived",
+			"agentEnabled", "nextItemNumber", "createdAt", "updatedAt", "version",
+		}, []string{"statuses"})
+	if strings.Contains(rec.Body.String(), `"repoUrl"`) {
+		t.Error("the project response gained repoUrl before the client declares it")
+	}
+
+	projects := entities.NewProjectRepository(env.database)
+	stored, err := projects.GetByID(context.Background(), env.project.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("read stored project: %v", err)
+	}
+	if stored.RepoURL != repoURL {
+		t.Fatalf("stored repoUrl = %q, want %q", stored.RepoURL, repoURL)
+	}
+
+	// A save from the current client does not mention repoUrl. That must preserve
+	// the stored value rather than clear it as a zero field.
+	again := env.do(t, http.MethodPatch, "/v1/admin/projects/"+string(env.project.ID), admin.AccessToken, map[string]any{
+		"id":             string(env.project.ID),
+		"keyPrefix":      stored.KeyPrefix,
+		"name":           stored.Name,
+		"details":        stored.Details,
+		"memberIds":      []string{string(env.user.ID)},
+		"isArchived":     false,
+		"nextItemNumber": stored.NextItemNumber,
+		"version":        stored.Version,
+	})
+	if again.Code != http.StatusOK {
+		t.Fatalf("saving without repoUrl = %d, body = %s", again.Code, again.Body.String())
+	}
+	preserved, err := projects.GetByID(context.Background(), env.project.ID)
+	if err != nil || preserved == nil {
+		t.Fatalf("re-read project: %v", err)
+	}
+	if preserved.RepoURL != repoURL {
+		t.Errorf("an omitted repoUrl cleared the stored value: %q", preserved.RepoURL)
+	}
+
+	// A URL that embeds a password is a credential, and credentials never enter
+	// project metadata.
+	bad := env.do(t, http.MethodPatch, "/v1/admin/projects/"+string(env.project.ID), admin.AccessToken, map[string]any{
+		"keyPrefix": "TT", "name": "Demo", "repoUrl": "https://user:secret@example.com/repo.git", "version": preserved.Version,
+	})
+	if bad.Code != http.StatusBadRequest {
+		t.Errorf("a credential-bearing repoUrl = %d, want 400 (body %s)", bad.Code, bad.Body.String())
+	}
+
+	// The create path stores it too, and its response also keeps the established
+	// key set.
+	newID := "11111111-1111-1111-1111-111111111111"
+	created := env.do(t, http.MethodPost, "/v1/admin/projects", admin.AccessToken, map[string]any{
+		"id": newID, "keyPrefix": "RP", "name": "Repository project",
+		"memberIds": []string{string(env.user.ID)}, "repoUrl": "https://github.com/acme/created.git",
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("creating with repoUrl = %d, body = %s", created.Code, created.Body.String())
+	}
+	assertWireKeys(t, "the created project with a repository", created.Body.Bytes(),
+		[]string{
+			"id", "keyPrefix", "name", "details", "tags", "memberIds", "isArchived",
+			"agentEnabled", "nextItemNumber", "createdAt", "updatedAt", "version",
+		}, []string{"statuses"})
+	createdStored, err := projects.GetByID(context.Background(), entities.ProjectID(newID))
+	if err != nil || createdStored == nil {
+		t.Fatalf("read created project: %v", err)
+	}
+	if createdStored.RepoURL != "https://github.com/acme/created.git" {
+		t.Errorf("created repoUrl = %q, want it stored", createdStored.RepoURL)
+	}
+
+	// A membership push is not an admin route, so it cannot change the metadata
+	// even if a client puts the key in the payload. The value stays what the admin
+	// set, and the feed never learns it.
+	payload := fmt.Sprintf(
+		`{"id":%q,"keyPrefix":%q,"name":%q,"details":"","tags":[],"memberIds":[%q],"isArchived":false,"agentEnabled":false,"nextItemNumber":1,"repoUrl":"https://evil.example/repo.git","createdAt":"1970-01-01T00:00:00Z","updatedAt":"1970-01-01T00:00:00Z","version":""}`,
+		string(env.project.ID), preserved.KeyPrefix, preserved.Name, string(env.user.ID))
+	pushed := env.do(t, http.MethodPost, "/v1/sync/push", admin.AccessToken, map[string]any{
+		"changes": []map[string]any{{
+			"id": "repo-url-push", "entity": "project", "entityId": string(env.project.ID),
+			"operation": "upsert", "payload": payload,
+		}},
+	})
+	if pushed.Code != http.StatusOK {
+		t.Fatalf("membership push = %d, body = %s", pushed.Code, pushed.Body.String())
+	}
+	afterPush, err := projects.GetByID(context.Background(), env.project.ID)
+	if err != nil || afterPush == nil {
+		t.Fatalf("read project after push: %v", err)
+	}
+	if afterPush.RepoURL != repoURL {
+		t.Errorf("a membership push changed repoUrl to %q; only the admin route may write it", afterPush.RepoURL)
 	}
 }
 

@@ -4,11 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/amirashouri/tasktracker-server/internal/auth"
@@ -26,6 +26,13 @@ const (
 	// maxRunnerNameLength matches the profile fields' limit: a name is a label
 	// on a settings row, not a free-form note.
 	maxRunnerNameLength = 120
+	// maxIdempotencyKeyLength bounds the client's per-dispatch key. It is an
+	// opaque value, not a note; a longer one is a client bug, not storage to keep.
+	maxIdempotencyKeyLength = 200
+	// pairingCodeTTL is how long an admin has to hand a code to the machine that
+	// will pair. Short enough that a leaked code is stale, long enough to walk to
+	// another terminal and paste it.
+	pairingCodeTTL = 10 * time.Minute
 )
 
 // Membership is the one question this surface asks about a project: may this
@@ -139,9 +146,12 @@ func appRunnerFrom(runner entities.AgentRunner) appRunnerResponse {
 	}
 }
 
-// dispatchRequest names the item to hand to an agent.
+// dispatchRequest names the item to hand to an agent. IdempotencyKey is
+// optional, so a client that predates it keeps working; a client that sends one
+// can retry a lost dispatch without creating a second run.
 type dispatchRequest struct {
-	WorkItemID entities.WorkItemID `json:"workItemId"`
+	WorkItemID     entities.WorkItemID `json:"workItemId"`
+	IdempotencyKey string              `json:"idempotencyKey"`
 }
 
 type runResponse struct {
@@ -164,6 +174,11 @@ func (h *AppHandler) Dispatch(w http.ResponseWriter, r *http.Request) {
 	var req dispatchRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil || req.WorkItemID == "" {
 		httpx.WriteError(w, http.StatusBadRequest, "workItemId is required")
+		return
+	}
+	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)
+	if len(idempotencyKey) > maxIdempotencyKeyLength {
+		httpx.WriteError(w, http.StatusBadRequest, "idempotencyKey is too long")
 		return
 	}
 
@@ -195,19 +210,30 @@ func (h *AppHandler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	document, err := h.buildTaskDocument(ctx, *item, *project)
+	if !project.AgentEnabled {
+		httpx.WriteError(w, http.StatusConflict, "agent is not enabled for this project")
+		return
+	}
+
+	// The run id is minted before the brief because the brief names it: a worker
+	// that recovers after a lost claim can tell which run it is holding.
+	runID := entities.NewAgentRunID()
+	document, err := h.buildContextGraph(ctx, runID, *item, *project)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not prepare the task")
 		return
 	}
 
 	run := &entities.AgentRun{
-		WorkItemID:   item.ID,
-		ProjectID:    item.ProjectID,
-		RequestedBy:  userID,
-		TaskDocument: document,
+		ID:             runID,
+		WorkItemID:     item.ID,
+		ProjectID:      item.ProjectID,
+		RequestedBy:    userID,
+		TaskDocument:   document,
+		IdempotencyKey: idempotencyKey,
 	}
-	if err := h.repo.CreateRun(ctx, run); err != nil {
+	stored, created, err := h.repo.CreateRunIdempotent(ctx, run)
+	if err != nil {
 		if errors.Is(err, entities.ErrAgentRunActive) {
 			httpx.WriteError(w, http.StatusConflict, "an agent run is already active for this work item")
 			return
@@ -216,7 +242,13 @@ func (h *AppHandler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusCreated, runResponse{Run: appRunFrom(*run)})
+	// A replay returns the run the first request created, so the client can
+	// recover from a lost response without starting duplicate work.
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	httpx.WriteJSON(w, status, runResponse{Run: appRunFrom(*stored)})
 }
 
 type runsResponse struct {
@@ -532,101 +564,67 @@ func (h *AppHandler) RevokeRunner(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// taskDocument is the snapshot a worker receives at claim time. It is stored and
-// re-served as an opaque JSON string, so a field added here never changes a
-// response key set a client pinned.
-type taskDocument struct {
-	Project  taskDocumentProject   `json:"project"`
-	Item     taskDocumentItem      `json:"item"`
-	Comments []taskDocumentComment `json:"comments"`
+type createPairingCodeRequest struct {
+	ProjectID entities.ProjectID `json:"projectId"`
 }
 
-type taskDocumentProject struct {
-	ID        entities.ProjectID `json:"id"`
-	KeyPrefix string             `json:"keyPrefix"`
-	Name      string             `json:"name"`
+type createPairingCodeResponse struct {
+	// Code is shown once. The server stores only its hash, so a lost response
+	// means issuing a new code, not recovering this one.
+	Code      string             `json:"code"`
+	ProjectID entities.ProjectID `json:"projectId"`
+	ExpiresAt entities.Timestamp `json:"expiresAt"`
 }
 
-type taskDocumentItem struct {
-	ID          entities.WorkItemID `json:"id"`
-	Key         string              `json:"key"`
-	Title       string              `json:"title"`
-	Details     string              `json:"details"`
-	Status      string              `json:"status"`
-	Priority    string              `json:"priority"`
-	StoryPoints *int                `json:"storyPoints,omitempty"`
-	DueDate     *entities.Timestamp `json:"dueDate,omitempty"`
-	Tags        []string            `json:"tags"`
-}
-
-type taskDocumentComment struct {
-	Author    string             `json:"author"`
-	Body      string             `json:"body"`
-	CreatedAt entities.Timestamp `json:"createdAt"`
-}
-
-// buildTaskDocument snapshots the work item as it is at dispatch, plus the
-// project's catalogue and the comment thread. The snapshot is deliberate: a run
-// should implement the task the user handed over, not whatever the item says
-// halfway through the agent working.
-func (h *AppHandler) buildTaskDocument(ctx context.Context, item entities.WorkItem, project entities.Project) (string, error) {
-	catalogue := make(map[entities.TagID]string, len(project.Tags))
-	for _, tag := range project.Tags {
-		catalogue[tag.ID] = tag.Name
-	}
-	tags := make([]string, 0, len(item.TagIDs))
-	for _, id := range item.TagIDs {
-		if name, ok := catalogue[id]; ok {
-			tags = append(tags, name)
-		}
+// CreatePairingCode issues a short-lived, single-use code for one project.
+//
+// It is the app-facing half of pairing: a user JWT and project membership decide
+// who may invite a machine, and the code itself is what the machine redeems over
+// the unauthenticated Pair route. The code is not the long-lived runner token;
+// that is minted only when the code is spent.
+func (h *AppHandler) CreatePairingCode(w http.ResponseWriter, r *http.Request) {
+	userID, ok := callerID(r)
+	if !ok {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
+		return
 	}
 
-	comments, err := h.comments.ListByWorkItem(ctx, item.ID)
+	var req createPairingCodeRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil || req.ProjectID == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "projectId is required")
+		return
+	}
+
+	ctx := r.Context()
+	project, err := h.projects.GetByID(ctx, req.ProjectID)
 	if err != nil {
-		return "", err
+		httpx.WriteError(w, http.StatusInternalServerError, "could not read the project")
+		return
 	}
-	authors := make(map[entities.UserID]string, len(comments))
-	snapshotComments := make([]taskDocumentComment, 0, len(comments))
-	for _, comment := range comments {
-		author, seen := authors[comment.AuthorID]
-		if !seen {
-			user, err := h.users.GetByID(ctx, comment.AuthorID)
-			if err != nil {
-				return "", err
-			}
-			if user != nil {
-				author = user.PreferredGreeting()
-			}
-			authors[comment.AuthorID] = author
-		}
-		snapshotComments = append(snapshotComments, taskDocumentComment{
-			Author:    author,
-			Body:      comment.Body,
-			CreatedAt: comment.CreatedAt,
-		})
+	if project == nil {
+		httpx.WriteError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if !h.requireMember(ctx, w, userID, project.ID) {
+		return
 	}
 
-	document := taskDocument{
-		Project: taskDocumentProject{ID: project.ID, KeyPrefix: project.KeyPrefix, Name: project.Name},
-		Item: taskDocumentItem{
-			ID:          item.ID,
-			Key:         item.Key,
-			Title:       item.Title,
-			Details:     item.Details,
-			Status:      string(item.Status),
-			Priority:    string(item.Priority),
-			StoryPoints: item.StoryPoints,
-			DueDate:     item.DueDate,
-			Tags:        tags,
-		},
-		Comments: snapshotComments,
-	}
-
-	encoded, err := json.Marshal(document)
+	code, err := newPairingCode()
 	if err != nil {
-		return "", err
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create a pairing code")
+		return
 	}
-	return string(encoded), nil
+	expiresAt := entities.Timestamp(time.Now().Add(pairingCodeTTL).Truncate(time.Second).UnixMilli())
+	if err := h.repo.CreatePairingCode(ctx, HashRunnerToken(code), project.ID, userID, expiresAt); err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create a pairing code")
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusCreated, createPairingCodeResponse{
+		Code:      code,
+		ProjectID: project.ID,
+		ExpiresAt: expiresAt,
+	})
 }
 
 // requireMember answers the request itself on failure, so every caller writes the
@@ -652,9 +650,19 @@ func callerID(r *http.Request) (entities.UserID, bool) {
 // newRunnerToken mints an opaque machine credential. 32 bytes of randomness is
 // the whole secret; the prefix only makes it recognisable in a log.
 func newRunnerToken() (string, error) {
+	return newOpaqueToken(tokenPrefix)
+}
+
+// newPairingCode mints a short-lived pairing secret, distinct from the runner
+// token so a leaked value is recognisable as the weaker, expiring one.
+func newPairingCode() (string, error) {
+	return newOpaqueToken(pairingTokenPrefix)
+}
+
+func newOpaqueToken(prefix string) (string, error) {
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
 	}
-	return tokenPrefix + hex.EncodeToString(raw[:]), nil
+	return prefix + hex.EncodeToString(raw[:]), nil
 }

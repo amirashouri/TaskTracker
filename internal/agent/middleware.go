@@ -26,6 +26,11 @@ import (
 // makes revocation immediate rather than "when the token expires".
 const tokenPrefix = "ttag_"
 
+// pairingTokenPrefix marks a short-lived pairing code. It is deliberately a
+// different prefix from a runner token: a value seen in a log or a terminal is
+// then immediately recognisable as the expiring one.
+const pairingTokenPrefix = "ttpc_"
+
 // HashRunnerToken is the one definition of how a runner token is stored and
 // looked up, so registration and authentication cannot disagree.
 //

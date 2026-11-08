@@ -148,6 +148,13 @@ type Project struct {
 	Name      string       `json:"name"`
 	Details   string       `json:"details"`
 	Tags      []ProjectTag `json:"tags"`
+	// RepoURL is where the project's code lives. It is deliberately off the wire:
+	// installed clients do not declare the key and JSONCoding leaves
+	// ignoreUnknownKeys off, so emitting it before a client that declares it
+	// ships would fail every project decode. The agent run graph carries it
+	// explicitly; this tag flips to `repoUrl,omitempty` in the release that
+	// ships the client half, and not before.
+	RepoURL string `json:"-"`
 	// Statuses is the project's workflow catalog. Omitted when empty so a
 	// response gains no key for a project that has not adopted one.
 	Statuses   []StatusDefinition `json:"statuses,omitempty"`
@@ -337,6 +344,11 @@ type PushChange struct {
 	Operation OutboxOperation `json:"operation"`
 	Payload   json.RawMessage `json:"payload"`
 	Version   string          `json:"version,omitempty"` // for conflict detection
+	// ProjectRepoURL carries a repository URL set by an admin route. It is not
+	// part of the client payload and never reaches the change feed: the feed's
+	// project object must not gain a key an installed client cannot decode. A
+	// membership push leaves it nil, which tells the engine to preserve the row.
+	ProjectRepoURL *string `json:"-"`
 }
 
 // PushResult is one change's verdict. The status is accepted, conflict,

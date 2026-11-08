@@ -620,3 +620,98 @@ func TestPausingARunnerStopsClaimsAndFlagsTheLiveRun(t *testing.T) {
 		t.Errorf("pausing an unknown runner = %v, want ErrAgentRunnerNotFound", err)
 	}
 }
+
+// A dispatch key is an idempotency key, not a hint: the same key returns the
+// stored run, and a different key still meets the one-live-run rule.
+func TestCreateRunIdempotentReturnsTheStoredRun(t *testing.T) {
+	f := newAgentFixture(t)
+	ctx := context.Background()
+
+	first, created, err := f.repo.CreateRunIdempotent(ctx, &AgentRun{
+		WorkItemID: f.item.ID, ProjectID: f.project.ID, RequestedBy: f.user.ID,
+		TaskDocument: `{}`, IdempotencyKey: "dispatch-1",
+	})
+	if err != nil {
+		t.Fatalf("first dispatch: %v", err)
+	}
+	if !created {
+		t.Fatal("the first dispatch was reported as a replay")
+	}
+
+	replay, created, err := f.repo.CreateRunIdempotent(ctx, &AgentRun{
+		WorkItemID: f.item.ID, ProjectID: f.project.ID, RequestedBy: f.user.ID,
+		TaskDocument: `{}`, IdempotencyKey: "dispatch-1",
+	})
+	if err != nil {
+		t.Fatalf("replayed dispatch: %v", err)
+	}
+	if created {
+		t.Error("the replay was reported as a new run")
+	}
+	if replay.ID != first.ID {
+		t.Errorf("replay returned %s, want %s", replay.ID, first.ID)
+	}
+
+	if _, _, err := f.repo.CreateRunIdempotent(ctx, &AgentRun{
+		WorkItemID: f.item.ID, ProjectID: f.project.ID, RequestedBy: f.user.ID,
+		TaskDocument: `{}`, IdempotencyKey: "dispatch-2",
+	}); !errors.Is(err, ErrAgentRunActive) {
+		t.Errorf("a different key while the run is live = %v, want ErrAgentRunActive", err)
+	}
+}
+
+// A project-scoped machine takes its own project's work, not whichever run the
+// queue happens to offer first.
+func TestClaimRunIsScopedToTheRunnersProject(t *testing.T) {
+	f := newAgentFixture(t)
+	ctx := context.Background()
+	workItems := NewWorkItemRepository(f.database.DB)
+
+	otherProject := &Project{KeyPrefix: "ZZ", Name: "Other", MemberIDs: []UserID{f.user.ID}}
+	if err := NewProjectRepository(f.database.DB).Create(ctx, otherProject); err != nil {
+		t.Fatalf("create other project: %v", err)
+	}
+	otherItem := &WorkItem{
+		ProjectID: otherProject.ID, Key: "ZZ-1", Title: "Elsewhere",
+		Status: WorkItemStatusInProgress, Priority: PriorityLow,
+	}
+	if err := workItems.Create(ctx, otherItem); err != nil {
+		t.Fatalf("create other item: %v", err)
+	}
+	// Older, so an unfiltered queue would offer it first.
+	if _, _, err := f.repo.CreateRunIdempotent(ctx, &AgentRun{
+		WorkItemID: otherItem.ID, ProjectID: otherProject.ID, RequestedBy: f.user.ID,
+		TaskDocument: `{}`, CreatedAt: 1,
+	}); err != nil {
+		t.Fatalf("create other run: %v", err)
+	}
+	own := f.mustQueueRun(t, f.item.ID, 2)
+
+	projectID := f.project.ID
+	scoped := &AgentRunner{UserID: f.user.ID, Name: "scoped-machine", ProjectID: &projectID}
+	if err := f.repo.RegisterRunner(ctx, scoped, "hash-scoped"); err != nil {
+		t.Fatalf("register scoped runner: %v", err)
+	}
+
+	claimed, err := f.repo.ClaimRun(ctx, scoped.ID, f.user.ID, lease())
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if claimed == nil || claimed.ID != own.ID {
+		t.Fatalf("claim = %v, want this project's run %s", claimed, own.ID)
+	}
+
+	// The legacy registration has no project, so it still sees both projects'
+	// queues. Existing machines cannot be broken by the new scope.
+	legacy := f.mustRegisterRunner(t, f.user, "legacy-machine", "hash-legacy")
+	if _, err := f.repo.FinishRun(ctx, claimed.ID, scoped.ID, AgentRunSucceeded, "done", ""); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	other, err := f.repo.ClaimRun(ctx, legacy.ID, f.user.ID, lease())
+	if err != nil {
+		t.Fatalf("legacy claim: %v", err)
+	}
+	if other == nil || other.ProjectID != otherProject.ID {
+		t.Errorf("legacy claim = %v, want the remaining run in %s", other, otherProject.ID)
+	}
+}
