@@ -38,7 +38,7 @@ func newAgentEnv(t *testing.T) agentEnv {
 
 	users := entities.NewUserRepository(database.DB)
 	user := mustCreateUser(t, users, "alice@example.com")
-	project := &entities.Project{KeyPrefix: "TT", Name: "Demo", MemberIDs: []entities.UserID{user.ID}}
+	project := &entities.Project{KeyPrefix: "TT", Name: "Demo", MemberIDs: []entities.UserID{user.ID}, AgentEnabled: true}
 	if err := entities.NewProjectRepository(database.DB).Create(ctx, project); err != nil {
 		t.Fatalf("create project: %v", err)
 	}

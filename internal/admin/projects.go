@@ -140,6 +140,7 @@ type createProjectRequest struct {
 	KeyPrefix string   `json:"keyPrefix"`
 	Name      string   `json:"name"`
 	Details   string   `json:"details"`
+	RepoURL   string   `json:"repoUrl"`
 	MemberIDs []string `json:"memberIds"`
 }
 
@@ -163,6 +164,12 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	repoURL, err := entities.NormalizeRepoURL(req.RepoURL)
+	if err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	members := make([]entities.UserID, 0, len(req.MemberIDs))
 	for _, id := range req.MemberIDs {
 		if id = strings.TrimSpace(id); id != "" {
@@ -175,6 +182,7 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 		KeyPrefix: keyPrefix,
 		Name:      name,
 		Details:   req.Details,
+		RepoURL:   repoURL,
 		MemberIDs: members,
 		// The first key a new project issues is `-1`, which is the column's
 		// default as well -- but an insert names the column, so a zero here would
@@ -225,6 +233,9 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 		EntityID:  string(project.ID),
 		Operation: entities.OutboxOperationUpsert,
 		Payload:   payload,
+		// The feed payload cannot carry this: the response would gain a key
+		// installed clients cannot decode. The engine writes it from here.
+		ProjectRepoURL: &project.RepoURL,
 	})
 
 	switch result.Status {
@@ -248,6 +259,14 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── Update ──────────────────────────────────────────────────────────
+
+// updateProjectRequest is the edit body plus the one field the entity keeps off
+// the wire. A nil RepoURL means the body did not mention it, so the stored value
+// is preserved; a non-nil value (including "") is an explicit change.
+type updateProjectRequest struct {
+	entities.Project
+	RepoURL *string `json:"repoUrl"`
+}
 
 // Update applies an edit to a project the way the sync path does: the row and
 // its change-feed entry are written in one transaction, so the project's members
@@ -275,17 +294,28 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var project entities.Project
-	if err := httpx.DecodeJSON(w, r, &project); err != nil {
+	var req updateProjectRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	project := req.Project
 
 	// The id and the creation time are not the client's to change; they come from
 	// the row. The version the body carries is what the compare-and-swap runs
 	// against, and omitting it is last-write-wins, exactly as in a push.
 	project.ID = existing.ID
 	project.CreatedAt = existing.CreatedAt
+	if req.RepoURL != nil {
+		repoURL, err := entities.NormalizeRepoURL(*req.RepoURL)
+		if err != nil {
+			httpx.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		project.RepoURL = repoURL
+	} else {
+		project.RepoURL = existing.RepoURL
+	}
 
 	// The change feed carries the payload the way a client sends it: as a JSON
 	// *string*, not a nested object. The client's DTO declares `payload` as a
@@ -309,13 +339,18 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	actorID, _ := auth.UserFrom(r.Context())
-	result := h.engine.ApplyAdminProject(r.Context(), actorID, entities.PushChange{
+	change := entities.PushChange{
 		Entity:    entities.OutboxEntityProject,
 		EntityID:  id,
 		Operation: entities.OutboxOperationUpsert,
 		Payload:   payload,
 		Version:   project.Version,
-	})
+	}
+	// An omitted key preserves the row; an explicit value changes it.
+	if req.RepoURL != nil {
+		change.ProjectRepoURL = &project.RepoURL
+	}
+	result := h.engine.ApplyAdminProject(r.Context(), actorID, change)
 
 	switch result.Status {
 	case sync.StatusAccepted:

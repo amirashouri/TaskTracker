@@ -16,13 +16,13 @@ func NewProjectRepository(db Querier) *ProjectRepository {
 	return &ProjectRepository{db: db}
 }
 
-const projectColumns = `id, key_prefix, name, details, tags, statuses, is_archived, next_item_number, created_at, updated_at, version, agent_enabled`
+const projectColumns = `id, key_prefix, name, details, repo_url, tags, statuses, is_archived, next_item_number, created_at, updated_at, version, agent_enabled`
 
 // scanProject reads one row selected with projectColumns. MemberIDs is not a
 // column: membership lives in project_members and is loaded separately.
 func scanProject(row scanner, p *Project) error {
 	var tagsJSON, statusesJSON []byte
-	if err := row.Scan(&p.ID, &p.KeyPrefix, &p.Name, &p.Details, &tagsJSON, &statusesJSON, &p.IsArchived, &p.NextItemNumber, &p.CreatedAt, &p.UpdatedAt, &p.Version, &p.AgentEnabled); err != nil {
+	if err := row.Scan(&p.ID, &p.KeyPrefix, &p.Name, &p.Details, &p.RepoURL, &tagsJSON, &statusesJSON, &p.IsArchived, &p.NextItemNumber, &p.CreatedAt, &p.UpdatedAt, &p.Version, &p.AgentEnabled); err != nil {
 		return err
 	}
 	// A malformed blob costs the project its tags, not the row: the rest of the
@@ -91,8 +91,8 @@ func (r *ProjectRepository) Create(ctx context.Context, p *Project) error {
 		tagsJSON, _ := json.Marshal(normalisedTags(p.Tags))
 		statusesJSON, _ := json.Marshal(normalisedStatuses(p.Statuses))
 		if _, err := q.ExecContext(ctx, `INSERT INTO projects (`+projectColumns+`)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-			p.ID, p.KeyPrefix, p.Name, p.Details, tagsJSON, statusesJSON, p.IsArchived, p.NextItemNumber, p.CreatedAt, p.UpdatedAt, p.Version, p.AgentEnabled); err != nil {
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+			p.ID, p.KeyPrefix, p.Name, p.Details, p.RepoURL, tagsJSON, statusesJSON, p.IsArchived, p.NextItemNumber, p.CreatedAt, p.UpdatedAt, p.Version, p.AgentEnabled); err != nil {
 			return err
 		}
 		// No replay is owed here: a brand-new project has no history behind anyone's
@@ -127,9 +127,9 @@ func (r *ProjectRepository) Update(ctx context.Context, p *Project) error {
 		// Placeholders ascend in text order: SQLite numbers them by appearance.
 		tagsJSON, _ := json.Marshal(normalisedTags(p.Tags))
 		statusesJSON, _ := json.Marshal(normalisedStatuses(p.Statuses))
-		if err := execOneRow(ctx, q, conflict("project", p.ID), `UPDATE projects SET key_prefix=$1, name=$2, details=$3, tags=$4, statuses=$5, is_archived=$6, next_item_number=$7, updated_at=$8, version=$9, agent_enabled=$10
-          WHERE id=$11 AND version=$12`,
-			p.KeyPrefix, p.Name, p.Details, tagsJSON, statusesJSON, p.IsArchived, p.NextItemNumber, p.UpdatedAt, p.Version, p.AgentEnabled, p.ID, previous); err != nil {
+		if err := execOneRow(ctx, q, conflict("project", p.ID), `UPDATE projects SET key_prefix=$1, name=$2, details=$3, tags=$4, statuses=$5, is_archived=$6, next_item_number=$7, updated_at=$8, version=$9, agent_enabled=$10, repo_url=$11
+          WHERE id=$12 AND version=$13`,
+			p.KeyPrefix, p.Name, p.Details, tagsJSON, statusesJSON, p.IsArchived, p.NextItemNumber, p.UpdatedAt, p.Version, p.AgentEnabled, p.RepoURL, p.ID, previous); err != nil {
 			return err
 		}
 		// This project has a history, so a member who is new to it is owed a replay.

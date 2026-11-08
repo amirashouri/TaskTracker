@@ -293,6 +293,13 @@ func mount(
 	mux.Handle("GET /v1/agent/runs/{id}", appUser(http.HandlerFunc(agentApp.GetRun)))
 	mux.Handle("POST /v1/agent/runs/{id}/cancel", appUser(http.HandlerFunc(agentApp.Cancel)))
 	mux.Handle("POST /v1/agent/runners", appUser(http.HandlerFunc(agentApp.RegisterRunner)))
+	// A pairing code is the short-lived credential an admin hands to a machine;
+	// issuing it is a member action, redeeming it below is unauthenticated because
+	// the code is the credential.
+	mux.Handle("POST /v1/agent/runners/pairing-codes", appUser(http.HandlerFunc(agentApp.CreatePairingCode)))
+	// The one agent route without a bearer token. The code is single-use and
+	// expires, and the 256-bit value is what makes guessing it infeasible.
+	mux.Handle("POST /v1/agent/pair", http.HandlerFunc(agentHandler.Pair))
 	mux.Handle("GET /v1/agent/runners", appUser(http.HandlerFunc(agentApp.ListRunners)))
 	mux.Handle("DELETE /v1/agent/runners/{id}", appUser(http.HandlerFunc(agentApp.RevokeRunner)))
 

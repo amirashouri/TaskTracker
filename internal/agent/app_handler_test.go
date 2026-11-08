@@ -60,6 +60,7 @@ func TestDispatchSnapshotsTheTaskForTheWorker(t *testing.T) {
 
 	tagID := entities.TagID("33333333-3333-3333-3333-333333333333")
 	e.project.Tags = []entities.ProjectTag{{ID: tagID, Name: "Bug", Color: "red", Icon: "bug"}}
+	e.project.RepoURL = "https://github.com/acme/demo.git"
 	if err := entities.NewProjectRepository(e.database.DB).Update(ctx, e.project); err != nil {
 		t.Fatalf("update project: %v", err)
 	}
@@ -95,25 +96,63 @@ func TestDispatchSnapshotsTheTaskForTheWorker(t *testing.T) {
 	if err != nil || stored == nil {
 		t.Fatalf("read stored run: %v", err)
 	}
-	var document taskDocument
+	var document contextGraph
 	if err := json.Unmarshal([]byte(stored.TaskDocument), &document); err != nil {
-		t.Fatalf("decode task document: %v", err)
+		t.Fatalf("decode context graph: %v", err)
 	}
-	if document.Item.Key != "TT-1" || document.Item.Title != "Fix the thing" {
-		t.Errorf("item = %+v, want the work item's key and title", document.Item)
+	if document.SchemaVersion != contextGraphSchemaVersion {
+		t.Errorf("schemaVersion = %d, want %d", document.SchemaVersion, contextGraphSchemaVersion)
 	}
-	if document.Item.Details != "make it work" {
-		t.Errorf("details = %q, want the snapshot to carry them", document.Item.Details)
+	if document.RunID != string(created.Run.ID) {
+		t.Errorf("runId = %q, want %s", document.RunID, created.Run.ID)
+	}
+	if document.Task.Key != "TT-1" || document.Task.Title != "Fix the thing" {
+		t.Errorf("task = %+v, want the work item's key and title", document.Task)
+	}
+	if document.Task.Details != "make it work" {
+		t.Errorf("details = %q, want the brief to carry them", document.Task.Details)
 	}
 	if document.Project.KeyPrefix != "TT" || document.Project.Name != "Demo" {
 		t.Errorf("project = %+v, want the project's key prefix and name", document.Project)
 	}
-	if len(document.Item.Tags) != 1 || document.Item.Tags[0] != "Bug" {
-		t.Errorf("tags = %v, want the catalogue name Bug", document.Item.Tags)
+	if document.Project.RepoURL != "https://github.com/acme/demo.git" {
+		t.Errorf("repoUrl = %q, want the project's repository in the agent brief", document.Project.RepoURL)
 	}
-	if len(document.Comments) != 1 || document.Comments[0].Author != "alice" {
-		t.Errorf("comments = %+v, want the thread with its author", document.Comments)
+	if len(document.Task.Tags) != 1 || document.Task.Tags[0] != "Bug" {
+		t.Errorf("tags = %v, want the catalogue name Bug", document.Task.Tags)
 	}
+
+	var comments []graphNode
+	for _, node := range document.Nodes {
+		if node.Type == nodeComment {
+			comments = append(comments, node)
+		}
+	}
+	if len(comments) != 1 || comments[0].Title != "alice" {
+		t.Errorf("comment nodes = %+v, want the thread with its author", comments)
+	}
+	taskID := taskNodeID(e.item.ID)
+	if !hasEdge(document.Edges, taskID, projectNodeID(e.project.ID), edgeBelongsTo) {
+		t.Errorf("edges = %+v, want task -> project BELONGS_TO", document.Edges)
+	}
+	if !hasEdge(document.Edges, taskID, tagNodeID(tagID), edgeTaggedWith) {
+		t.Errorf("edges = %+v, want task -> tag TAGGED_WITH", document.Edges)
+	}
+	if !hasEdge(document.Edges, taskID, comments[0].ID, edgeHasComment) {
+		t.Errorf("edges = %+v, want task -> comment HAS_COMMENT", document.Edges)
+	}
+	if document.Limits.MaxNodes != maxContextNodes || document.Limits.MaxComments != maxContextComments {
+		t.Errorf("limits = %+v, want the builder's bounds stated in the payload", document.Limits)
+	}
+}
+
+func hasEdge(edges []graphEdge, from, to, kind string) bool {
+	for _, edge := range edges {
+		if edge.From == from && edge.To == to && edge.Type == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDispatchRefusesWhatTheAppMustNotStart(t *testing.T) {
@@ -375,5 +414,167 @@ func TestStopAndStartPauseARunner(t *testing.T) {
 	missing := doAs(t, e.app.StartRunner, e.user, http.MethodPost, "/v1/agent/runners//start", "", nil)
 	if missing.Code != http.StatusBadRequest {
 		t.Errorf("starting without an id = %d, want 400", missing.Code)
+	}
+}
+
+// A retried dispatch with the same key returns the run the first request
+// created. A different key is a new dispatch, and the one-live-run rule still
+// refuses it while the first is queued.
+func TestDispatchIsIdempotentByKey(t *testing.T) {
+	e := newAgentEnv(t)
+	ctx := context.Background()
+	body := map[string]any{"workItemId": e.item.ID, "idempotencyKey": "dispatch-1"}
+
+	first := doAs(t, e.app.Dispatch, e.user, http.MethodPost, "/v1/agent/runs", "", body)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first dispatch = %d, want 201; body %s", first.Code, first.Body)
+	}
+	var created runResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode first dispatch: %v", err)
+	}
+
+	second := doAs(t, e.app.Dispatch, e.user, http.MethodPost, "/v1/agent/runs", "", body)
+	if second.Code != http.StatusOK {
+		t.Fatalf("replayed dispatch = %d, want 200; body %s", second.Code, second.Body)
+	}
+	var replay runResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &replay); err != nil {
+		t.Fatalf("decode replay: %v", err)
+	}
+	if replay.Run.ID != created.Run.ID {
+		t.Errorf("replay returned run %s, want the stored %s", replay.Run.ID, created.Run.ID)
+	}
+
+	runs, err := e.repo.ListRunsByWorkItem(ctx, e.item.ID, 10)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("stored %d runs, want 1: an idempotent replay created a duplicate", len(runs))
+	}
+
+	other := doAs(t, e.app.Dispatch, e.user, http.MethodPost, "/v1/agent/runs", "", map[string]any{
+		"workItemId": e.item.ID, "idempotencyKey": "dispatch-2",
+	})
+	if other.Code != http.StatusConflict {
+		t.Errorf("a different key while a run is live = %d, want 409; body %s", other.Code, other.Body)
+	}
+}
+
+// A pairing code is spent once, expires, and binds the machine to the code's
+// project. The machine's own request cannot name a different project or owner.
+func TestPairingCodeIsSingleUseAndProjectScoped(t *testing.T) {
+	e := newAgentEnv(t)
+	ctx := context.Background()
+
+	issuedRec := doAs(t, e.app.CreatePairingCode, e.user, http.MethodPost,
+		"/v1/agent/runners/pairing-codes", "", map[string]any{"projectId": e.project.ID})
+	if issuedRec.Code != http.StatusCreated {
+		t.Fatalf("issue pairing code = %d, want 201; body %s", issuedRec.Code, issuedRec.Body)
+	}
+	var issued createPairingCodeResponse
+	if err := json.Unmarshal(issuedRec.Body.Bytes(), &issued); err != nil {
+		t.Fatalf("decode pairing code: %v", err)
+	}
+	if !strings.HasPrefix(issued.Code, pairingTokenPrefix) {
+		t.Errorf("code = %q, want the ttpc_ prefix", issued.Code)
+	}
+	if issued.ProjectID != e.project.ID {
+		t.Errorf("projectId = %q, want %q", issued.ProjectID, e.project.ID)
+	}
+
+	pairRec := e.do(t, http.HandlerFunc(e.handler.Pair), http.MethodPost, "/v1/agent/pair", "", "", map[string]any{
+		"code": issued.Code, "name": "vps", "provider": "echo",
+	})
+	if pairRec.Code != http.StatusCreated {
+		t.Fatalf("pair = %d, want 201; body %s", pairRec.Code, pairRec.Body)
+	}
+	var paired pairResponse
+	if err := json.Unmarshal(pairRec.Body.Bytes(), &paired); err != nil {
+		t.Fatalf("decode pair: %v", err)
+	}
+	if paired.Runner.ProjectID == nil || *paired.Runner.ProjectID != e.project.ID {
+		t.Fatalf("paired project = %v, want %q", paired.Runner.ProjectID, e.project.ID)
+	}
+	if !strings.HasPrefix(paired.Token, tokenPrefix) {
+		t.Errorf("token = %q, want a ttag_ runner token", paired.Token)
+	}
+
+	// An older run in another project must not hide this project's work from a
+	// scoped machine.
+	otherProject := &entities.Project{
+		KeyPrefix: "ZZ", Name: "Other", MemberIDs: []entities.UserID{e.user.ID}, AgentEnabled: true,
+	}
+	if err := entities.NewProjectRepository(e.database.DB).Create(ctx, otherProject); err != nil {
+		t.Fatalf("create other project: %v", err)
+	}
+	otherItem := &entities.WorkItem{
+		ProjectID: otherProject.ID, Key: "ZZ-1", Title: "Elsewhere",
+		Status: entities.WorkItemStatusInProgress, Priority: entities.PriorityLow,
+	}
+	if err := entities.NewWorkItemRepository(e.database.DB).Create(ctx, otherItem); err != nil {
+		t.Fatalf("create other item: %v", err)
+	}
+	if err := e.repo.CreateRun(ctx, &entities.AgentRun{
+		WorkItemID: otherItem.ID, ProjectID: otherProject.ID, RequestedBy: e.user.ID,
+		TaskDocument: `{}`, CreatedAt: entities.Timestamp(1),
+	}); err != nil {
+		t.Fatalf("create other run: %v", err)
+	}
+	own := e.queueRun(t)
+
+	claim := e.do(t, e.authed(e.handler.Claim), http.MethodPost, "/v1/agent/runs/claim", paired.Token, "", map[string]any{"waitSeconds": 0})
+	if claim.Code != http.StatusOK {
+		t.Fatalf("scoped claim = %d, want 200; body %s", claim.Code, claim.Body)
+	}
+	var claimed struct {
+		Run runnerRunResponse `json:"run"`
+	}
+	if err := json.Unmarshal(claim.Body.Bytes(), &claimed); err != nil {
+		t.Fatalf("decode claim: %v", err)
+	}
+	if claimed.Run.ID != own.ID {
+		t.Errorf("scoped machine claimed %s, want its project's run %s", claimed.Run.ID, own.ID)
+	}
+
+	reuse := e.do(t, http.HandlerFunc(e.handler.Pair), http.MethodPost, "/v1/agent/pair", "", "", map[string]any{
+		"code": issued.Code, "name": "second",
+	})
+	if reuse.Code != http.StatusUnauthorized {
+		t.Errorf("reusing a spent code = %d, want 401; body %s", reuse.Code, reuse.Body)
+	}
+
+	expiredCode := pairingTokenPrefix + "expired"
+	if err := e.repo.CreatePairingCode(ctx, HashRunnerToken(expiredCode), e.project.ID, e.user.ID, entities.Timestamp(1)); err != nil {
+		t.Fatalf("create expired code: %v", err)
+	}
+	expired := e.do(t, http.HandlerFunc(e.handler.Pair), http.MethodPost, "/v1/agent/pair", "", "", map[string]any{
+		"code": expiredCode, "name": "late",
+	})
+	if expired.Code != http.StatusUnauthorized {
+		t.Errorf("an expired code = %d, want 401; body %s", expired.Code, expired.Body)
+	}
+
+	missingName := e.do(t, http.HandlerFunc(e.handler.Pair), http.MethodPost, "/v1/agent/pair", "", "", map[string]any{
+		"code": issued.Code,
+	})
+	if missingName.Code != http.StatusBadRequest {
+		t.Errorf("pairing without a name = %d, want 400; body %s", missingName.Code, missingName.Body)
+	}
+}
+
+// A project with the agent switch off refuses dispatch even for a member, so the
+// flag is a server rule rather than only a greyed-out button.
+func TestDispatchRequiresTheProjectAgentSwitch(t *testing.T) {
+	e := newAgentEnv(t)
+	e.project.AgentEnabled = false
+	if err := entities.NewProjectRepository(e.database.DB).Update(context.Background(), e.project); err != nil {
+		t.Fatalf("disable agent: %v", err)
+	}
+
+	rec := doAs(t, e.app.Dispatch, e.user, http.MethodPost, "/v1/agent/runs", "", map[string]any{"workItemId": e.item.ID})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("dispatch on a disabled project = %d, want 409; body %s", rec.Code, rec.Body)
 	}
 }

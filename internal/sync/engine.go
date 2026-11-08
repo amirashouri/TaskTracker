@@ -418,6 +418,12 @@ func applyProject(ctx context.Context, projects *entities.ProjectRepository, cha
 	}
 	if existing == nil {
 		project.ID = entities.ProjectID(change.EntityID)
+		// The repository URL is admin metadata, so it cannot ride the change
+		// payload: the feed's project object must not gain a key an installed
+		// client cannot decode. Only the admin route supplies it.
+		if change.ProjectRepoURL != nil {
+			project.RepoURL = *change.ProjectRepoURL
+		}
 		if err := projects.Create(ctx, project); err != nil {
 			return "", err
 		}
@@ -431,6 +437,13 @@ func applyProject(ctx context.Context, projects *entities.ProjectRepository, cha
 	// Update's compare-and-swap must run against the row just read, not the
 	// payload's version — which the client may have omitted.
 	project.Version = existing.Version
+	// A membership push cannot see or change the repository URL, because the
+	// payload never carries it. Preserve the stored value unless an admin route
+	// explicitly supplied a new one.
+	project.RepoURL = existing.RepoURL
+	if change.ProjectRepoURL != nil {
+		project.RepoURL = *change.ProjectRepoURL
+	}
 	if err := projects.Update(ctx, project); err != nil {
 		return "", err
 	}

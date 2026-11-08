@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 type WorkItemRepository struct {
@@ -84,6 +86,31 @@ func (r *WorkItemRepository) Create(ctx context.Context, w *WorkItem) error {
 func (r *WorkItemRepository) GetByID(ctx context.Context, id WorkItemID) (*WorkItem, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT `+workItemColumns+` FROM work_items WHERE id = $1`, id)
 	return oneOrNil(row, scanWorkItem)
+}
+
+// GetByIDs loads a bounded set of work items in one query. It exists for the
+// agent context graph, which needs a task's direct prerequisites and must not
+// issue one query per edge.
+func (r *WorkItemRepository) GetByIDs(ctx context.Context, ids []WorkItemID) ([]*WorkItem, error) {
+	if len(ids) == 0 {
+		return []*WorkItem{}, nil
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+
+	query := `SELECT ` + workItemColumns + ` FROM work_items WHERE id IN (` + strings.Join(placeholders, ", ") + `)`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return collectRows(rows, scanWorkItem)
 }
 
 func (r *WorkItemRepository) Update(ctx context.Context, w *WorkItem) error {

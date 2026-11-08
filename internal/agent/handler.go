@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/amirashouri/tasktracker-server/internal/entities"
 	"github.com/amirashouri/tasktracker-server/internal/httpx"
@@ -326,6 +327,88 @@ func (h *Handler) RevokeSelf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type pairRequest struct {
+	Code       string `json:"code"`
+	Name       string `json:"name"`
+	Provider   string `json:"provider"`
+	ModelLabel string `json:"modelLabel"`
+}
+
+type pairedRunnerResponse struct {
+	ID         entities.AgentRunnerID `json:"id"`
+	ProjectID  *entities.ProjectID    `json:"projectId,omitempty"`
+	Name       string                 `json:"name"`
+	Provider   string                 `json:"provider"`
+	ModelLabel string                 `json:"modelLabel"`
+	CreatedAt  entities.Timestamp     `json:"createdAt"`
+}
+
+type pairResponse struct {
+	Runner pairedRunnerResponse `json:"runner"`
+	// Token is the machine's long-lived credential, returned exactly once. The
+	// pairing code that authorized it is spent and stays spent.
+	Token string `json:"token"`
+}
+
+// Pair redeems a short-lived pairing code and registers the machine.
+//
+// This is the one agent-facing route without a credential in front of it: the
+// code is the credential. It is single-use and expiring, and the runner it
+// creates is assigned to the code's project, so a machine that pairs cannot
+// choose a different project for itself. An invalid, spent and expired code all
+// answer the same 401 rather than telling a caller which one it was.
+func (h *Handler) Pair(w http.ResponseWriter, r *http.Request) {
+	var req pairRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	code := strings.TrimSpace(req.Code)
+	name := strings.TrimSpace(req.Name)
+	if code == "" || name == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "code and name are required")
+		return
+	}
+	provider := strings.TrimSpace(req.Provider)
+	modelLabel := strings.TrimSpace(req.ModelLabel)
+	for _, field := range []string{name, provider, modelLabel} {
+		if utf8.RuneCountInString(field) > maxRunnerNameLength {
+			httpx.WriteError(w, http.StatusBadRequest, "name, provider and modelLabel must be at most 120 characters")
+			return
+		}
+	}
+
+	token, err := newRunnerToken()
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create a runner token")
+		return
+	}
+
+	runner := &entities.AgentRunner{Name: name, Provider: provider, ModelLabel: modelLabel}
+	paired, err := h.repo.PairRunner(r.Context(), HashRunnerToken(code), entities.Now(), runner, HashRunnerToken(token))
+	if errors.Is(err, entities.ErrPairingCodeInvalid) {
+		httpx.WriteError(w, http.StatusUnauthorized, "pairing code is invalid or expired")
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not pair the runner")
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusCreated, pairResponse{
+		Runner: pairedRunnerResponse{
+			ID:         paired.ID,
+			ProjectID:  paired.ProjectID,
+			Name:       paired.Name,
+			Provider:   paired.Provider,
+			ModelLabel: paired.ModelLabel,
+			CreatedAt:  paired.CreatedAt,
+		},
+		Token: token,
+	})
 }
 
 // finishStatus maps the worker's outcome word to the stored status. The closed
