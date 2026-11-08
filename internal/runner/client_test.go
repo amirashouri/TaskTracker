@@ -201,3 +201,83 @@ func TestLoginAndRegisterReadThePairingResponse(t *testing.T) {
 		t.Errorf("registration Authorization = %q, want the access token", registerAuth)
 	}
 }
+
+// Pair is the one bootstrap without a bearer token in front of it: the code is
+// the credential for this call, and the returned runner token is the only thing
+// the machine keeps afterwards.
+func TestPairRedeemsTheCodeWithoutAnAccessToken(t *testing.T) {
+	var body map[string]string
+	var authHeader string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/agent/pair" {
+			t.Errorf("path = %s, want /v1/agent/pair", r.URL.Path)
+		}
+		authHeader = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode pair: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"runner": map[string]any{
+				"id": "runner-2", "name": "box", "provider": "echo",
+				"modelLabel": "llama3.1", "host": "remote",
+				"createdAt": "2026-11-03T12:00:00Z",
+			},
+			"token": "ttag_paired",
+		})
+	}))
+	defer server.Close()
+
+	// A trailing slash must not turn into a double slash in the request path.
+	registration, err := Pair(context.Background(), server.URL+"/", "ttpc_issued", "box", "echo", "llama3.1")
+	if err != nil {
+		t.Fatalf("Pair: %v", err)
+	}
+	if registration.RunnerID != "runner-2" || registration.Token != "ttag_paired" ||
+		registration.Name != "box" || registration.Provider != "echo" || registration.ModelLabel != "llama3.1" {
+		t.Errorf("registration = %+v, want the paired runner and its one-time token", registration)
+	}
+	if authHeader != "" {
+		t.Errorf("pair Authorization = %q, want none: the code is the credential", authHeader)
+	}
+	want := map[string]string{
+		"code": "ttpc_issued", "name": "box", "provider": "echo", "modelLabel": "llama3.1",
+	}
+	for key, value := range want {
+		if body[key] != value {
+			t.Errorf("pair body %s = %q, want %q (body %v)", key, body[key], value, body)
+		}
+	}
+}
+
+// The server deliberately gives an invalid, spent and expired code the same
+// answer; the CLI must pass that sentence through instead of inventing a reason.
+func TestPairReportsAnInvalidPairingCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "pairing code is invalid or expired"})
+	}))
+	defer server.Close()
+
+	_, err := Pair(context.Background(), server.URL, "ttpc_spent", "box", "echo", "")
+	if err == nil || !strings.Contains(err.Error(), "pairing code is invalid or expired") {
+		t.Fatalf("error = %v, want the server's sentence for a spent code", err)
+	}
+}
+
+// A 201 that carries no token must not produce a config with an empty
+// credential, which would only surface much later at the first claim.
+func TestPairRefusesAnAnswerWithoutAToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"runner": map[string]any{"id": "runner-2", "name": "box"},
+		})
+	}))
+	defer server.Close()
+
+	if _, err := Pair(context.Background(), server.URL, "ttpc_issued", "box", "echo", ""); err == nil {
+		t.Fatal("Pair accepted an answer with no runner token")
+	}
+}

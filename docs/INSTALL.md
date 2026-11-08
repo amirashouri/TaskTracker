@@ -505,6 +505,23 @@ It signs in once, registers this machine, and writes the runner credential to
 that is set. The password is used once and is not stored. Run
 `tt agent connect --force` to replace an existing pairing.
 
+**Pairing with a project-scoped code (preferred).** The app's Agent panel can
+mint a one-use `ttpc_…` code and shows the command to copy. Run it on the machine
+that holds the checkout:
+
+```bash
+tt agent connect --pairing-code ttpc_… \
+  --name workstation --provider openai-compatible --model llama3.1
+```
+
+The code is the credential for that one call: the server spends it, binds the
+runner to the code's project, and returns the runner token. No email or password
+is read, and the machine keeps only the token. Leave `--server` out and connect
+asks for the server URL; do not pass `--email` together with `--pairing-code`.
+Codes expire in ten minutes, and invalid, spent and expired codes are all refused
+identically — get a fresh code from the app rather than retrying the same one.
+Both paths write the same config, so `tt agent run` works either way.
+
 | Provider | Reaches | Needs |
 | --- | --- | --- |
 | `openai-compatible` | Ollama (default `http://localhost:11434/v1`), LM Studio, llama.cpp, vLLM, OpenAI | `--model`; `--base-url` for anything but local Ollama; `--api-key` for a hosted endpoint |

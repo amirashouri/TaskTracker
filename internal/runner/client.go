@@ -226,6 +226,39 @@ func Register(ctx context.Context, serverURL, accessToken, name, provider, model
 	}, nil
 }
 
+// Pair redeems a client-issued pairing code. The code is the credential for
+// this one call: the server spends it and returns the runner token once.
+func Pair(ctx context.Context, serverURL, code, name, provider, modelLabel string) (Registration, error) {
+	data, err := postJSON(ctx, strings.TrimRight(serverURL, "/")+"/v1/agent/pair", "", map[string]string{
+		"code": code, "name": name, "provider": provider, "modelLabel": modelLabel,
+	})
+	if err != nil {
+		return Registration{}, err
+	}
+	var body struct {
+		Runner struct {
+			ID         string `json:"id"`
+			Name       string `json:"name"`
+			Provider   string `json:"provider"`
+			ModelLabel string `json:"modelLabel"`
+		} `json:"runner"`
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		return Registration{}, fmt.Errorf("decode pairing: %w", err)
+	}
+	if body.Runner.ID == "" || body.Token == "" {
+		return Registration{}, errors.New("pairing returned no runner id or token")
+	}
+	return Registration{
+		RunnerID:   body.Runner.ID,
+		Name:       body.Runner.Name,
+		Provider:   body.Runner.Provider,
+		ModelLabel: body.Runner.ModelLabel,
+		Token:      body.Token,
+	}, nil
+}
+
 func (c *Client) post(ctx context.Context, path string, payload any) ([]byte, error) {
 	return postJSON(ctx, c.baseURL+path, c.token, payload)
 }

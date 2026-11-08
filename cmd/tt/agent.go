@@ -40,12 +40,16 @@ func agentUsage(w io.Writer) {
 Usage:
   tt agent connect [--server URL] [--email EMAIL] [--name NAME]
                    [--provider PROVIDER] [--model MODEL] [--base-url URL]
-                   [--api-key KEY] [--force]
+                   [--api-key KEY] [--pairing-code CODE] [--force]
   tt agent run [--provider PROVIDER] [--model MODEL] [--base-url URL]
                [--api-key KEY] [--workspace DIR] [--max-steps N]
                [--once] [--wait SECONDS] [--heartbeat DURATION]
   tt agent status
   tt agent disconnect
+
+--pairing-code redeems a one-use ttpc_… code minted in the app and needs no
+email or password; --email is the older machine-wide registration. Pass one or
+the other, not both. Without --server, connect asks for the server URL.
 
 Providers: echo runs no model; openai-compatible reaches Ollama, LM Studio,
 llama.cpp, vLLM and OpenAI at one endpoint; anthropic speaks the Messages API.

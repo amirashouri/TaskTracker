@@ -168,7 +168,7 @@ Usage:
   tt admin reset-password --email EMAIL
   tt agent connect [--server URL] [--email EMAIL] [--name NAME]
                    [--provider PROVIDER] [--model MODEL] [--base-url URL]
-                   [--api-key KEY] [--force]
+                   [--api-key KEY] [--pairing-code CODE] [--force]
   tt agent run [--provider PROVIDER] [--model MODEL] [--base-url URL]
                [--api-key KEY] [--workspace DIR] [--max-steps N]
                [--once] [--wait SECONDS] [--heartbeat DURATION]

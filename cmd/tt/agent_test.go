@@ -16,10 +16,19 @@ import (
 	"github.com/amirashouri/tasktracker-server/internal/runner"
 )
 
-// agentServer is the three routes pairing needs, plus the health probe. It checks
-// the credentials, because storing the wrong one is the failure that only shows up
-// later, at the first run.
-func agentServer(t *testing.T, revokes *atomic.Int32) *httptest.Server {
+// agentServerCalls counts which bootstrap the CLI actually used. Logging in on a
+// pairing-code connect would silently pair the wrong kind of runner.
+type agentServerCalls struct {
+	revokes       atomic.Int32
+	logins        atomic.Int32
+	registrations atomic.Int32
+	pairs         atomic.Int32
+}
+
+// agentServer is the routes both pairing paths need, plus the health probe. It
+// checks the credentials, because storing the wrong one is the failure that only
+// shows up later, at the first run.
+func agentServer(t *testing.T, calls *agentServerCalls) *httptest.Server {
 	t.Helper()
 
 	mux := http.NewServeMux()
@@ -27,6 +36,7 @@ func agentServer(t *testing.T, revokes *atomic.Int32) *httptest.Server {
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		calls.logins.Add(1)
 		var body struct {
 			Email    string `json:"email"`
 			Password string `json:"password"`
@@ -42,6 +52,7 @@ func agentServer(t *testing.T, revokes *atomic.Int32) *httptest.Server {
 		_ = json.NewEncoder(w).Encode(map[string]any{"accessToken": "jwt"})
 	})
 	mux.HandleFunc("/v1/agent/runners", func(w http.ResponseWriter, r *http.Request) {
+		calls.registrations.Add(1)
 		if r.Header.Get("Authorization") != "Bearer jwt" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -67,15 +78,48 @@ func agentServer(t *testing.T, revokes *atomic.Int32) *httptest.Server {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		revokes.Add(1)
+		calls.revokes.Add(1)
 		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/v1/agent/pair", func(w http.ResponseWriter, r *http.Request) {
+		calls.pairs.Add(1)
+		// The pairing code is the credential: no user JWT or runner token is sent.
+		if auth := r.Header.Get("Authorization"); auth != "" {
+			t.Errorf("pair Authorization = %q, want none", auth)
+		}
+		var body struct {
+			Code       string `json:"code"`
+			Name       string `json:"name"`
+			Provider   string `json:"provider"`
+			ModelLabel string `json:"modelLabel"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode pair: %v", err)
+		}
+		if body.Code != "ttpc_issued" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "pairing code is invalid or expired"})
+			return
+		}
+		if body.Name != "box" || body.Provider != "echo" {
+			t.Errorf("pair body = %+v, want the machine name and provider", body)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"runner": map[string]any{
+				"id": "runner-2", "name": body.Name, "provider": body.Provider,
+				"modelLabel": body.ModelLabel, "host": "remote",
+				"createdAt": "2026-11-03T12:00:00Z",
+			},
+			"token": "ttag_paired",
+		})
 	})
 	return httptest.NewServer(mux)
 }
 
 func TestAgentConnectStatusAndDisconnect(t *testing.T) {
-	var revokes atomic.Int32
-	server := agentServer(t, &revokes)
+	var calls agentServerCalls
+	server := agentServer(t, &calls)
 	defer server.Close()
 
 	configPath := filepath.Join(t.TempDir(), "agent.json")
@@ -130,8 +174,11 @@ func TestAgentConnectStatusAndDisconnect(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("disconnect = %d; stdout %s stderr %s", code, out, errOut)
 	}
-	if revokes.Load() != 1 {
-		t.Errorf("revoke requests = %d, want 1", revokes.Load())
+	if calls.revokes.Load() != 1 {
+		t.Errorf("revoke requests = %d, want 1", calls.revokes.Load())
+	}
+	if calls.pairs.Load() != 0 {
+		t.Errorf("pair requests = %d, want 0: the email path must not redeem a code", calls.pairs.Load())
 	}
 	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
 		t.Error("the config survived a disconnect")
@@ -173,5 +220,149 @@ func TestAgentConnectRefusesAMalformedServerURL(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "http or https") {
 		t.Errorf("error = %q, want it to name the accepted schemes", stderr.String())
+	}
+}
+
+func runAgentCLI(t *testing.T, args []string, stdin string) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), args, strings.NewReader(stdin), &stdout, &stderr,
+		filepath.Join(t.TempDir(), "install.json"), "dev",
+		install.ExecRunner{Stdout: &stdout, Stderr: &stderr})
+	return code, stdout.String(), stderr.String()
+}
+
+// The whole point of --pairing-code is that a machine can pair without a member
+// signing in on it. Empty stdin makes any email or password prompt fail with EOF,
+// so a zero exit proves neither was asked for.
+func TestAgentConnectRedeemsAPairingCodeWithoutAskingForCredentials(t *testing.T) {
+	var calls agentServerCalls
+	server := agentServer(t, &calls)
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "agent.json")
+	t.Setenv("TT_AGENT_CONFIG", configPath)
+
+	code, out, errOut := runAgentCLI(t, []string{
+		"agent", "connect", "--server", server.URL + "/",
+		"--pairing-code", "ttpc_issued", "--name", "box",
+	}, "")
+	if code != 0 {
+		t.Fatalf("connect = %d; stdout %s stderr %s", code, out, errOut)
+	}
+	if !strings.Contains(out, "connected box") {
+		t.Errorf("connect output = %q, want the paired machine name", out)
+	}
+	if strings.Contains(out, "Email") || strings.Contains(out, "Password") {
+		t.Errorf("the pairing path prompted for credentials: %q", out)
+	}
+
+	cfg, err := runner.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.RunnerID != "runner-2" || cfg.Token != "ttag_paired" || cfg.Provider != "echo" {
+		t.Errorf("config = %+v, want the runner and token returned by /v1/agent/pair", cfg)
+	}
+	if cfg.ServerURL != server.URL {
+		t.Errorf("ServerURL = %q, want %q", cfg.ServerURL, server.URL)
+	}
+	if calls.pairs.Load() != 1 || calls.logins.Load() != 0 || calls.registrations.Load() != 0 {
+		t.Errorf("calls = pairs %d, logins %d, registrations %d; want only one pair",
+			calls.pairs.Load(), calls.logins.Load(), calls.registrations.Load())
+	}
+}
+
+// The app shows `tt agent connect --pairing-code …` with no --server, so the
+// copied command must work by asking for the server URL and nothing else.
+func TestAgentConnectWithOnlyAPairingCodeAsksJustForTheServer(t *testing.T) {
+	var calls agentServerCalls
+	server := agentServer(t, &calls)
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "agent.json")
+	t.Setenv("TT_AGENT_CONFIG", configPath)
+
+	code, out, errOut := runAgentCLI(t, []string{
+		"agent", "connect", "--pairing-code", "ttpc_issued", "--name", "box",
+	}, server.URL+"\n")
+	if code != 0 {
+		t.Fatalf("connect = %d; stdout %s stderr %s", code, out, errOut)
+	}
+	if !strings.Contains(out, "Server URL") {
+		t.Errorf("output = %q, want the server URL prompt", out)
+	}
+	if strings.Contains(out, "Email") || strings.Contains(out, "Password") {
+		t.Errorf("the pairing path prompted for credentials: %q", out)
+	}
+	cfg, err := runner.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.ServerURL != server.URL || cfg.Token != "ttag_paired" {
+		t.Errorf("config = %+v, want the prompted server and the paired token", cfg)
+	}
+}
+
+// A spent, expired or invented code gets the server's one 401 sentence. The CLI
+// must not write a config for it, or the machine looks paired until its first run.
+func TestAgentConnectRefusesAnInvalidPairingCode(t *testing.T) {
+	var calls agentServerCalls
+	server := agentServer(t, &calls)
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "agent.json")
+	t.Setenv("TT_AGENT_CONFIG", configPath)
+
+	code, out, errOut := runAgentCLI(t, []string{
+		"agent", "connect", "--server", server.URL,
+		"--pairing-code", "ttpc_spent", "--name", "box",
+	}, "")
+	if code != 1 {
+		t.Fatalf("connect = %d, want 1; stdout %s stderr %s", code, out, errOut)
+	}
+	if !strings.Contains(errOut, "pairing code is invalid or expired") {
+		t.Errorf("error = %q, want the server's sentence", errOut)
+	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Errorf("a refused pairing wrote a config: %v", err)
+	}
+	if calls.logins.Load() != 0 || calls.registrations.Load() != 0 {
+		t.Errorf("a failed pair fell back to the email flow: logins %d, registrations %d",
+			calls.logins.Load(), calls.registrations.Load())
+	}
+}
+
+// An explicitly empty code must not quietly switch to the email flow: that would
+// put a member's password prompt on a machine meant to pair with a code.
+func TestAgentConnectRefusesAnEmptyPairingCode(t *testing.T) {
+	t.Setenv("TT_AGENT_CONFIG", filepath.Join(t.TempDir(), "agent.json"))
+
+	code, out, errOut := runAgentCLI(t, []string{
+		"agent", "connect", "--server", "http://127.0.0.1:1", "--pairing-code", "",
+	}, "")
+	if code != 2 {
+		t.Fatalf("connect = %d, want 2; stdout %s stderr %s", code, out, errOut)
+	}
+	if !strings.Contains(errOut, "needs a ttpc_") {
+		t.Errorf("error = %q, want the blank-code refusal", errOut)
+	}
+	if strings.Contains(out, "Email") || strings.Contains(out, "Password") {
+		t.Errorf("the blank code fell through to the email flow: %q", out)
+	}
+}
+
+func TestAgentConnectRefusesPairingCodeWithEmail(t *testing.T) {
+	t.Setenv("TT_AGENT_CONFIG", filepath.Join(t.TempDir(), "agent.json"))
+
+	code, out, errOut := runAgentCLI(t, []string{
+		"agent", "connect", "--server", "http://127.0.0.1:1",
+		"--email", "dev@example.com", "--pairing-code", "ttpc_issued",
+	}, "")
+	if code != 2 {
+		t.Fatalf("connect = %d, want 2; stdout %s stderr %s", code, out, errOut)
+	}
+	if !strings.Contains(errOut, "not both") {
+		t.Errorf("error = %q, want the mutual-exclusion message", errOut)
 	}
 }

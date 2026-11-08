@@ -22,9 +22,28 @@ func runAgentConnect(ctx context.Context, args []string, stdin io.Reader, stdout
 	model := fs.String("model", "", "model name, for a provider that needs one")
 	baseURL := fs.String("base-url", "", "model endpoint, stored with the provider")
 	apiKey := fs.String("api-key", "", "provider API key, stored in the 0600 config (TT_AGENT_API_KEY also works)")
+	pairingCode := fs.String("pairing-code", "", "redeem a client-issued ttpc_… pairing code instead of signing in with email and password")
 	force := fs.Bool("force", false, "replace an existing connection")
 	if code, done := parseFlags(fs, args, stderr); done {
 		return code
+	}
+
+	// Visit sees only flags the caller actually supplied, so an explicit empty
+	// code is an error rather than a silent fall-through to the password prompt.
+	pairingCodeGiven := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "pairing-code" {
+			pairingCodeGiven = true
+		}
+	})
+	code := strings.TrimSpace(*pairingCode)
+	if pairingCodeGiven && code == "" {
+		fmt.Fprintln(stderr, "tt agent connect: --pairing-code needs a ttpc_… code")
+		return 2
+	}
+	if code != "" && strings.TrimSpace(*email) != "" {
+		fmt.Fprintln(stderr, "tt agent connect: --pairing-code replaces --email; pass one or the other, not both")
+		return 2
 	}
 
 	configPath, err := runner.DefaultConfigPath()
@@ -67,25 +86,6 @@ func runAgentConnect(ctx context.Context, args []string, stdin io.Reader, stdout
 		return 2
 	}
 
-	address := strings.TrimSpace(*email)
-	if address == "" {
-		address, err = p.AskRequired("Email")
-		if err != nil {
-			return fail(ctx, stderr, "tt agent connect", err)
-		}
-	}
-	// The password is used once and never written: the runner token is the only
-	// credential this machine keeps.
-	password, err := p.Secret("Password")
-	if err != nil {
-		return fail(ctx, stderr, "tt agent connect", err)
-	}
-
-	accessToken, err := runner.Login(ctx, serverURL, address, password)
-	if err != nil {
-		return fail(ctx, stderr, "tt agent connect", err)
-	}
-
 	machineName := strings.TrimSpace(*name)
 	if machineName == "" {
 		if host, hostErr := os.Hostname(); hostErr == nil && strings.TrimSpace(host) != "" {
@@ -94,8 +94,38 @@ func runAgentConnect(ctx context.Context, args []string, stdin io.Reader, stdout
 			machineName = "agent"
 		}
 	}
+	modelLabel := strings.TrimSpace(*model)
 
-	registration, err := runner.Register(ctx, serverURL, accessToken, machineName, providerName, strings.TrimSpace(*model))
+	// Both paths end with the same runner token in the config, so `tt agent run`
+	// cannot tell how the machine was paired. The difference is the bootstrap
+	// credential: a one-use code that already carries the project assignment, or
+	// a member's email and password used once to register a machine-wide runner.
+	var registration runner.Registration
+	if code != "" {
+		// No email, no password: the code is the credential for this one call and
+		// the server spends it. An invalid, spent or expired code gets the same
+		// 401, so the CLI does not try to classify it locally.
+		registration, err = runner.Pair(ctx, serverURL, code, machineName, providerName, modelLabel)
+	} else {
+		address := strings.TrimSpace(*email)
+		if address == "" {
+			address, err = p.AskRequired("Email")
+			if err != nil {
+				return fail(ctx, stderr, "tt agent connect", err)
+			}
+		}
+		// The password is used once and never written: the runner token is the only
+		// credential this machine keeps.
+		password, passwordErr := p.Secret("Password")
+		if passwordErr != nil {
+			return fail(ctx, stderr, "tt agent connect", passwordErr)
+		}
+		accessToken, loginErr := runner.Login(ctx, serverURL, address, password)
+		if loginErr != nil {
+			return fail(ctx, stderr, "tt agent connect", loginErr)
+		}
+		registration, err = runner.Register(ctx, serverURL, accessToken, machineName, providerName, modelLabel)
+	}
 	if err != nil {
 		return fail(ctx, stderr, "tt agent connect", err)
 	}
@@ -106,7 +136,7 @@ func runAgentConnect(ctx context.Context, args []string, stdin io.Reader, stdout
 		RunnerName: registration.Name,
 		Token:      registration.Token,
 		Provider:   providerName,
-		Model:      strings.TrimSpace(*model),
+		Model:      modelLabel,
 		BaseURL:    strings.TrimRight(strings.TrimSpace(*baseURL), "/"),
 		APIKey:     strings.TrimSpace(*apiKey),
 	}
