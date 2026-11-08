@@ -1244,6 +1244,7 @@ func TestProjectRepositoryURLRoundTripsThroughTheAdminRoute(t *testing.T) {
 	created := env.do(t, http.MethodPost, "/v1/admin/projects", admin.AccessToken, map[string]any{
 		"id": newID, "keyPrefix": "RP", "name": "Repository project",
 		"memberIds": []string{string(env.user.ID)}, "repoUrl": "https://github.com/acme/created.git",
+		"agentEnabled": true,
 	})
 	if created.Code != http.StatusCreated {
 		t.Fatalf("creating with repoUrl = %d, body = %s", created.Code, created.Body.String())
@@ -1259,6 +1260,9 @@ func TestProjectRepositoryURLRoundTripsThroughTheAdminRoute(t *testing.T) {
 	}
 	if createdStored.RepoURL != "https://github.com/acme/created.git" {
 		t.Errorf("created repoUrl = %q, want it stored", createdStored.RepoURL)
+	}
+	if !createdStored.AgentEnabled {
+		t.Errorf("created agentEnabled = false, want the create body to enable agent runs")
 	}
 
 	// A membership push is not an admin route, so it cannot change the metadata

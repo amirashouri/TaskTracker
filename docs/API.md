@@ -349,7 +349,9 @@ route may write it — a membership sync push cannot change it.
 
 Creates a project. The body is the create form's fields plus the id the client
 minted — clients name their own project ids on the sync path too, so a response
-lost in flight leaves a row the caller can name rather than a second project:
+lost in flight leaves a row the caller can name rather than a second project.
+`agentEnabled` is optional and defaults to off; the create form offers it so a
+project can be born ready for a paired agent:
 
 ```json
 {
