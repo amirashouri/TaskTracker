@@ -80,34 +80,38 @@ func NewAppHandler(
 // `startedAt` and `finishedAt` with defaults, so those keys may be omitted; every
 // other key is required and always present.
 type appRunResponse struct {
-	ID              entities.AgentRunID     `json:"id"`
-	WorkItemID      entities.WorkItemID     `json:"workItemId"`
-	ProjectID       entities.ProjectID      `json:"projectId"`
-	Status          entities.AgentRunStatus `json:"status"`
-	RequestedBy     entities.UserID         `json:"requestedBy"`
-	RunnerID        *entities.AgentRunnerID `json:"runnerId,omitempty"`
-	CancelRequested bool                    `json:"cancelRequested"`
-	CreatedAt       entities.Timestamp      `json:"createdAt"`
-	StartedAt       *entities.Timestamp     `json:"startedAt,omitempty"`
-	FinishedAt      *entities.Timestamp     `json:"finishedAt,omitempty"`
-	Summary         string                  `json:"summary"`
-	Error           string                  `json:"error"`
+	ID                entities.AgentRunID     `json:"id"`
+	WorkItemID        entities.WorkItemID     `json:"workItemId"`
+	ProjectID         entities.ProjectID      `json:"projectId"`
+	Status            entities.AgentRunStatus `json:"status"`
+	RequestedBy       entities.UserID         `json:"requestedBy"`
+	RunnerID          *entities.AgentRunnerID `json:"runnerId,omitempty"`
+	RequestedRunnerID *entities.AgentRunnerID `json:"requestedRunnerId,omitempty"`
+	CancelRequested   bool                    `json:"cancelRequested"`
+	CreatedAt         entities.Timestamp      `json:"createdAt"`
+	StartedAt         *entities.Timestamp     `json:"startedAt,omitempty"`
+	FinishedAt        *entities.Timestamp     `json:"finishedAt,omitempty"`
+	Summary           string                  `json:"summary"`
+	Error             string                  `json:"error"`
+	Diff              string                  `json:"diff,omitempty"`
 }
 
 func appRunFrom(run entities.AgentRun) appRunResponse {
 	return appRunResponse{
-		ID:              run.ID,
-		WorkItemID:      run.WorkItemID,
-		ProjectID:       run.ProjectID,
-		Status:          run.Status,
-		RequestedBy:     run.RequestedBy,
-		RunnerID:        run.RunnerID,
-		CancelRequested: run.CancelRequested,
-		CreatedAt:       run.CreatedAt,
-		StartedAt:       run.StartedAt,
-		FinishedAt:      run.FinishedAt,
-		Summary:         run.Summary,
-		Error:           run.Error,
+		ID:                run.ID,
+		WorkItemID:        run.WorkItemID,
+		ProjectID:         run.ProjectID,
+		Status:            run.Status,
+		RequestedBy:       run.RequestedBy,
+		RunnerID:          run.RunnerID,
+		RequestedRunnerID: run.RequestedRunnerID,
+		CancelRequested:   run.CancelRequested,
+		CreatedAt:         run.CreatedAt,
+		StartedAt:         run.StartedAt,
+		FinishedAt:        run.FinishedAt,
+		Summary:           run.Summary,
+		Error:             run.Error,
+		Diff:              run.Diff,
 	}
 }
 
@@ -128,6 +132,8 @@ type appRunnerResponse struct {
 	Name       string              `json:"name"`
 	Provider   string              `json:"provider"`
 	ModelLabel string              `json:"modelLabel"`
+	// Host is the pairing choice. Additive and omitted when unstated.
+	Host       string              `json:"host,omitempty"`
 	LastSeenAt *entities.Timestamp `json:"lastSeenAt,omitempty"`
 	RevokedAt  *entities.Timestamp `json:"revokedAt,omitempty"`
 	// PausedAt is the settings screen's stop state. It is additive: the client
@@ -144,6 +150,7 @@ func appRunnerFrom(runner entities.AgentRunner) appRunnerResponse {
 		Name:       runner.Name,
 		Provider:   runner.Provider,
 		ModelLabel: runner.ModelLabel,
+		Host:       runner.Host,
 		LastSeenAt: runner.LastSeenAt,
 		RevokedAt:  runner.RevokedAt,
 		PausedAt:   runner.PausedAt,
@@ -157,6 +164,8 @@ func appRunnerFrom(runner entities.AgentRunner) appRunnerResponse {
 type dispatchRequest struct {
 	WorkItemID     entities.WorkItemID `json:"workItemId"`
 	IdempotencyKey string              `json:"idempotencyKey"`
+	// RunnerID is optional. When set, only that machine may claim the run.
+	RunnerID *entities.AgentRunnerID `json:"runnerId"`
 }
 
 type runResponse struct {
@@ -220,6 +229,21 @@ func (h *AppHandler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var requestedRunnerID *entities.AgentRunnerID
+	if req.RunnerID != nil && *req.RunnerID != "" {
+		runner, err := h.repo.GetRunner(ctx, *req.RunnerID)
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "could not read the runner")
+			return
+		}
+		if runner == nil || runner.UserID != userID || runner.Revoked() || runner.Paused() ||
+			runner.ProjectID == nil || *runner.ProjectID != project.ID {
+			httpx.WriteError(w, http.StatusConflict, "runner is not available for this project")
+			return
+		}
+		requestedRunnerID = &runner.ID
+	}
+
 	// The run id is minted before the brief because the brief names it: a worker
 	// that recovers after a lost claim can tell which run it is holding.
 	runID := entities.NewAgentRunID()
@@ -230,12 +254,13 @@ func (h *AppHandler) Dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	run := &entities.AgentRun{
-		ID:             runID,
-		WorkItemID:     item.ID,
-		ProjectID:      item.ProjectID,
-		RequestedBy:    userID,
-		TaskDocument:   document,
-		IdempotencyKey: idempotencyKey,
+		ID:                runID,
+		WorkItemID:        item.ID,
+		ProjectID:         item.ProjectID,
+		RequestedBy:       userID,
+		RequestedRunnerID: requestedRunnerID,
+		TaskDocument:      document,
+		IdempotencyKey:    idempotencyKey,
 	}
 	stored, created, err := h.repo.CreateRunIdempotent(ctx, run)
 	if err != nil {
@@ -571,6 +596,9 @@ func (h *AppHandler) RevokeRunner(w http.ResponseWriter, r *http.Request) {
 
 type createPairingCodeRequest struct {
 	ProjectID entities.ProjectID `json:"projectId"`
+	// Host is the pairing sheet's desktop/remote choice. Empty is accepted for
+	// an older client and means the host was not stated.
+	Host string `json:"host"`
 }
 
 type createPairingCodeResponse struct {
@@ -578,6 +606,7 @@ type createPairingCodeResponse struct {
 	// means issuing a new code, not recovering this one.
 	Code      string             `json:"code"`
 	ProjectID entities.ProjectID `json:"projectId"`
+	Host      string             `json:"host,omitempty"`
 	ExpiresAt entities.Timestamp `json:"expiresAt"`
 }
 
@@ -597,6 +626,11 @@ func (h *AppHandler) CreatePairingCode(w http.ResponseWriter, r *http.Request) {
 	var req createPairingCodeRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil || req.ProjectID == "" {
 		httpx.WriteError(w, http.StatusBadRequest, "projectId is required")
+		return
+	}
+	host := strings.TrimSpace(req.Host)
+	if host != "" && host != entities.RunnerHostDesktop && host != entities.RunnerHostRemote {
+		httpx.WriteError(w, http.StatusBadRequest, "host must be desktop or remote")
 		return
 	}
 
@@ -620,7 +654,7 @@ func (h *AppHandler) CreatePairingCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expiresAt := entities.Timestamp(time.Now().Add(pairingCodeTTL).Truncate(time.Second).UnixMilli())
-	if err := h.repo.CreatePairingCode(ctx, HashRunnerToken(code), project.ID, userID, expiresAt); err != nil {
+	if err := h.repo.CreatePairingCode(ctx, HashRunnerToken(code), project.ID, userID, host, expiresAt); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not create a pairing code")
 		return
 	}
@@ -628,6 +662,7 @@ func (h *AppHandler) CreatePairingCode(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusCreated, createPairingCodeResponse{
 		Code:      code,
 		ProjectID: project.ID,
+		Host:      host,
 		ExpiresAt: expiresAt,
 	})
 }

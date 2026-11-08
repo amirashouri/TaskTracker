@@ -24,6 +24,18 @@ const (
 // was talked into editing `../../etc/passwd` gets an error instead of a file.
 type workspace struct{ root string }
 
+// gitDiff is the reviewable change the agent made, when the workspace is a git
+// checkout. A workspace that is not one has no diff to show, which is why this
+// returns empty rather than failing a run that already succeeded.
+func (w workspace) gitDiff() string {
+	cmd := exec.Command("git", "-C", w.root, "diff", "--no-color", "--no-ext-diff", "--")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return truncate(strings.TrimSpace(string(output)), 200_000)
+}
+
 func newWorkspace(dir string) (workspace, error) {
 	absolute, err := filepath.Abs(strings.TrimSpace(dir))
 	if err != nil {

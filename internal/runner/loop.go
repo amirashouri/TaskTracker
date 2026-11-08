@@ -99,7 +99,7 @@ func runToolLoop(ctx context.Context, chat chatModel, run Run, ws workspace, max
 				Message: summary,
 				Payload: fmt.Sprintf(`{"steps":%d}`, step),
 			})
-			return Result{Outcome: "succeeded", Summary: summary}
+			return Result{Outcome: "succeeded", Summary: summary, Diff: ws.gitDiff()}
 		}
 
 		emit(Event{

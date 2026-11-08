@@ -132,11 +132,12 @@ func (c *Client) Heartbeat(ctx context.Context, runID string) (bool, error) {
 
 // Finish records the terminal outcome. It is idempotent server-side, so a retry
 // after a lost response succeeds.
-func (c *Client) Finish(ctx context.Context, runID, outcome, summary, detail string) error {
+func (c *Client) Finish(ctx context.Context, runID, outcome, summary, detail, diff string) error {
 	_, err := c.post(ctx, "/v1/agent/runs/"+url.PathEscape(runID)+"/finish", map[string]string{
 		"outcome": outcome,
 		"summary": summary,
 		"error":   detail,
+		"diff":    diff,
 	})
 	return err
 }

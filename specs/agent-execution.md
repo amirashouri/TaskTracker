@@ -152,12 +152,18 @@ Tests live beside the code: `internal/entities/{agent_repository,repo_url}_test.
   `go test` passes for `internal/entities`, `internal/admin`, `internal/sync`,
   `internal/db`, `internal/agent` and `cmd/server`.
 - **Pending:** PostgreSQL migration/behavior run when a test URL is available;
-  `scripts/check.sh` remains a release gate. Optional follow-ups: `tt agent
-  connect --pairing-code`, a project default branch for `targetBranch`, and a
-  project-scoped runner list on the client.
-- **Next step:** Finish `TaskTrackerKMP/specs/agent-management.md`: render the
-  project's paired machines with health and host labels, add the CLI pairing
-  flag, and run the KMP full matrix gate.
+  `scripts/check.sh` remains a release gate. A draft `0004_agent_targeting`
+  migration adds `host`, `requested_runner_id`, and `result_diff` columns but has
+  no Go wiring yet; it stays untracked until the host label, `runnerId` targeting,
+  and result-diff wire contracts are agreed and ACKed cross-repo. Optional
+  follow-ups: `tt agent connect --pairing-code`, a project default branch for
+  `targetBranch`, and a project-scoped runner list on the client.
+- **Next step:** The host-label, `runnerId` targeting, result-diff, and CLI-flag
+  work is consolidated in `specs/agent-wire-contracts.md`. Add the CLI pairing flag
+  (`tt agent connect --pairing-code`), close the KMP `diff` DTO gap, and run
+  `scripts/check.sh full` as the KMP release gate. Agree the contracts and wire the
+  `0004_agent_targeting` migration into Go before any new field is emitted to
+  installed clients.
 - **Gotchas:** The client declares both fields with defaults, which is the
   rollout condition for emitting them; an older installed client still fails on
   a project that *has* a `repoUrl`, so deployment order still matters until the
