@@ -1401,7 +1401,8 @@ func TestTheProjectStatusCatalogRoundTripsWithTheClientsKeys(t *testing.T) {
 		t.Fatalf("statuses = %d, want 2: %s", len(raw.Statuses), updated.Body)
 	}
 	assertWireKeys(t, "a status definition", raw.Statuses[0],
-		[]string{"id", "name", "category", "order", "color"}, nil)
+		[]string{"id", "name", "category", "order", "color"},
+		[]string{"appearsOnBoard"})
 
 	var got entities.Project
 	if err := json.Unmarshal(updated.Body.Bytes(), &got); err != nil {

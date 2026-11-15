@@ -140,6 +140,10 @@ type StatusDefinition struct {
 	Category WorkItemStatus `json:"category"`
 	Order    int            `json:"order"`
 	Color    string         `json:"color"`
+	// AppearsOnBoard overrides whether the status is a board column. nil means
+	// "use the category's default" (Backlog/Closed are never on the board), so
+	// an older client or an untargeted write gains no key and keeps working.
+	AppearsOnBoard *bool `json:"appearsOnBoard,omitempty"`
 }
 
 type Project struct {
