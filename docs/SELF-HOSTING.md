@@ -478,6 +478,20 @@ restored is a hypothesis.
 
 ## 10. Upgrades
 
+If `tt install --runtime native` supervises this host, update through the CLI.
+It downloads the named binary over the running one, writes the install state,
+restarts the unit, and waits for `/readyz`:
+
+```bash
+sudo tt update --server-binary-url https://example.com/releases/v1.5.0/server --version v1.5.0
+```
+
+`tt` never phones home: the URL is the release asset you chose. The running
+process keeps its open inode while the new file is renamed into place, so the
+service only changes binary at the restart.
+
+For a hand-built install, replace the binary yourself:
+
 ```bash
 CGO_ENABLED=1 go build -o server ./cmd/server
 sudo systemctl stop tasktracker

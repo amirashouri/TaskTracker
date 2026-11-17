@@ -54,6 +54,8 @@ func run(
 	switch args[0] {
 	case "install":
 		return runInstall(ctx, args[1:], stdin, stdout, stderr, statePath, buildVersion, runner)
+	case "update":
+		return runUpdate(ctx, args[1:], stdout, stderr, statePath, runner)
 	case "expose":
 		return runExpose(ctx, args[1:], stdout, stderr, statePath, runner)
 	case "status":
@@ -159,6 +161,7 @@ Usage:
              [--server-binary-url URL] [--data-dir PATH] [--name NAME] [--port PORT]
              [--admin-email EMAIL --admin-password PASSWORD]
              [--admin-display-name NAME] [--yes] [--dry-run]
+  tt update --version TAG | --server-binary-url URL [--dry-run]
   tt expose [--provider lan|tailscale|cloudflare]
   tt status
   tt doctor

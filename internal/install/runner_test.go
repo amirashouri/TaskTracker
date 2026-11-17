@@ -173,3 +173,62 @@ func TestExecCommandRunnerStopsOnCancellation(t *testing.T) {
 		t.Fatal("Run kept the command alive after cancellation")
 	}
 }
+
+func TestPullImageFetchesTheNamedReference(t *testing.T) {
+	commands := &recordingCommands{}
+	runner := ExecRunner{commands: commands}
+
+	step := Step{Kind: StepPullImage, Image: "tasktracker-server:v1.4.0"}
+	if err := runner.Run(context.Background(), step); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := []string{"pull", "tasktracker-server:v1.4.0"}
+	if commands.name != "docker" {
+		t.Errorf("command = %q, want docker", commands.name)
+	}
+	if !reflect.DeepEqual(commands.args, want) {
+		t.Errorf("args = %#v\nwant %#v", commands.args, want)
+	}
+}
+
+func TestPullImageRefusesAnEmptyReference(t *testing.T) {
+	err := (ExecRunner{}).Run(context.Background(), Step{Kind: StepPullImage})
+	if err == nil {
+		t.Fatal("Run accepted a pull step with no image")
+	}
+}
+
+func TestFetchBinaryStepDownloadsToTheSupervisedPath(t *testing.T) {
+	original := FetchBinaryURL
+	t.Cleanup(func() { FetchBinaryURL = original })
+
+	var gotURL, gotDest string
+	FetchBinaryURL = func(_ context.Context, url, dest string) error {
+		gotURL, gotDest = url, dest
+		return nil
+	}
+
+	state := State{BinaryPath: "/opt/tasktracker/server"}
+	step := Step{
+		Kind:      StepFetchBinary,
+		State:     state,
+		SourceURL: "https://example.com/tt/server",
+	}
+	if err := (ExecRunner{}).Run(context.Background(), step); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if gotURL != step.SourceURL {
+		t.Errorf("fetched %q, want %q", gotURL, step.SourceURL)
+	}
+	if gotDest != state.BinaryPath {
+		t.Errorf("wrote %q, want the supervised binary %q", gotDest, state.BinaryPath)
+	}
+}
+
+func TestFetchBinaryStepRefusesAnEmptyURL(t *testing.T) {
+	err := (ExecRunner{}).Run(context.Background(), Step{Kind: StepFetchBinary, State: State{BinaryPath: "/opt/tasktracker/server"}})
+	if err == nil {
+		t.Fatal("Run accepted a fetch step with no URL")
+	}
+}

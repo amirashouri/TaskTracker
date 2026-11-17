@@ -3,6 +3,7 @@ package install
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 )
@@ -12,6 +13,7 @@ type Action string
 
 const (
 	ActionInstall            Action = "install"
+	ActionUpdate             Action = "update"
 	ActionLogs               Action = "logs"
 	ActionUninstall          Action = "uninstall"
 	ActionAdminList          Action = "admin-list"
@@ -35,6 +37,10 @@ type Command struct {
 	// BinaryPath is the server binary a native install supervises. A Docker
 	// install ignores it: the image carries the binary.
 	BinaryPath string
+	// ServerBinaryURL is the https URL a native update downloads the new binary
+	// from. tt never phones home: the operator names the release asset, and
+	// nothing derives this from a version or a project endpoint.
+	ServerBinaryURL string
 
 	// Admin bootstrap is first-install only. Repair ignores these fields so a
 	// re-run cannot create a second account or resurrect a deleted one.
@@ -59,6 +65,7 @@ type StepKind string
 const (
 	StepWriteState   StepKind = "write-state"
 	StepWriteCompose StepKind = "write-compose"
+	StepPullImage    StepKind = "pull-image"
 	StepComposeUp    StepKind = "compose-up"
 	StepWaitReady    StepKind = "wait-ready"
 	StepCreateAdmin  StepKind = "create-admin"
@@ -71,6 +78,7 @@ const (
 	StepEnsureUser         StepKind = "ensure-user"
 	StepWriteEnv           StepKind = "write-env"
 	StepWriteUnit          StepKind = "write-unit"
+	StepFetchBinary        StepKind = "fetch-binary"
 	StepStartService       StepKind = "start-service"
 	StepRestartService     StepKind = "restart-service"
 	StepStopService        StepKind = "stop-service"
@@ -91,6 +99,11 @@ type Step struct {
 	Env         string
 	Unit        string
 	Admin       *AdminBootstrap
+	// SourceURL is the release asset a StepFetchBinary downloads, and Image is
+	// the reference a StepPullImage fetches. Both are explicit because the
+	// plan names its own artifact instead of reading a file it has not written.
+	SourceURL string
+	Image     string
 }
 
 // Next turns a state and a command into a plan. It is pure: no clock, no
@@ -100,6 +113,8 @@ func Next(state State, cmd Command) ([]Step, error) {
 	switch cmd.Action {
 	case ActionInstall:
 		return nextInstall(state, cmd)
+	case ActionUpdate:
+		return nextUpdate(state, cmd)
 	case ActionLogs:
 		return nextLogs(state)
 	case ActionUninstall:
@@ -212,6 +227,83 @@ func nextInstall(state State, cmd Command) ([]Step, error) {
 				DisplayName: cmd.AdminDisplayName,
 			},
 		})
+	}
+	return steps, nil
+}
+
+// nextUpdate moves an existing instance to a release the operator names.
+//
+// `tt install` deliberately keeps the recorded tag and binary, because a repair
+// that silently upgraded would drift from the version that planned it. Update is
+// the verb that changes them: Docker pulls the named image before the state
+// records it, and a native instance downloads the named binary over the running
+// one, which Linux allows because the process keeps its open inode until the
+// restart.
+func nextUpdate(state State, cmd Command) ([]Step, error) {
+	if state.Version == 0 {
+		return nil, errors.New("no installation found; run tt install")
+	}
+	if state.runtimeOrDefault() == RuntimeNative {
+		return nextNativeUpdate(state, cmd)
+	}
+	return nextDockerUpdate(state, cmd)
+}
+
+func nextDockerUpdate(state State, cmd Command) ([]Step, error) {
+	if strings.TrimSpace(cmd.ServerBinaryURL) != "" {
+		return nil, errors.New("--server-binary-url is for a native instance; a Docker install pulls an image")
+	}
+	tag := strings.TrimSpace(cmd.Version)
+	if tag == "" {
+		return nil, errors.New("pass --version with the server image tag to update to")
+	}
+
+	updated := state
+	updated.ImageTag = tag
+	compose, err := RenderCompose(updated)
+	if err != nil {
+		return nil, err
+	}
+
+	return []Step{
+		{
+			Kind:        StepPullImage,
+			Description: "Pull tasktracker-server:" + tag,
+			State:       updated,
+			Image:       "tasktracker-server:" + tag,
+		},
+		{Kind: StepWriteState, Description: "Record the new server version", State: updated},
+		{Kind: StepWriteCompose, Description: "Write the compose file", State: updated, Compose: compose},
+		{Kind: StepComposeUp, Description: "Recreate the server on the new image", State: updated},
+		{Kind: StepWaitReady, Description: "Wait for /readyz", State: updated},
+	}, nil
+}
+
+func nextNativeUpdate(state State, cmd Command) ([]Step, error) {
+	source := strings.TrimSpace(cmd.ServerBinaryURL)
+	if source == "" {
+		return nil, errors.New("a native instance updates from a binary; pass --server-binary-url with the release asset")
+	}
+	parsed, err := url.Parse(source)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return nil, fmt.Errorf("refuse %q: only an explicit https URL is accepted", source)
+	}
+
+	updated := state
+	if version := strings.TrimSpace(cmd.Version); version != "" {
+		updated.ImageTag = version
+	}
+
+	steps := []Step{
+		{
+			Kind:        StepFetchBinary,
+			Description: "Download the new server binary into " + updated.BinaryPath,
+			State:       updated,
+			SourceURL:   source,
+		},
+		{Kind: StepWriteState, Description: "Record the new server version", State: updated},
+		{Kind: StepRestartService, Description: "Restart the service", State: updated},
+		{Kind: StepWaitReady, Description: "Wait for /readyz", State: updated},
 	}
 	return steps, nil
 }
