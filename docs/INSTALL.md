@@ -405,14 +405,28 @@ tt logs -f           # follow (Ctrl-C to stop)
 
 ### Move to a new server version
 
-`tt` has no `upgrade` command. To move to a new server version, change the image
-tag in the compose file or the binary path in the unit file and run
-`tt install` again — it repairs the existing instance in place, keeping the
-database and the admin account:
+`tt update` replaces the running server with a newer release and keeps the
+database, the admin account, and the install state. The tag or URL is always
+the operator's choice — `tt` never phones home to look for an update:
 
 ```bash
-tt install --yes --admin-email admin@company.com --admin-password 'StrongPass123'
+# Docker: pull the new image, recreate the server, wait for /readyz
+tt update --version v1.5.0
+
+# Native: download the new binary over HTTPS into the path the unit supervises,
+# then restart the unit
+tt update --server-binary-url https://example.com/releases/v1.5.0/server \
+  --version v1.5.0
+
+# Print the plan and change nothing
+tt update --version v1.5.0 --dry-run
 ```
+
+A Docker update rewrites the compose file from the recorded state, so if the
+instance was exposed, re-run `tt expose` afterwards. A native update keeps the
+bind and env file it already has. Take a backup first when the release includes
+a migration: the server refuses to start on a failed migration, which is the
+safe failure but still an outage.
 
 ### Backup
 

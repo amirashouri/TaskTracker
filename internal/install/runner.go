@@ -51,6 +51,14 @@ func (r ExecRunner) Run(ctx context.Context, step Step) error {
 		return SaveState(step.State)
 	case StepWriteCompose:
 		return writeFileAtomic(step.State.ComposePath, []byte(step.Compose), 0o600)
+	case StepPullImage:
+		if strings.TrimSpace(step.Image) == "" {
+			return errors.New("pull image: no image reference")
+		}
+		// Pull by reference rather than `compose pull`: the compose file is
+		// rewritten after this step, so pulling through it would fetch the tag
+		// the instance is already on.
+		return r.command(ctx, "docker", "pull", step.Image)
 	case StepComposeUp:
 		return r.compose(ctx, step.State, "up", "-d")
 	case StepWaitReady:
@@ -72,6 +80,11 @@ func (r ExecRunner) Run(ctx context.Context, step Step) error {
 		return writeFileAtomic(step.State.EnvPath, []byte(step.Env), 0o600)
 	case StepWriteUnit:
 		return writeFileAtomic(step.State.UnitPath, []byte(step.Unit), 0o644)
+	case StepFetchBinary:
+		if strings.TrimSpace(step.SourceURL) == "" {
+			return errors.New("fetch binary: no source URL")
+		}
+		return FetchBinaryURL(ctx, step.SourceURL, step.State.BinaryPath)
 	case StepStartService:
 		return r.startService(ctx, step.State)
 	case StepRestartService:
