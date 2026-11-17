@@ -18,7 +18,7 @@ const composeTemplatePath = "embed/docker-compose.tmpl"
 var composeTemplate = template.Must(template.ParseFS(assets, composeTemplatePath))
 
 type composeData struct {
-	ImageTag              string
+	Image                 string
 	ServerPort            int
 	PublishHost           string
 	DatabaseURL           string
@@ -59,7 +59,7 @@ func renderCompose(state State, publishHost string) (string, error) {
 	}
 
 	data := composeData{
-		ImageTag:              state.ImageTag,
+		Image:                 ImageRef(state.ImageTag),
 		ServerPort:            state.ServerPort,
 		PublishHost:           publishHost,
 		DatabaseURL:           databaseURL(state),

@@ -47,6 +47,8 @@ one merge request.
 - `docs/ARCHITECTURE.md` — architecture decisions, boundaries, known gaps, and
   the durable decisions retained from completed task specs.
 - `README.md` — build, configuration, and run instructions.
+- `docs/RELEASE.md` — cutting a release: the gate, the tag push, and verifying
+  the published artifact.
 - `docs/SELF-HOSTING.md` and `docs/USER-MANAGEMENT.md` — operator and user
   management guidance.
 

@@ -23,14 +23,14 @@ func TestDockerUpdatePullsBeforeRecordingTheNewTag(t *testing.T) {
 		}
 	}
 
-	if steps[0].Image != "tasktracker-server:v1.4.0" {
+	if steps[0].Image != ImageRef("v1.4.0") {
 		t.Errorf("pull reference = %q, want the new tag", steps[0].Image)
 	}
 	if final := StateFromSteps(steps); final.ImageTag != "v1.4.0" {
 		t.Errorf("recorded tag = %q, want v1.4.0", final.ImageTag)
 	}
 	compose := ComposeFromSteps(steps)
-	if !strings.Contains(compose, "tasktracker-server:v1.4.0") {
+	if !strings.Contains(compose, ImageRef("v1.4.0")) {
 		t.Errorf("compose does not pin the new image tag:\n%s", compose)
 	}
 }

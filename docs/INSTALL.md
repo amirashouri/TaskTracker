@@ -352,7 +352,7 @@ instance: tasktracker
 runtime: docker
 mode: sqlite
 provider: cloudflare
-image: tasktracker-server:v1.2.3
+image: ghcr.io/amirashouri/tasktracker-server:v1.2.3
 server: http://127.0.0.1:8080
 compose: /var/lib/tasktracker/docker-compose.yml
 [ok] containers server running
@@ -377,7 +377,7 @@ instance: tasktracker
 runtime: docker
 mode: sqlite
 provider: cloudflare
-image: tasktracker-server:v1.2.3
+image: ghcr.io/amirashouri/tasktracker-server:v1.2.3
 server: http://127.0.0.1:8080
 compose: /var/lib/tasktracker/docker-compose.yml
 [ok] containers server running

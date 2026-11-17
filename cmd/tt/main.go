@@ -147,7 +147,7 @@ func printState(w io.Writer, state install.State) {
 		fmt.Fprintf(w, "env: %s\n", state.EnvPath)
 		return
 	}
-	fmt.Fprintf(w, "image: tasktracker-server:%s\n", state.ImageTag)
+	fmt.Fprintf(w, "image: %s\n", install.ImageRef(state.ImageTag))
 	fmt.Fprintf(w, "server: http://127.0.0.1:%d\n", state.ServerPort)
 	fmt.Fprintf(w, "compose: %s\n", state.ComposePath)
 }

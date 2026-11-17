@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
 {{ end }}
   server:
-    image: "tasktracker-server:{{ .ImageTag }}"
+    image: "{{ .Image }}"
     environment:
       SERVER_BIND: "0.0.0.0"
       SERVER_PORT: "8080"

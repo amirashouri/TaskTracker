@@ -268,9 +268,9 @@ func nextDockerUpdate(state State, cmd Command) ([]Step, error) {
 	return []Step{
 		{
 			Kind:        StepPullImage,
-			Description: "Pull tasktracker-server:" + tag,
+			Description: "Pull " + ImageRef(tag),
 			State:       updated,
-			Image:       "tasktracker-server:" + tag,
+			Image:       ImageRef(tag),
 		},
 		{Kind: StepWriteState, Description: "Record the new server version", State: updated},
 		{Kind: StepWriteCompose, Description: "Write the compose file", State: updated, Compose: compose},
