@@ -15,9 +15,9 @@ internals — just a Linux host and a terminal.
 | Root or sudo access | Required to install Docker and start the daemon. |
 | A domain (optional) | Only if you want HTTPS from the internet. `lan` mode needs none. |
 
-> **Architecture:** release artifacts target linux/amd64. On an arm64 host the
-> Docker image needs emulation and the native `server` binary will not run; use
-> an amd64 host for now.
+> **Architecture:** the Docker image is published for linux/amd64 and
+> linux/arm64, so Docker Desktop on Apple Silicon and arm64 Linux hosts pull a
+> native image. The native `server` binary in the tarball is linux/amd64 only.
 
 **Providers and accounts:**
 

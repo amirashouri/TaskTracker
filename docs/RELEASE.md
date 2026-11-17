@@ -45,8 +45,8 @@ job builds and publishes; it runs no tests, so a red `main` would ship.
 ## Cut the release
 
 ```bash
-git tag -a v0.1.10 -m "TaskTracker Server v0.1.10"
-git push origin v0.1.10
+git tag -a v0.1.11 -m "TaskTracker Server v0.1.11"
+git push origin v0.1.11
 ```
 
 That push is the trigger. Push the tag by name; `git push --tags` also publishes
@@ -64,7 +64,7 @@ when. The workflow only requires the `v` prefix.
 ```bash
 gh run list --workflow release.yml
 gh run watch <run-id>
-gh release view v0.1.10
+gh release view v0.1.11
 ```
 
 Or open **Actions → release** in the repository. A successful run is two green
@@ -82,22 +82,27 @@ nothing; the GitHub Release is what customers download.
 ```bash
 # Log out first: this must prove an anonymous pull, which is what `tt` does.
 docker logout ghcr.io >/dev/null 2>&1 || true
-# --platform is required off amd64; see the platform gap below.
-docker pull --platform linux/amd64 ghcr.io/amirashouri/tasktracker-server:v0.1.10
+docker pull ghcr.io/amirashouri/tasktracker-server:v0.1.11
+
+# The tag must be an index carrying both platforms, not a single amd64 image.
+docker buildx imagetools inspect ghcr.io/amirashouri/tasktracker-server:v0.1.11
 ```
+
+On Apple Silicon the pull selects linux/arm64; `imagetools` lists amd64 and
+arm64 under the moving tag.
 
 Then the tarball, which proves the tag, the binary version, and the bundle
 layout agree.
 
 ```bash
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/download/v0.1.10/tt-linux-amd64.tar.gz \
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/download/v0.1.11/tt-linux-amd64.tar.gz \
   -o /tmp/tt.tar.gz
 tar -tzf /tmp/tt.tar.gz            # tt-linux-amd64, server
 
 mkdir -p /tmp/tt && tar -xzf /tmp/tt.tar.gz -C /tmp/tt
 # The bundle is linux/amd64; from macOS run the static binary in a container.
 docker run --rm --platform linux/amd64 -v /tmp/tt:/tt alpine:3.21 \
-  /tt/tt-linux-amd64 version       # v0.1.10
+  /tt/tt-linux-amd64 version       # v0.1.11
 ```
 
 And the moving URL the docs use:
@@ -114,9 +119,9 @@ That header should name the tag you just pushed.
 | Situation | What to do |
 | --- | --- |
 | The job failed before the release existed | `gh run rerun <run-id>`. It rebuilds the same tagged commit, so the artifact still matches the tag. |
-| The wrong commit or version was tagged | Do not delete and re-push a tag that has a published release; its download URL was public. Fix `main` and cut the next patch (`v0.1.11`), and say what happened in its notes. |
+| The wrong commit or version was tagged | Do not delete and re-push a tag that has a published release; its download URL was public. Fix `main` and cut the next patch (`v0.1.12`), and say what happened in its notes. |
 | The release exists with a wrong or missing asset | Do not move the tag; `latest` already points at it. Replace the file on the existing release with `gh release upload <tag> <file> --clobber`, then fix the workflow on `main` before the next tag. |
-| A manual dispatch is tempting | Both jobs are guarded on a `refs/tags/v*` ref, so dispatching a branch does nothing. Dispatch the tag itself when you need to: `gh workflow run release.yml --ref v0.1.10`. Releases are normally cut by tag push. |
+| A manual dispatch is tempting | Both jobs are guarded on a `refs/tags/v*` ref, so dispatching a branch does nothing. Dispatch the tag itself when you need to: `gh workflow run release.yml --ref v0.1.11`. Releases are normally cut by tag push. |
 
 ## Known gaps
 
@@ -125,11 +130,10 @@ That header should name the tag you just pushed.
   A native instance updates by extracting the binary from the release tarball
   and hosting it at an HTTPS URL you control. The native install path is
   unaffected: the tarball itself carries `server` beside `tt`.
-- **linux/amd64 only.** The image, the bundle's `server`, and the published `tt`
-  tarball are amd64. An arm64 host can run the image under emulation
-  (`platform: linux/amd64` in compose, or `--platform` to `docker pull`), but
-  `tt install` does not add that yet, and the native server binary will not
-  execute on arm64. Multi-arch is not built.
+- **Native arm64.** The Docker image is published for linux/amd64 and
+  linux/arm64, which covers Docker Desktop on Apple Silicon and Windows and
+  arm64 Linux hosts. The tarball's `server` and the published `tt` are still
+  linux/amd64, so `--runtime native` on arm64 needs a build from source.
 
 ## After the release
 
@@ -137,5 +141,5 @@ That header should name the tag you just pushed.
   the same version. Do not tag the client from here.
 - If the release carries a migration, say so in the notes. `tt update` applies
   it on the next start, and the safe advice is to back up first.
-- A Docker instance upgrades with `tt update --version v0.1.10`, which pulls
-  `ghcr.io/amirashouri/tasktracker-server:v0.1.10`.
+- A Docker instance upgrades with `tt update --version v0.1.11`, which pulls
+  `ghcr.io/amirashouri/tasktracker-server:v0.1.11`.
