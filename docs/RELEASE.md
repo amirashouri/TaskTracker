@@ -1,12 +1,12 @@
 # Releasing TaskTracker Server
 
 One tag push is the whole release. `.github/workflows/release.yml` takes over
-from there: it pushes the server image to ghcr, then builds the curl-installable
-`tt` + `server` bundle, generates the changelog from the commits since the
-previous tag, and attaches `tt-linux-amd64.tar.gz` to a GitHub Release. The image
-is what a Docker install pulls; the tarball is what the one-liner in `README.md`
-and `docs/INSTALL.md` fetches through `releases/latest/download/…`, so neither
-name may change.
+from there: it pushes the server image to ghcr, then builds `tt` for every
+platform, generates the changelog from the commits since the previous tag, and
+attaches the six `tt` binaries plus the Linux/amd64 `tt` + `server` bundle to a
+GitHub Release. The image is what a Docker install pulls; the binaries are what
+the install blocks in `README.md` and `docs/INSTALL.md` fetch through
+`releases/latest/download/…`, so no asset name may change.
 
 ## What the tag decides
 
@@ -68,10 +68,13 @@ gh release view v0.1.11
 ```
 
 Or open **Actions → release** in the repository. A successful run is two green
-jobs: `image` pushes the tag to ghcr, then `release` attaches
-`tt-linux-amd64.tar.gz` — `release-tt` builds standalone `tt` binaries for every
-platform but the workflow publishes only the Linux/amd64 bundle. The image job
-runs first, so a release page only exists once its image does.
+jobs: `image` pushes the tag to ghcr, then `release` attaches seven assets —
+`tt-linux-amd64.tar.gz` and the six bare `tt` binaries (`linux`, `darwin`,
+`windows` × `amd64`, `arm64`, with `.exe` on Windows). The image job runs first,
+so a release page only exists once its image does. `release-tt` depends on
+`release`, so every listed file exists before the upload starts; adding a
+platform to `PLATFORMS` in the `Makefile` means adding it to the workflow's
+`files:` list too.
 
 `.gitlab-ci.yml` has a `release` job on any tag, not just `v*`. It builds the
 artifacts for that pipeline's `dist/`, keeps them for a week, and publishes
@@ -105,14 +108,32 @@ docker run --rm --platform linux/amd64 -v /tmp/tt:/tt alpine:3.21 \
   /tt/tt-linux-amd64 version       # v0.1.11
 ```
 
-And the moving URL the docs use:
+And the moving URLs the docs use — every asset must redirect to the new tag, not
+to a previous one:
 
 ```bash
-curl -fsSIL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-amd64.tar.gz \
-  | grep -i '^location:' | head -1
+for asset in tt-linux-amd64.tar.gz tt-linux-amd64 tt-linux-arm64 \
+             tt-darwin-amd64 tt-darwin-arm64 \
+             tt-windows-amd64.exe tt-windows-arm64.exe; do
+  printf '%s -> ' "$asset"
+  curl -fsSIL "https://github.com/amirashouri/TaskTracker/releases/latest/download/$asset" \
+    | grep -i '^location:' | head -1
+done
 ```
 
-That header should name the tag you just pushed.
+Then run the bare binary for the host you are on, which proves it is the right
+architecture and carries the tag:
+
+```bash
+curl -fsSL -o /tmp/tt-darwin-arm64 \
+  https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-darwin-arm64
+chmod +x /tmp/tt-darwin-arm64
+/tmp/tt-darwin-arm64 version       # the tag you just pushed
+```
+
+Use the `darwin` asset on a Mac and the `linux` one on a Linux host. The Windows
+assets cannot be executed from the verify shell; `file` proves they are PE
+binaries and the redirect above proves the `.exe` suffix survived.
 
 ## When something goes wrong
 
@@ -132,8 +153,12 @@ That header should name the tag you just pushed.
   unaffected: the tarball itself carries `server` beside `tt`.
 - **Native arm64.** The Docker image is published for linux/amd64 and
   linux/arm64, which covers Docker Desktop on Apple Silicon and Windows and
-  arm64 Linux hosts. The tarball's `server` and the published `tt` are still
-  linux/amd64, so `--runtime native` on arm64 needs a build from source.
+  arm64 Linux hosts. The bundle's `server` is linux/amd64 only and no arm64
+  bundle is published, so `--runtime native` on arm64 needs a build from source.
+- **Unsigned binaries.** `tt` is not code-signed or notarized. The documented
+  `curl` download carries no quarantine flag, so it runs; a browser download on
+  macOS can trip Gatekeeper ("unidentified developer"), and Windows SmartScreen
+  may warn on the first run.
 
 ## After the release
 

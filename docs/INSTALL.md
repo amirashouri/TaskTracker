@@ -2,7 +2,7 @@
 
 This guide walks a customer through installing and running TaskTracker on their
 own server. It assumes no prior knowledge of Go, Docker, or the project's
-internals — just a Linux host and a terminal.
+internals — just a host that can run Docker and a terminal.
 
 > **Looking for the bare-metal/systemd path?** See [`docs/SELF-HOSTING.md`](SELF-HOSTING.md).
 > This guide uses Docker Compose and the `tt` CLI.
@@ -11,13 +11,15 @@ internals — just a Linux host and a terminal.
 
 | Item | Notes |
 |------|-------|
-| A Linux host | Any distribution with a package manager (Debian/Ubuntu, Fedora/RHEL, Arch). Docker runs on anything with a kernel ≥ 3.10. |
-| Root or sudo access | Required to install Docker and start the daemon. |
+| A host that runs Docker | A Linux distribution with a package manager (Debian/Ubuntu, Fedora/RHEL, Arch), or macOS/Windows with Docker Desktop. Docker needs a kernel ≥ 3.10. |
+| Root or sudo access (Linux) | Required to install Docker and start the daemon; Docker Desktop installs itself. |
 | A domain (optional) | Only if you want HTTPS from the internet. `lan` mode needs none. |
 
-> **Architecture:** the Docker image is published for linux/amd64 and
-> linux/arm64, so Docker Desktop on Apple Silicon and arm64 Linux hosts pull a
-> native image. The native `server` binary in the tarball is linux/amd64 only.
+> **Platforms:** `tt` is published for Linux, macOS and Windows on amd64 and
+> arm64, and the Docker image is a multi-arch index for linux/amd64 and
+> linux/arm64 — Docker Desktop and arm64 Linux hosts pull a native image. The
+> native `server` binary in the tarball is linux/amd64 only, so
+> `--runtime native` is a Linux amd64 path.
 
 **Providers and accounts:**
 
@@ -32,35 +34,73 @@ internals — just a Linux host and a terminal.
 ## Step 0 — Get the `tt` CLI
 
 `tt` is a static Go binary that bootstraps the server, the database, and the
-first admin account, then prints the address the phone scans. It does not need
-Docker on the machine that runs it — only on the host that runs the server, and
-it installs that too. It never phones home: the URL you pass is the URL you
-get.
+first admin account, then prints the address the phone scans. It never phones
+home: the URL you pass is the URL you get. It uses Docker by default — and on
+Linux it installs Docker for you, while macOS and Windows need Docker Desktop
+installed first.
 
-### Fastest: one curl command, no cloning
+### Fastest: download `tt`, no cloning
 
-On a tagged release, CI publishes a Linux/amd64 tarball containing `tt` and the
-`server` binary it supervises. The URL below targets this asset on the latest
-GitHub release:
+Every tagged release attaches a `tt` binary for each platform, plus a
+Linux/amd64 tarball that also carries the `server` binary the native runtime
+supervises. Download the row for the machine that will run Docker — the URL
+follows `releases/latest/download/<asset>`.
+
+| Machine | Asset | Saved as |
+| :--- | :--- | :--- |
+| Linux amd64 | `tt-linux-amd64.tar.gz` | `tt`, plus `server` |
+| Linux arm64 | `tt-linux-arm64` | `tt` |
+| macOS Apple Silicon | `tt-darwin-arm64` | `tt` |
+| macOS Intel | `tt-darwin-amd64` | `tt` |
+| Windows amd64 | `tt-windows-amd64.exe` | `tt.exe` |
+| Windows arm64 | `tt-windows-arm64.exe` | `tt.exe` |
 
 ```bash
-# Linux amd64 — the only platform with a server binary today:
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-amd64.tar.gz \
-  | tar -xz -C /usr/local/bin
-sudo mv /usr/local/bin/tt-linux-amd64 /usr/local/bin/tt
-chmod +x /usr/local/bin/tt
-
-# Install. The tarball already has the server binary, so no Docker, no clone:
-tt install --runtime native --server-binary ./server
+# Linux amd64 — the tarball carries both `tt` and `server`:
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-amd64.tar.gz | tar -xz
+sudo install -m 0755 tt-linux-amd64 /usr/local/bin/tt
+tt install
 ```
 
-The release job also builds standalone `tt` binaries for other platforms, but
-currently publishes only the Linux/amd64 bundle as a GitHub release asset.
+```bash
+# Linux arm64 — Docker runtime only; it pulls the matching image architecture:
+curl -fsSL -o tt https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-arm64
+sudo install -m 0755 tt /usr/local/bin/tt
+tt install
+```
+
+```bash
+# macOS — use tt-darwin-amd64 on an Intel Mac. Docker Desktop must be installed
+# first; `tt install` prints the download link if it is missing.
+curl -fsSL -o tt https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-darwin-arm64
+sudo install -m 0755 tt /usr/local/bin/tt
+tt install
+```
+
+```powershell
+# Windows PowerShell — use tt-windows-arm64.exe on Windows on ARM. curl.exe,
+# not curl: in PowerShell `curl` is an alias for Invoke-WebRequest.
+curl.exe -fsSL -o tt.exe https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-windows-amd64.exe
+.\tt.exe install
+```
+
+Only Linux amd64 has a `server` binary in the release, so `--runtime native`
+works there and nowhere else; macOS, Windows and arm64 run the server in Docker.
+The image is a multi-arch index, so Docker Desktop and arm64 Linux hosts pull a
+native build without any extra flag.
+
+Prefer no Docker on a Linux amd64 host? The same tarball's `server` is the
+binary the native runtime supervises, and that runtime is a systemd service:
+
+```bash
+sudo tt install --runtime native --server-binary ./server
+```
 
 ### Build from source (developers and unreleased versions)
 
-If there is no tarball for your platform or you want the working tree, build
-`tt` with Go 1.27:
+Every tagged release has a `tt` binary for each supported platform. Build from
+source when you want the working tree or a commit that is not released yet; use
+Go 1.27:
 
 ```bash
 make tt

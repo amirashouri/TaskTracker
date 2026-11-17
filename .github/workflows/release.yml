@@ -99,7 +99,17 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: TaskTracker Server ${{ github.ref_name }}
-          files: dist/tt-linux-amd64.tar.gz
+          # Every asset here is an install URL in README.md or docs/INSTALL.md;
+          # the names are part of the documented contract, so do not rename one.
+          # release-tt depends on release, so all six tt binaries exist by now.
+          files: |
+            dist/tt-linux-amd64.tar.gz
+            dist/tt-linux-amd64
+            dist/tt-linux-arm64
+            dist/tt-darwin-amd64
+            dist/tt-darwin-arm64
+            dist/tt-windows-amd64.exe
+            dist/tt-windows-arm64.exe
           body: |
             ## TaskTracker Server ${{ github.ref_name }}
 
@@ -107,7 +117,18 @@ jobs:
 
             ### Installation
 
-            See [docs/INSTALL.md](https://github.com/amirashouri/TaskTracker/blob/main/docs/INSTALL.md) for installation instructions.
+            Download the `tt` CLI for your machine, then run `tt install`:
+
+            | Machine | Asset |
+            | :--- | :--- |
+            | Linux amd64 (bundle with `server`) | `tt-linux-amd64.tar.gz` |
+            | Linux arm64 | `tt-linux-arm64` |
+            | macOS Apple Silicon | `tt-darwin-arm64` |
+            | macOS Intel | `tt-darwin-amd64` |
+            | Windows amd64 | `tt-windows-amd64.exe` |
+            | Windows arm64 | `tt-windows-arm64.exe` |
+
+            See [docs/INSTALL.md](https://github.com/amirashouri/TaskTracker/blob/main/docs/INSTALL.md) for the per-platform commands and installation instructions.
 
             ### Server Binary
 
