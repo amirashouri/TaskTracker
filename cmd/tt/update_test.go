@@ -39,7 +39,7 @@ func TestUpdateDockerPullsAndRecordsTheNewTag(t *testing.T) {
 	if got := install.StateFromSteps(runner.steps).ImageTag; got != "v1.4.0" {
 		t.Errorf("planned tag = %q, want v1.4.0", got)
 	}
-	if runner.steps[0].Image != "tasktracker-server:v1.4.0" {
+	if runner.steps[0].Image != install.ImageRef("v1.4.0") {
 		t.Errorf("pulled %q, want the new image", runner.steps[0].Image)
 	}
 	for _, wantLine := range []string{"Updated", "v1.4.0", "tt expose"} {
@@ -116,7 +116,7 @@ func TestUpdateDryRunExecutesNothing(t *testing.T) {
 	if len(runner.steps) != 0 {
 		t.Errorf("dry run executed %d steps: %+v", len(runner.steps), runner.steps)
 	}
-	for _, want := range []string{"Would update", "Pull tasktracker-server:v1.4.0", "Wait for /readyz"} {
+	for _, want := range []string{"Would update", "Pull " + install.ImageRef("v1.4.0"), "Wait for /readyz"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout does not contain %q:\n%s", want, stdout)
 		}

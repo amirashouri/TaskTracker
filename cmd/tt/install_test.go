@@ -223,7 +223,7 @@ func TestWizardDryRunCallsNoPreflightOrRunner(t *testing.T) {
 	if len(runner.steps) != 0 {
 		t.Errorf("dry-run executed %d steps", len(runner.steps))
 	}
-	if !strings.Contains(result.stdout, "tasktracker-server:v1.2.3") {
+	if !strings.Contains(result.stdout, install.ImageRef("v1.2.3")) {
 		t.Errorf("dry-run output does not pin the build version:\n%s", result.stdout)
 	}
 	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {

@@ -79,7 +79,7 @@ func runUpdate(
 		fmt.Fprintf(stdout, "Updated %q. The service is running the new binary.\n", final.InstanceName)
 		return 0
 	}
-	fmt.Fprintf(stdout, "Updated %q to tasktracker-server:%s.\n", final.InstanceName, final.ImageTag)
+	fmt.Fprintf(stdout, "Updated %q to %s.\n", final.InstanceName, install.ImageRef(final.ImageTag))
 	// A Docker update rewrites the compose file from the state, and the state
 	// only knows the loopback publish; `tt expose` is what widens it, exactly as
 	// after a repair.

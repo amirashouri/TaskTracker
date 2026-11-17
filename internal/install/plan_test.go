@@ -44,7 +44,7 @@ func TestFirstInstallPlansOneInitStepAndUsesTheSecret(t *testing.T) {
 	if final.ImageTag != command.Version {
 		t.Errorf("image tag = %q, want %q", final.ImageTag, command.Version)
 	}
-	if compose := ComposeFromSteps(steps); !strings.Contains(compose, "tasktracker-server:"+command.Version) {
+	if compose := ComposeFromSteps(steps); !strings.Contains(compose, ImageRef(command.Version)) {
 		t.Errorf("compose does not pin the build version:\n%s", compose)
 	}
 }
@@ -233,7 +233,7 @@ func TestRenderComposePinsTheBuildVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderCompose: %v", err)
 	}
-	if !strings.Contains(compose, "tasktracker-server:v9.9.9") {
+	if !strings.Contains(compose, ImageRef("v9.9.9")) {
 		t.Errorf("compose does not contain the build tag:\n%s", compose)
 	}
 }
@@ -395,7 +395,7 @@ func TestRenderExposedComposePublishesOnEveryInterface(t *testing.T) {
 	if !strings.Contains(compose, `SERVER_BIND: "0.0.0.0"`) {
 		t.Errorf("exposed compose does not bind the container on every interface:\n%s", compose)
 	}
-	if !strings.Contains(compose, "tasktracker-server:v1.2.3") {
+	if !strings.Contains(compose, ImageRef("v1.2.3")) {
 		t.Errorf("exposed compose dropped the pinned image tag:\n%s", compose)
 	}
 }
