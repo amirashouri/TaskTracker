@@ -10,29 +10,58 @@
 
 ---
 
-## ⚡ Quick start — one command
+## ⚡ Quick start
 
-Fetch the `tt` CLI, install the server, and reach it from your phone:
+`tt` is a single static binary that installs and operates the server; you do not
+clone this repo to run it. Download the build for your machine, then run two
+commands.
+
+| Your machine | Asset | Saved as |
+| :--- | :--- | :--- |
+| Linux amd64 (most servers) | `tt-linux-amd64.tar.gz` | `tt`, plus the native `server` |
+| Linux arm64 | `tt-linux-arm64` | `tt` |
+| macOS Apple Silicon | `tt-darwin-arm64` | `tt` |
+| macOS Intel | `tt-darwin-amd64` | `tt` |
+| Windows amd64 | `tt-windows-amd64.exe` | `tt.exe` |
+| Windows arm64 | `tt-windows-arm64.exe` | `tt.exe` |
 
 ```bash
-# 1. Install the tt CLI (Linux amd64)
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-amd64.tar.gz \
-  | tar -xz -C /usr/local/bin tt-linux-amd64
-sudo mv /usr/local/bin/tt-linux-amd64 /usr/local/bin/tt && chmod +x /usr/local/bin/tt
-
-# 2. Install — asks only for an admin email and password
-tt install
-
-# 3. Publish it so other devices can connect
-tt expose --provider=lan
+# Linux amd64 — the tarball also carries the native `server` binary
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-amd64.tar.gz | tar -xz
+sudo install -m 0755 tt-linux-amd64 /usr/local/bin/tt
 ```
 
-`tt install` sets up Docker (and installs it for you if missing), picks SQLite or Postgres, renders the compose file, waits for the server to answer `/readyz`, and creates the first admin account. `tt expose` prints a pairing link and QR code — scan it in the [app](https://github.com/amirashouri/TaskTrackerKMP) and sign in.
-
-Prefer a native install with no Docker? The tarball already ships the server binary:
+```bash
+# Linux arm64
+curl -fsSL -o tt https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-arm64
+sudo install -m 0755 tt /usr/local/bin/tt
+```
 
 ```bash
-tt install --runtime native --server-binary ./server
+# macOS — use tt-darwin-amd64 on an Intel Mac
+curl -fsSL -o tt https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-darwin-arm64
+sudo install -m 0755 tt /usr/local/bin/tt
+```
+
+```powershell
+# Windows PowerShell — use tt-windows-arm64.exe on Windows on ARM.
+# curl.exe, not curl: in PowerShell `curl` is an alias for Invoke-WebRequest.
+curl.exe -fsSL -o tt.exe https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-windows-amd64.exe
+```
+
+Then install and expose it:
+
+```bash
+tt install                    # asks only for an admin email and password
+tt expose --provider=lan      # prints the pairing link and QR code
+```
+
+`tt install` sets up Docker (and installs it for you if missing on Linux), picks SQLite or Postgres, renders the compose file, waits for the server to answer `/readyz`, and creates the first admin account. On macOS and Windows it needs Docker Desktop already installed — it prints the download link and stops if it is missing — and Docker pulls the image for your architecture automatically. `tt expose` prints a pairing link and QR code — scan it in the [app](https://github.com/amirashouri/TaskTrackerKMP) and sign in.
+
+Prefer a native install with no Docker? That path is Linux amd64 only, and the tarball above already ships the server binary:
+
+```bash
+sudo tt install --runtime native --server-binary ./server
 ```
 
 Automate the whole thing with flags:

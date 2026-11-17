@@ -438,20 +438,25 @@ validation runs, counts, handoffs and per-task file lists were dropped.
   take the run context because `signal.NotifyContext` disables the default.
 - **A `v*` tag publishes both artifacts.** `.github/workflows/release.yml`
   pushes `ghcr.io/amirashouri/tasktracker-server:<tag>` before it creates the
-  GitHub Release with `tt-linux-amd64.tar.gz`, so a release page never
-  advertises an image that does not exist. `tt` builds the reference from
-  `internal/install.ImageRef`; the repository is a constant, not state, so only
-  the tag is recorded and an existing install migrates by re-rendering the
-  compose file (`tt install`). The image is an index for linux/amd64 and
-  linux/arm64 — CGO/SQLite means arm64 is compiled under QEMU on the runner — so
-  Docker Desktop on Apple Silicon/Windows and arm64 Linux pull natively. The
-  tarball's `server` stays linux/amd64; native arm64 installs are out of scope.
+  GitHub Release with `tt-linux-amd64.tar.gz` and the six bare `tt` binaries, so
+  a release page never advertises an image that does not exist. `tt` builds the
+  reference from `internal/install.ImageRef`; the repository is a constant, not
+  state, so only the tag is recorded and an existing install migrates by
+  re-rendering the compose file (`tt install`). The image is an index for
+  linux/amd64 and linux/arm64 — CGO/SQLite means arm64 is compiled under QEMU on
+  the runner — so Docker Desktop on Apple Silicon/Windows and arm64 Linux pull
+  natively. Every `tt` binary is a static `CGO_ENABLED=0` build for its
+  OS/arch, since the CLI itself has no cgo dependency; only the bundle's
+  `server` is linux/amd64, so `--runtime native` stays a Linux amd64 path.
 - **Distribution assets.** The license is MIT + Commons Clause + no-rebranding
-  (source-available, not OSI); the Docker image and the curl tarball are the
-  distribution channels, so `/app/LICENSE` must be copied into the runtime
-  stage. The embedded template is `docker-compose.tmpl` while the rendered
-  customer file must stay `docker-compose.yml`; `State.ComposePath` and every
-  repair depend on that name.
+  (source-available, not OSI); the Docker image, the per-platform `tt` binaries
+  and the Linux/amd64 curl tarball are the distribution channels, so
+  `/app/LICENSE` must be copied into the runtime stage. The embedded template is
+  `docker-compose.tmpl` while the rendered customer file must stay
+  `docker-compose.yml`; `State.ComposePath` and every repair depend on that
+  name. Asset names are install URLs in `README.md` and `docs/INSTALL.md`, so
+  they are part of the documented contract: a renamed asset silently breaks a
+  documented download command.
 
 ### Testing traps
 
