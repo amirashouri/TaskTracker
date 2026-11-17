@@ -15,6 +15,10 @@ internals — just a Linux host and a terminal.
 | Root or sudo access | Required to install Docker and start the daemon. |
 | A domain (optional) | Only if you want HTTPS from the internet. `lan` mode needs none. |
 
+> **Architecture:** release artifacts target linux/amd64. On an arm64 host the
+> Docker image needs emulation and the native `server` binary will not run; use
+> an amd64 host for now.
+
 **Providers and accounts:**
 
 | Provider | What it gives you | Account needed |

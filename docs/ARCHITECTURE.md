@@ -436,11 +436,21 @@ validation runs, counts, handoffs and per-task file lists were dropped.
   there is no `curl | sh`. Docker-group membership (root-equivalent) needs its
   own explicit yes. SIGINT maps to exit `130`, and any future blocking read must
   take the run context because `signal.NotifyContext` disables the default.
+- **A `v*` tag publishes both artifacts.** `.github/workflows/release.yml`
+  pushes `ghcr.io/amirashouri/tasktracker-server:<tag>` before it creates the
+  GitHub Release with `tt-linux-amd64.tar.gz`, so a release page never
+  advertises an image that does not exist. `tt` builds the reference from
+  `internal/install.ImageRef`; the repository is a constant, not state, so only
+  the tag is recorded and an existing install migrates by re-rendering the
+  compose file (`tt install`). The image is linux/amd64 because the server
+  binary is CGO/SQLite — an arm64 host needs emulation and multi-arch is not
+  built.
 - **Distribution assets.** The license is MIT + Commons Clause + no-rebranding
-  (source-available, not OSI) and the Docker image is the only distribution
-  channel, so `/app/LICENSE` must be copied into the runtime stage. The embedded
-  template is `docker-compose.tmpl` while the rendered customer file must stay
-  `docker-compose.yml`; `State.ComposePath` and every repair depend on that name.
+  (source-available, not OSI); the Docker image and the curl tarball are the
+  distribution channels, so `/app/LICENSE` must be copied into the runtime
+  stage. The embedded template is `docker-compose.tmpl` while the rendered
+  customer file must stay `docker-compose.yml`; `State.ComposePath` and every
+  repair depend on that name.
 
 ### Testing traps
 

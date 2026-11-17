@@ -82,7 +82,8 @@ nothing; the GitHub Release is what customers download.
 ```bash
 # Log out first: this must prove an anonymous pull, which is what `tt` does.
 docker logout ghcr.io >/dev/null 2>&1 || true
-docker pull ghcr.io/amirashouri/tasktracker-server:v0.1.10
+# --platform is required off amd64; see the platform gap below.
+docker pull --platform linux/amd64 ghcr.io/amirashouri/tasktracker-server:v0.1.10
 ```
 
 Then the tarball, which proves the tag, the binary version, and the bundle
@@ -117,13 +118,18 @@ That header should name the tag you just pushed.
 | The release exists with a wrong or missing asset | Do not move the tag; `latest` already points at it. Replace the file on the existing release with `gh release upload <tag> <file> --clobber`, then fix the workflow on `main` before the next tag. |
 | A manual dispatch is tempting | Both jobs are guarded on a `refs/tags/v*` ref, so dispatching a branch does nothing. Dispatch the tag itself when you need to: `gh workflow run release.yml --ref v0.1.10`. Releases are normally cut by tag push. |
 
-## Known gap: no bare `server` asset
+## Known gaps
 
-The release publishes the image and the tarball, but `tt update
---server-binary-url` wants a bare `server` file, not a tarball. A native
-instance updates by extracting the binary from the release tarball and hosting
-it at an HTTPS URL you control. The native install path is unaffected: the
-tarball itself carries `server` beside `tt`.
+- **No bare `server` asset.** The release publishes the image and the tarball,
+  but `tt update --server-binary-url` wants a bare `server` file, not a tarball.
+  A native instance updates by extracting the binary from the release tarball
+  and hosting it at an HTTPS URL you control. The native install path is
+  unaffected: the tarball itself carries `server` beside `tt`.
+- **linux/amd64 only.** The image, the bundle's `server`, and the published `tt`
+  tarball are amd64. An arm64 host can run the image under emulation
+  (`platform: linux/amd64` in compose, or `--platform` to `docker pull`), but
+  `tt install` does not add that yet, and the native server binary will not
+  execute on arm64. Multi-arch is not built.
 
 ## After the release
 
