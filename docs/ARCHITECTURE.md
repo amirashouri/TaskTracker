@@ -442,9 +442,10 @@ validation runs, counts, handoffs and per-task file lists were dropped.
   advertises an image that does not exist. `tt` builds the reference from
   `internal/install.ImageRef`; the repository is a constant, not state, so only
   the tag is recorded and an existing install migrates by re-rendering the
-  compose file (`tt install`). The image is linux/amd64 because the server
-  binary is CGO/SQLite — an arm64 host needs emulation and multi-arch is not
-  built.
+  compose file (`tt install`). The image is an index for linux/amd64 and
+  linux/arm64 — CGO/SQLite means arm64 is compiled under QEMU on the runner — so
+  Docker Desktop on Apple Silicon/Windows and arm64 Linux pull natively. The
+  tarball's `server` stays linux/amd64; native arm64 installs are out of scope.
 - **Distribution assets.** The license is MIT + Commons Clause + no-rebranding
   (source-available, not OSI); the Docker image and the curl tarball are the
   distribution channels, so `/app/LICENSE` must be copied into the runtime
