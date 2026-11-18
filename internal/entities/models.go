@@ -346,10 +346,12 @@ type PushChange struct {
 	Operation OutboxOperation `json:"operation"`
 	Payload   json.RawMessage `json:"payload"`
 	Version   string          `json:"version,omitempty"` // for conflict detection
-	// ProjectRepoURL carries a repository URL set by an admin route. It is not
-	// part of the client payload and never reaches the change feed: the feed's
-	// project object must not gain a key an installed client cannot decode. A
-	// membership push leaves it nil, which tells the engine to preserve the row.
+	// ProjectRepoURL carries a repository URL supplied out of band: the admin
+	// route is the only way to change one after creation. It is not a wire field
+	// of its own and never reaches the change feed — the feed's project object
+	// must not gain a key an installed client cannot decode. A membership push
+	// leaves it nil, which tells the engine to preserve the stored value. A
+	// project being created may name its own URL in the payload; see applyProject.
 	ProjectRepoURL *string `json:"-"`
 }
 

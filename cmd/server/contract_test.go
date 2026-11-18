@@ -1314,6 +1314,54 @@ func TestProjectRepositoryURLRoundTripsThroughTheAdminRoute(t *testing.T) {
 	}
 }
 
+// A project created by a member's client is the other way a repository URL
+// arrives, and the only one available to a project that does not exist yet: the
+// admin route cannot set a URL on a project it has not created. The push stores
+// it, and the project response the client reads back carries the agreed key.
+func TestAProjectCreatedByTheSyncPushKeepsItsRepositoryURL(t *testing.T) {
+	env := newContractEnv(t)
+	admin := env.signIn(t)
+	projectID := "33333333-3333-3333-3333-333333333333"
+	repoURL := "https://github.com/acme/member-created.git"
+
+	payload := fmt.Sprintf(
+		`{"id":%q,"keyPrefix":"MC","name":"Member created","details":"","tags":[],"memberIds":[%q],"isArchived":false,"agentEnabled":false,"nextItemNumber":1,"repoUrl":%q,"createdAt":"1970-01-01T00:00:00Z","updatedAt":"1970-01-01T00:00:00Z","version":""}`,
+		projectID, string(env.user.ID), repoURL)
+	pushed := env.do(t, http.MethodPost, "/v1/sync/push", admin.AccessToken, map[string]any{
+		"changes": []map[string]any{{
+			"id": "member-create", "entity": "project", "entityId": projectID,
+			"operation": "upsert", "payload": payload,
+		}},
+	})
+	if pushed.Code != http.StatusOK {
+		t.Fatalf("create push = %d, body = %s", pushed.Code, pushed.Body.String())
+	}
+	if results := decodeInto[clientPushResponse](t, pushed); len(results.Results) != 1 || results.Results[0].Status != "accepted" {
+		t.Fatalf("the create was not accepted: %s", pushed.Body.String())
+	}
+
+	stored, err := entities.NewProjectRepository(env.database).GetByID(context.Background(), entities.ProjectID(projectID))
+	if err != nil || stored == nil {
+		t.Fatalf("read the created project: %v", err)
+	}
+	if stored.RepoURL != repoURL {
+		t.Fatalf("stored repoUrl = %q, want the create payload's %q", stored.RepoURL, repoURL)
+	}
+
+	got := env.do(t, http.MethodGet, "/v1/admin/projects/"+projectID, admin.AccessToken, nil)
+	if got.Code != http.StatusOK {
+		t.Fatalf("get the created project = %d, body = %s", got.Code, got.Body.String())
+	}
+	assertWireKeys(t, "the project a member created with a repository", got.Body.Bytes(),
+		[]string{
+			"id", "keyPrefix", "name", "details", "repoUrl", "tags", "memberIds", "isArchived",
+			"agentEnabled", "nextItemNumber", "createdAt", "updatedAt", "version",
+		}, []string{"statuses"})
+	if !strings.Contains(got.Body.String(), `"repoUrl":"`+repoURL+`"`) {
+		t.Errorf("the created project's repository is not on the response: %s", got.Body.String())
+	}
+}
+
 // The edit screen is seeded from this route and saved back through the PATCH above,
 // so the client decodes both into one DTO. Before T8.9 the route did not exist and
 // nothing answered the call the client already made.

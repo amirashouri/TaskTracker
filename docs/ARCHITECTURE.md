@@ -486,12 +486,16 @@ validation runs, counts, handoffs and per-task file lists were dropped.
   machine-wide registration that claims across its owner's projects; a paired
   runner sees only its own project. Claim, events and finish enforce both
   project scope and the claiming-runner check.
-- **`repoUrl` is admin-only metadata, not a credential.** It is emitted only
+- **`repoUrl` is project metadata, not a credential.** It is emitted only
   when non-empty, and only after the client shipped a DTO declaring the key with
   a default — an older installed client still fails on a project that has one,
   so deployment order matters. An omitted `repoUrl` on `PATCH` preserves the
-  stored value and a membership sync push cannot write it. Private repository
-  access belongs to the agent's own credential store.
+  stored value. A project being created may name its URL in a membership sync
+  push — nothing else could, for a project that does not exist yet — and the
+  server validates that payload value identically, rejecting the change when it
+  is not an acceptable URL. A later membership push cannot change it: only the
+  admin route writes an existing project's URL. Private repository access
+  belongs to the agent's own credential store.
 - **`taskDocument` is a bounded, versioned graph, not a history dump.** Stable
   namespaced node IDs and directional edges (`DEPENDS_ON` is task →
   prerequisite), explicit node/tag/dependency/comment/rune limits, and

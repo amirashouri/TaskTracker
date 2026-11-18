@@ -342,8 +342,16 @@ server stores it for the agent brief, and project responses emit it as
 `repoUrl` **only when non-empty**. The KMP DTO declares the key with a default,
 so a project without a repository and a response from an older server both
 decode as "unset". An omitted `repoUrl` in a `PATCH` preserves the stored value
-rather than clearing it; send an empty string to clear it. Only this admin
-route may write it — a membership sync push cannot change it.
+rather than clearing it; send an empty string to clear it.
+
+A project being **created** may name its own URL in a membership sync push: the
+project does not exist yet, so there is no admin route that could have set one
+and the payload is the only place it can come from. The server validates that
+value exactly as it validates this route's (`http`, `https` or `ssh`; a password
+in the URL refused) and rejects the change when it fails, rather than retrying
+it forever. Once the project exists the URL is admin metadata again — a later
+membership push carrying a different one is accepted as an edit and leaves the
+column alone.
 
 ### `POST /v1/admin/projects` — admin only
 

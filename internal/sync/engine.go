@@ -49,6 +49,16 @@ type versionConflict struct {
 
 func (c *versionConflict) Error() string { return "version conflict" }
 
+// invalidProjectMetadata reports a project whose own payload values the row
+// cannot hold, such as a repository URL that is not one. Re-sending it cannot
+// help, so the change is rejected rather than retried: a permanent refusal that
+// is answered `retry_later` spends the client's retry budget forever.
+type invalidProjectMetadata struct{ err error }
+
+func (e *invalidProjectMetadata) Error() string { return e.err.Error() }
+
+func (e *invalidProjectMetadata) Unwrap() error { return e.err }
+
 // errNoProject marks an upsert that names no project, so it cannot be placed
 // in a change feed or authorized.
 var errNoProject = errors.New("change does not name a project")
@@ -162,6 +172,7 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 
 	if err != nil {
 		var conflict *versionConflict
+		var metadata *invalidProjectMetadata
 		var overlap *entities.SprintWindowOverlapError
 		switch {
 		case errors.As(err, &conflict):
@@ -176,6 +187,11 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 			if current, err := currentVersion(ctx, tx, change); err == nil {
 				result.Version = current
 			}
+		case errors.As(err, &metadata):
+			// A value the project's own columns cannot hold. The message names the
+			// field, and `rejected` is what stops the client resending it.
+			result.Status = StatusRejected
+			result.Message = metadata.Error()
 		case errors.As(err, &overlap):
 			// The window collides with a sibling's row, so re-sending this
 			// payload cannot clear it: `rejected` is what stops the client
@@ -418,9 +434,17 @@ func applyProject(ctx context.Context, projects *entities.ProjectRepository, cha
 	}
 	if existing == nil {
 		project.ID = entities.ProjectID(change.EntityID)
-		// The repository URL is admin metadata, so it cannot ride the change
-		// payload: the feed's project object must not gain a key an installed
-		// client cannot decode. Only the admin route supplies it.
+		// A repository URL can ride a create, and only a create: the project does
+		// not exist yet, so there is no admin route that could have set it and the
+		// payload is the only place it can come from. An update below still
+		// preserves the stored value, so a membership push cannot change a URL that
+		// is already set. Validated for the same reason the admin route validates
+		// its own — the value reaches the agent brief.
+		repoURL, err := entities.NormalizeRepoURL(project.RepoURL)
+		if err != nil {
+			return "", &invalidProjectMetadata{err}
+		}
+		project.RepoURL = repoURL
 		if change.ProjectRepoURL != nil {
 			project.RepoURL = *change.ProjectRepoURL
 		}

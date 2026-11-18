@@ -316,6 +316,76 @@ func TestPushRejectsAProjectTheCallerCannotSee(t *testing.T) {
 	}
 }
 
+// A project created from a client may name its repository URL: the project does
+// not exist yet, so no admin route could have set one, and the payload is the
+// only place it can come from. The stored value is the normalised one.
+func TestPushStoresARepositoryURLFromACreate(t *testing.T) {
+	engine, _, projects, _, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "cccccccc-cccc-cccc-cccc-cccccccccccc")
+	project.RepoURL = "  https://github.com/acme/demo.git  "
+	if res := pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create = %s (%s)", res.Status, res.Message)
+	}
+
+	stored, err := projects.GetByID(ctx, project.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("get project: %v", err)
+	}
+	if stored.RepoURL != "https://github.com/acme/demo.git" {
+		t.Errorf("repoUrl = %q, want the create payload's URL, trimmed", stored.RepoURL)
+	}
+}
+
+// Once the project exists the URL is admin metadata again: a membership push
+// carrying a different one is accepted as an edit and leaves the column alone.
+func TestPushCannotChangeARepositoryURLAfterCreation(t *testing.T) {
+	engine, _, projects, _, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "dddddddd-dddd-dddd-dddd-dddddddddddd")
+	project.RepoURL = "https://github.com/acme/demo.git"
+	pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, ""))
+
+	edited := *project
+	edited.Name = "Renamed"
+	edited.RepoURL = "https://evil.example/repo.git"
+	result := pushOne(t, engine, userID, projectChange(t, "e2", &edited, entities.OutboxOperationUpsert, ""))
+	if result.Status != StatusAccepted {
+		t.Fatalf("edit = %s (%s), want accepted", result.Status, result.Message)
+	}
+
+	stored, err := projects.GetByID(ctx, project.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("get project: %v", err)
+	}
+	if stored.RepoURL != "https://github.com/acme/demo.git" {
+		t.Errorf("a membership push changed repoUrl to %q; only the admin route may change it", stored.RepoURL)
+	}
+	if stored.Name != "Renamed" {
+		t.Errorf("name = %q, so the edit itself did not land", stored.Name)
+	}
+}
+
+// A URL the server would never store is rejected rather than retried: the
+// refusal cannot change by resending it, and `retry_later` would spend the
+// client's retry budget forever.
+func TestPushRejectsACreateWithAnInvalidRepositoryURL(t *testing.T) {
+	engine, _, projects, _, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+	project.RepoURL = "https://user:secret@example.com/repo.git"
+	result := pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, ""))
+	if result.Status != StatusRejected {
+		t.Fatalf("status = %s (%s), want rejected", result.Status, result.Message)
+	}
+	if stored, err := projects.GetByID(ctx, project.ID); err != nil || stored != nil {
+		t.Errorf("the project was stored with a credential-bearing URL (stored=%v, err=%v)", stored, err)
+	}
+}
+
 // A non-member cannot push a work item into a project they cannot see.
 func TestPushRejectsAWorkItemInAProjectTheCallerCannotSee(t *testing.T) {
 	engine, users, _, workItems, ownerID := newTestEngine(t)
