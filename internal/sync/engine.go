@@ -110,7 +110,8 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 	}
 	switch change.Entity {
 	case entities.OutboxEntityProject, entities.OutboxEntityWorkItem,
-		entities.OutboxEntitySprint, entities.OutboxEntityComment, entities.OutboxEntityAttachment:
+		entities.OutboxEntitySprint, entities.OutboxEntitySprintMember,
+		entities.OutboxEntityComment, entities.OutboxEntityAttachment:
 	default:
 		result.Status = StatusRejected
 		result.Message = fmt.Sprintf("unknown entity %q", change.Entity)
@@ -164,6 +165,8 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 		version, err = applyWorkItem(ctx, entities.NewWorkItemRepository(tx), change)
 	case entities.OutboxEntitySprint:
 		version, err = applySprint(ctx, entities.NewSprintRepository(tx), change)
+	case entities.OutboxEntitySprintMember:
+		version, err = applySprintMember(ctx, entities.NewSprintMemberRepository(tx), change)
 	case entities.OutboxEntityComment:
 		version, err = applyComment(ctx, entities.NewCommentRepository(tx), change)
 	case entities.OutboxEntityAttachment:
@@ -259,6 +262,16 @@ func resolveProject(ctx context.Context, q entities.Querier, change entities.Pus
 		}
 		return string(sprint.ProjectID), nil
 
+	case entities.OutboxEntitySprintMember:
+		if change.Operation == entities.OutboxOperationDelete {
+			return projectOfSprintMember(ctx, q, change.EntityID)
+		}
+		member, err := entities.SprintMemberFromJSON(change.Payload)
+		if err != nil {
+			return "", fmt.Errorf("decode sprint member: %w", err)
+		}
+		return string(member.ProjectID), nil
+
 	case entities.OutboxEntityComment:
 		// A comment names a work item, not a project; the work item names the
 		// project. On a delete the comment must be read before it is removed.
@@ -326,6 +339,14 @@ func projectOfSprint(ctx context.Context, q entities.Querier, sprintID string) (
 		return "", err
 	}
 	return string(sprint.ProjectID), nil
+}
+
+func projectOfSprintMember(ctx context.Context, q entities.Querier, memberID string) (string, error) {
+	member, err := entities.NewSprintMemberRepository(q).GetByID(ctx, entities.SprintMemberID(memberID))
+	if err != nil || member == nil {
+		return "", err
+	}
+	return string(member.ProjectID), nil
 }
 
 // canWrite reports whether the caller may write this change. A project that
@@ -399,6 +420,12 @@ func currentVersion(ctx context.Context, q entities.Querier, change entities.Pus
 		return row.Version, nil
 	case entities.OutboxEntitySprint:
 		row, err := entities.NewSprintRepository(q).GetByID(ctx, entities.SprintID(change.EntityID))
+		if err != nil || row == nil {
+			return "", err
+		}
+		return row.Version, nil
+	case entities.OutboxEntitySprintMember:
+		row, err := entities.NewSprintMemberRepository(q).GetByID(ctx, entities.SprintMemberID(change.EntityID))
 		if err != nil || row == nil {
 			return "", err
 		}
@@ -538,6 +565,44 @@ func applySprint(ctx context.Context, sprints *entities.SprintRepository, change
 	return sprint.Version, nil
 }
 
+// applySprintMember never trusts the client to name the row's sprint: the
+// authoritative id is change.EntityID, and the payload's capacity is floored
+// in the repository. A re-push of the same sprint/user pair updates one row.
+func applySprintMember(ctx context.Context, members *entities.SprintMemberRepository, change entities.PushChange) (string, error) {
+	if change.Operation == entities.OutboxOperationDelete {
+		return "", members.Delete(ctx, entities.SprintMemberID(change.EntityID))
+	}
+
+	member, err := entities.SprintMemberFromJSON(change.Payload)
+	if err != nil {
+		return "", fmt.Errorf("decode sprint member: %w", err)
+	}
+	existing, err := members.GetByID(ctx, entities.SprintMemberID(change.EntityID))
+	if err != nil {
+		return "", err
+	}
+	if existing == nil {
+		member.ID = entities.SprintMemberID(change.EntityID)
+		if member.CreatedAt == 0 {
+			member.CreatedAt = entities.Now()
+		}
+		if err := members.Create(ctx, member); err != nil {
+			return "", err
+		}
+		return member.Version, nil
+	}
+	if change.Version != "" && existing.Version != change.Version {
+		return "", &versionConflict{current: existing.Version}
+	}
+	member.ID = existing.ID
+	member.CreatedAt = existing.CreatedAt
+	member.Version = existing.Version
+	if err := members.Update(ctx, member); err != nil {
+		return "", err
+	}
+	return member.Version, nil
+}
+
 func applyComment(ctx context.Context, comments *entities.CommentRepository, change entities.PushChange) (string, error) {
 	if change.Operation == entities.OutboxOperationDelete {
 		return "", comments.Delete(ctx, entities.CommentID(change.EntityID))
@@ -637,9 +702,10 @@ type Scope struct {
 	entities []entities.OutboxEntity
 }
 
-// The three feeds the client pulls, named after its own `SyncScope` enum. There is no
-// `sprints` route on purpose: a sprint reaches a client on `workItems`, and a feed of its
-// own would be a second copy of every sprint to every board watcher.
+// The feeds the client pulls, named after its own `SyncScope` enum. There is no
+// `sprints` route on purpose: a sprint reaches a client on `workItems`. Sprint
+// membership is newer and has a feed of its own so an installed client, which
+// never asks for it, cannot decode a payload with keys it does not declare.
 var (
 	ScopeProjects = Scope{name: entities.GrantScopeProjects, entities: []entities.OutboxEntity{
 		entities.OutboxEntityProject,
@@ -651,6 +717,11 @@ var (
 	}}
 	ScopeAttachments = Scope{name: entities.GrantScopeAttachments, entities: []entities.OutboxEntity{
 		entities.OutboxEntityAttachment,
+	}}
+	// A new feed rather than a field on a sprint: installed clients do not
+	// request it, so they never decode a payload whose keys they do not declare.
+	ScopeSprintMembers = Scope{name: entities.GrantScopeSprintMembers, entities: []entities.OutboxEntity{
+		entities.OutboxEntitySprintMember,
 	}}
 )
 

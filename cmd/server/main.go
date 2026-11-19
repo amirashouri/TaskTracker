@@ -274,6 +274,12 @@ func mount(
 	mux.Handle("GET /v1/sync/changes/attachments", pullAttachments)
 	mux.Handle("GET /v1/sync/changes/attachment", pullAttachments)
 
+	// Sprint membership is a newer feed than the client's original three. An old
+	// build never calls it, so adding the route cannot change a response it decodes.
+	pullSprintMembers := middleware.Auth(jwtManager)(http.HandlerFunc(syncHandler.PullSprintMember))
+	mux.Handle("GET /v1/sync/changes/sprintMembers", pullSprintMembers)
+	mux.Handle("GET /v1/sync/changes/sprintMember", pullSprintMembers)
+
 	// Agent runner routes. An opaque `ttag_…` token authenticates these, never a
 	// user JWT; the app-facing agent routes (dispatch, read, cancel) are a separate
 	// surface and live behind the ordinary Auth middleware.

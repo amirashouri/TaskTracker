@@ -19,6 +19,7 @@ type UserID string
 type ProjectID string
 type WorkItemID string
 type SprintID string
+type SprintMemberID string
 type CommentID string
 type AttachmentID string
 type TagID string
@@ -274,6 +275,21 @@ type Sprint struct {
 	Version         string     `json:"version"`
 }
 
+// SprintMember is one person's stated capacity in a sprint. The id is minted by
+// the client from the sprint and user ids, so a re-push updates the same row
+// instead of creating a second membership. Capacity is advisory: the client
+// warns when it exceeds the sprint goal rather than refusing the write.
+type SprintMember struct {
+	ID                   SprintMemberID `json:"id"`
+	ProjectID            ProjectID      `json:"projectID"`
+	SprintID             SprintID       `json:"sprintID"`
+	UserID               UserID         `json:"userID"`
+	AvailableStoryPoints int            `json:"availableStoryPoints"`
+	CreatedAt            Timestamp      `json:"createdAt"`
+	UpdatedAt            Timestamp      `json:"updatedAt"`
+	Version              string         `json:"version"`
+}
+
 func (s *Sprint) StatusAt(now Timestamp) SprintStatus {
 	if s.IsArchived {
 		return SprintStatusArchived
@@ -325,11 +341,12 @@ type Attachment struct {
 type OutboxEntity string
 
 const (
-	OutboxEntityProject    OutboxEntity = "project"
-	OutboxEntityWorkItem   OutboxEntity = "workItem"
-	OutboxEntitySprint     OutboxEntity = "sprint"
-	OutboxEntityComment    OutboxEntity = "comment"
-	OutboxEntityAttachment OutboxEntity = "attachment"
+	OutboxEntityProject      OutboxEntity = "project"
+	OutboxEntityWorkItem     OutboxEntity = "workItem"
+	OutboxEntitySprint       OutboxEntity = "sprint"
+	OutboxEntitySprintMember OutboxEntity = "sprintMember"
+	OutboxEntityComment      OutboxEntity = "comment"
+	OutboxEntityAttachment   OutboxEntity = "attachment"
 )
 
 type OutboxOperation string
@@ -455,6 +472,12 @@ func SprintFromJSON(data []byte) (*Sprint, error) {
 	var s Sprint
 	err := json.Unmarshal(payloadJSON(data), &s)
 	return &s, err
+}
+
+func SprintMemberFromJSON(data []byte) (*SprintMember, error) {
+	var m SprintMember
+	err := json.Unmarshal(payloadJSON(data), &m)
+	return &m, err
 }
 
 func CommentFromJSON(data []byte) (*Comment, error) {

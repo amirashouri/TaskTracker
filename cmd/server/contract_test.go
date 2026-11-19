@@ -2188,3 +2188,69 @@ func TestTheAgentHostTargetingAndDiffKeysAreWhatTheClientDeclares(t *testing.T) 
 		t.Errorf("listed run diff = %q, want the captured diff", got)
 	}
 }
+
+// Sprint membership is a new entity and a new scope, not a new key on a sprint.
+// The installed client neither pushes it nor calls its scope, so the only
+// contract to pin is the closed key set of the new document and the unchanged
+// pull envelope. A gained key here would still be a decode failure on the next
+// client build, so the set is asserted rather than merely decoded.
+func TestSprintMemberHasItsOwnScopeAndClientDeclaredKeys(t *testing.T) {
+	env := newContractEnv(t)
+	tokens := env.signIn(t)
+
+	const sprintID = "e2e2e2e2-e2e2-e2e2-e2e2-e2e2e2e2e2e2"
+	const userID = "e3e3e3e3-e3e3-e3e3-e3e3-e3e3e3e3e3e3"
+	memberID := sprintID + ":" + userID
+	payload := `{"id":"` + memberID + `","projectID":"` + string(env.project.ID) + `",` +
+		`"sprintID":"` + sprintID + `","userID":"` + userID + `",` +
+		`"availableStoryPoints":8,"createdAt":"2026-11-19T10:00:00Z",` +
+		`"updatedAt":"2026-11-19T10:00:00Z","version":"v1"}`
+
+	pushed := env.do(t, http.MethodPost, "/v1/sync/push", tokens.AccessToken, clientPushBody{
+		Changes: []clientPushChange{{
+			ID: "member-1", Entity: "sprintMember", EntityID: memberID,
+			Operation: "upsert", Payload: payload,
+		}},
+	})
+	if pushed.Code != http.StatusOK {
+		t.Fatalf("push = %d, body = %s", pushed.Code, pushed.Body.String())
+	}
+	var verdicts clientPushResponse
+	if err := json.Unmarshal(pushed.Body.Bytes(), &verdicts); err != nil {
+		t.Fatalf("decode verdicts: %v", err)
+	}
+	if len(verdicts.Results) != 1 || verdicts.Results[0].Status != "accepted" {
+		t.Fatalf("sprintMember push = %+v, want one accepted change", verdicts.Results)
+	}
+
+	rec := env.do(t, http.MethodGet, "/v1/sync/changes/sprintMembers?limit=50", tokens.AccessToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pull = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	assertWireKeys(t, "the sprintMember pull page", rec.Body.Bytes(),
+		[]string{"changes", "nextCursor", "hasMore"}, []string{"resyncRequired"})
+
+	var envelope struct {
+		Changes []json.RawMessage `json:"changes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode changes: %v", err)
+	}
+	if len(envelope.Changes) != 1 {
+		t.Fatalf("sprintMembers page has %d changes, want 1", len(envelope.Changes))
+	}
+	assertWireKeys(t, "a sprintMember change", envelope.Changes[0],
+		[]string{"entity", "entityId", "operation", "payload", "version"}, nil)
+
+	page := decodeInto[clientChangesPage](t, rec)
+	if page.Changes[0].Entity != "sprintMember" || page.Changes[0].EntityID != memberID {
+		t.Fatalf("pulled change = %+v, want the sprintMember that was pushed", page.Changes[0])
+	}
+
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(page.Changes[0].Payload), &document); err != nil {
+		t.Fatalf("decode sprintMember payload: %v", err)
+	}
+	assertWireKeySet(t, "a sprintMember document", document,
+		[]string{"id", "projectID", "sprintID", "userID", "availableStoryPoints", "createdAt", "updatedAt", "version"}, nil)
+}
