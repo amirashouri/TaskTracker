@@ -322,12 +322,13 @@ func replaceMembers(ctx context.Context, exec Querier, projectID ProjectID, memb
 // `projects` pull would leave `workItems` and `attachments` behind theirs with nothing
 // left to say so.
 const (
-	GrantScopeProjects    = "projects"
-	GrantScopeWorkItems   = "workItems"
-	GrantScopeAttachments = "attachments"
+	GrantScopeProjects      = "projects"
+	GrantScopeWorkItems     = "workItems"
+	GrantScopeSprintMembers = "sprintMembers"
+	GrantScopeAttachments   = "attachments"
 )
 
-var grantScopes = []string{GrantScopeProjects, GrantScopeWorkItems, GrantScopeAttachments}
+var grantScopes = []string{GrantScopeProjects, GrantScopeWorkItems, GrantScopeSprintMembers, GrantScopeAttachments}
 
 // memberSet reads the project's current members, as a set.
 func memberSet(ctx context.Context, q Querier, projectID ProjectID) (map[UserID]struct{}, error) {

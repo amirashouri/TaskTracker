@@ -1377,3 +1377,100 @@ func TestPushRefusesASprintWindowThatOverlapsAnOpenSprint(t *testing.T) {
 		t.Errorf("update refusal message = %q, want %q", got, want)
 	}
 }
+
+func TestSprintMembersPushAndPullOnTheirOwnScope(t *testing.T) {
+	engine, _, projects, _, userID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(userID, "e1e1e1e1-e1e1-e1e1-e1e1-e1e1e1e1e1e1")
+	if results, err := engine.Push(ctx, userID, []entities.PushChange{
+		projectChange(t, "entry-project", project, entities.OutboxOperationUpsert, ""),
+	}); err != nil || len(results) != 1 || results[0].Status != StatusAccepted {
+		t.Fatalf("create project = %+v, %v", results, err)
+	}
+	if _, err := projects.GetByID(ctx, project.ID); err != nil {
+		t.Fatalf("read project: %v", err)
+	}
+
+	memberID := string(project.ID) + ":member-1"
+	payload, err := json.Marshal(entities.SprintMember{
+		ID:                   entities.SprintMemberID(memberID),
+		ProjectID:            project.ID,
+		SprintID:             entities.SprintID("sprint-1"),
+		UserID:               entities.UserID("member-1"),
+		AvailableStoryPoints: 8,
+	})
+	if err != nil {
+		t.Fatalf("marshal member: %v", err)
+	}
+	change := entities.PushChange{
+		ID: "entry-member", Entity: entities.OutboxEntitySprintMember,
+		EntityID: memberID, Operation: entities.OutboxOperationUpsert, Payload: payload,
+	}
+	results, err := engine.Push(ctx, userID, []entities.PushChange{change})
+	if err != nil || len(results) != 1 || results[0].Status != StatusAccepted {
+		t.Fatalf("push member = %+v, %v", results, err)
+	}
+
+	page, err := engine.Pull(ctx, userID, ScopeSprintMembers, "", 0)
+	if err != nil {
+		t.Fatalf("pull sprintMembers: %v", err)
+	}
+	if len(page.Changes) != 1 || page.Changes[0].Entity != entities.OutboxEntitySprintMember {
+		t.Fatalf("sprintMembers page = %+v, want one sprintMember", page.Changes)
+	}
+	if page.Changes[0].EntityID != memberID {
+		t.Errorf("pulled entity id = %q, want %q", page.Changes[0].EntityID, memberID)
+	}
+	var pulled entities.SprintMember
+	if err := json.Unmarshal(page.Changes[0].Payload, &pulled); err != nil {
+		t.Fatalf("decode pulled member: %v", err)
+	}
+	if pulled.AvailableStoryPoints != 8 {
+		t.Errorf("pulled payload = %s, want the client's capacity", page.Changes[0].Payload)
+	}
+
+	other, err := engine.Pull(ctx, userID, ScopeWorkItems, "", 0)
+	if err != nil {
+		t.Fatalf("pull workItems: %v", err)
+	}
+	for _, entry := range other.Changes {
+		if entry.Entity == entities.OutboxEntitySprintMember {
+			t.Error("sprintMember leaked onto workItems; installed clients would decode it")
+		}
+	}
+
+	// A re-push of the same identity updates rather than creating a second row.
+	var updated entities.SprintMember
+	if err := json.Unmarshal(payload, &updated); err != nil {
+		t.Fatalf("decode for update: %v", err)
+	}
+	updated.AvailableStoryPoints = 13
+	updated.Version = results[0].Version
+	again, err := json.Marshal(updated)
+	if err != nil {
+		t.Fatalf("marshal update: %v", err)
+	}
+	change.Payload = again
+	change.ID = "entry-member-update"
+	change.Version = results[0].Version
+	results, err = engine.Push(ctx, userID, []entities.PushChange{change})
+	if err != nil || len(results) != 1 || results[0].Status != StatusAccepted {
+		t.Fatalf("update member = %+v, %v", results, err)
+	}
+	page, err = engine.Pull(ctx, userID, ScopeSprintMembers, "", 0)
+	if err != nil {
+		t.Fatalf("pull after update: %v", err)
+	}
+	if len(page.Changes) != 2 {
+		t.Fatalf("pull after update = %d changes, want 2", len(page.Changes))
+	}
+	repo := entities.NewSprintMemberRepository(engine.db)
+	rows, err := repo.BySprint(ctx, entities.SprintID("sprint-1"))
+	if err != nil {
+		t.Fatalf("read members: %v", err)
+	}
+	if len(rows) != 1 || rows[0].AvailableStoryPoints != 13 {
+		t.Fatalf("stored members = %+v, want one row with 13 points", rows)
+	}
+}

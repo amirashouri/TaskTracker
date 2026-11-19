@@ -494,7 +494,30 @@ policy, and the client never computes a merge.
 | `project` | project object |
 | `workItem` | work item object |
 | `sprint` | sprint object |
+| `sprintMember` | sprint member object |
 | `comment` | comment object |
+
+A `sprintMember` is one person's stated capacity in a sprint. Its `id` is
+client-minted from the sprint and user ids, so a re-push updates one row rather
+than creating a second membership. No existing entity gains a key: membership
+is a new entity and a new pull scope, which installed clients neither push nor
+request.
+
+```json
+{
+  "id": "<sprintId>:<userId>",
+  "projectID": "22222222-2222-2222-2222-222222222222",
+  "sprintID": "33333333-3333-3333-3333-333333333333",
+  "userID": "550e8400-e29b-41d4-a716-446655440000",
+  "availableStoryPoints": 8,
+  "createdAt": "2026-11-19T10:00:00Z",
+  "updatedAt": "2026-11-19T10:00:00Z",
+  "version": "the-version-now-stored"
+}
+```
+
+`availableStoryPoints` is advisory capacity, floored at zero; the client warns
+when a roster exceeds the sprint goal rather than treating it as an error.
 
 `operation` is `upsert` or `delete`. A delete's payload is the bare id, not a
 document.
@@ -585,8 +608,10 @@ Query parameters:
 | --- | --- |
 | `projects` | Project changes, plus every project delete, to every authenticated user |
 | `workItems` | Work item changes — and the project changes that affect them, because renaming a project has to reach a client that never asked for projects |
+| `sprintMembers` | Sprint membership changes only. A separate scope because an installed client never requests it and so cannot decode a payload whose keys it does not declare |
 
 The singular spellings `project` and `workItem` are still served as aliases.
+`sprintMember` is also served as an alias of `sprintMembers`.
 
 **Response:**
 
@@ -632,11 +657,13 @@ The client must drop its cursor and start the scope from the beginning. A
 
 ### A known gap
 
-`push` accepts all four entities, and the engine applies all four. But only
-`projects` and `workItems` have a pull scope, so **sprint and comment changes
-are push-only**: the server stores them, and no pull returns them to any other
-client. A comment that stays on the device that wrote it is worthless to every
-other member, so this is a gap rather than a design.
+`push` accepts all four original entities and the engine applies all four. But
+only `projects`, `workItems`, `attachments` and the newer `sprintMembers` have
+pull scopes, so **sprint and comment changes are still push-only**: the server
+stores them, and no pull returns them to any other client. A comment that stays
+on the device that wrote it is worthless to every other member, so this is a gap
+rather than a design. Sprint membership deliberately did not widen `workItems`:
+that scope is requested by installed clients.
 
 ## Agent runs
 

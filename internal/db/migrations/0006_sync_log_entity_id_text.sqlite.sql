@@ -1,0 +1,3 @@
+-- sync_log.entity_id has always been TEXT on SQLite, so this version only
+-- advances the schema number to stay in step with the Postgres driver. The
+-- composite sprint-member id is therefore replayable on both databases.
