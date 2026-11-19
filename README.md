@@ -12,59 +12,82 @@
 
 ## ⚡ Quick start
 
-`tt` is a single static binary that installs and operates the server; you do not
-clone this repo to run it. Download the build for your machine, then run two
-commands.
+`tt` is one small binary that installs and runs the server for you — no repo
+clone, no Go toolchain. Pick your machine, paste the block, answer the prompts.
 
-| Your machine | Asset | Saved as |
-| :--- | :--- | :--- |
-| Linux amd64 (most servers) | `tt-linux-amd64.tar.gz` | `tt`, plus the native `server` |
-| Linux arm64 | `tt-linux-arm64` | `tt` |
-| macOS Apple Silicon | `tt-darwin-arm64` | `tt` |
-| macOS Intel | `tt-darwin-amd64` | `tt` |
-| Windows amd64 | `tt-windows-amd64.exe` | `tt.exe` |
-| Windows arm64 | `tt-windows-arm64.exe` | `tt.exe` |
+**macOS — Apple Silicon (M1 or newer)**
 
 ```bash
-# Linux amd64 — the tarball also carries the native `server` binary
-curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-amd64.tar.gz | tar -xz
-sudo install -m 0755 tt-linux-amd64 /usr/local/bin/tt
-```
-
-```bash
-# Linux arm64
-curl -fsSL -o tt https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-arm64
-sudo install -m 0755 tt /usr/local/bin/tt
-```
-
-```bash
-# macOS — use tt-darwin-amd64 on an Intel Mac
 curl -fsSL -o tt https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-darwin-arm64
 sudo install -m 0755 tt /usr/local/bin/tt
+tt install
+tt expose --provider=lan
 ```
+
+**macOS — Intel**
+
+```bash
+curl -fsSL -o tt https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-darwin-amd64
+sudo install -m 0755 tt /usr/local/bin/tt
+tt install
+tt expose --provider=lan
+```
+
+**Windows — PowerShell** (uses `curl.exe`; on Windows on ARM download
+`tt-windows-arm64.exe` instead)
 
 ```powershell
-# Windows PowerShell — use tt-windows-arm64.exe on Windows on ARM.
-# curl.exe, not curl: in PowerShell `curl` is an alias for Invoke-WebRequest.
 curl.exe -fsSL -o tt.exe https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-windows-amd64.exe
+.\tt.exe install
+.\tt.exe expose --provider=lan
 ```
 
-Then install and expose it:
+**Linux server** (amd64; arm64 hosts download `tt-linux-arm64` instead)
 
 ```bash
-tt install                    # asks only for an admin email and password
-tt expose --provider=lan      # prints the pairing link and QR code
+curl -fsSL https://github.com/amirashouri/TaskTracker/releases/latest/download/tt-linux-amd64.tar.gz | tar -xz
+sudo install -m 0755 tt-linux-amd64 /usr/local/bin/tt
+tt install
+tt expose --provider=lan
 ```
 
-`tt install` sets up Docker (and installs it for you if missing on Linux), picks SQLite or Postgres, renders the compose file, waits for the server to answer `/readyz`, and creates the first admin account. On macOS and Windows it needs Docker Desktop already installed — it prints the download link and stops if it is missing — and Docker pulls the image for your architecture automatically. `tt expose` prints a pairing link and QR code — scan it in the [app](https://github.com/amirashouri/TaskTrackerKMP) and sign in.
+The two commands do the rest:
 
-Prefer a native install with no Docker? That path is Linux amd64 only, and the tarball above already ships the server binary:
+- **`tt install`** sets up Docker (installing it for you on Linux), starts the
+  server with SQLite or Postgres, waits for it to answer `/readyz`, and creates
+  your admin account. It asks a few questions — database, data directory, admin
+  email and password — and pressing Enter accepts the defaults. On macOS and
+  Windows, install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+  first; `tt install` prints that link and stops if it is missing.
+- **`tt expose --provider=lan`** prints a pairing link and QR code. Open the
+  [app](https://github.com/amirashouri/TaskTrackerKMP), scan the code, and sign
+  in with the admin account you just created.
 
-```bash
-sudo tt install --runtime native --server-binary ./server
-```
+That is a complete install on your local network. Need HTTPS or access from
+outside the LAN? Use `--provider=tailscale` or `--provider=cloudflare`. The full
+operator guide — providers, backups, upgrades, troubleshooting — is
+[`docs/INSTALL.md`](docs/INSTALL.md).
 
-Automate the whole thing with flags:
+---
+
+## 📚 Documentation
+
+- [`docs/INSTALL.md`](docs/INSTALL.md) — **customer install guide**: `tt install`, `tt expose` (LAN/Tailscale/Cloudflare), Day 2 ops, troubleshooting.
+- [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) — bare-metal/systemd deployment without Docker.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture and durable decisions.
+- [`docs/API.md`](docs/API.md) — the HTTP contract, checked against the client's DTOs.
+- [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) — roles, CLI bootstrap, and token lifecycle.
+- [`specs/`](specs/README.md) — the task index; one spec per unit of work in progress.
+- [`AGENTS.md`](AGENTS.md) — working agreement and wire-compatibility policy.
+
+---
+
+## 🛠 Advanced setup
+
+Everything below is for scripted installs, development, and running the server
+without `tt`.
+
+### Scripted install
 
 ```bash
 tt install --yes \
@@ -73,11 +96,16 @@ tt install --yes \
   --provider lan
 ```
 
-> Full operator guide — exposure providers, Day 2 operations, backups, and troubleshooting — lives in [`docs/INSTALL.md`](docs/INSTALL.md). Prefer systemd over Docker? See [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md).
+### Native install without Docker (Linux amd64)
 
----
+The Linux amd64 tarball from the quick start also carries the native `server`
+binary that the native runtime supervises:
 
-## 🐳 Run with Docker Compose
+```bash
+sudo tt install --runtime native --server-binary ./server
+```
+
+### 🐳 Run with Docker Compose
 
 The fastest path if you already have the repo checked out. Two profiles cover both deployment shapes:
 
@@ -115,9 +143,7 @@ Use `server-sqlite` instead of `server-pg` for the SQLite profile. After editing
 
 `make` wraps the common operations: `make up`, `make up PROFILE=sqlite`, `make down`, `make rebuild`. The same shortcuts run the admin server subcommands in the running container, so a dev instance needs no `tt` install state: `make admin` lists every account with its role, and `make admin-reset-password EMAIL=... PASSWORD=...` sets a new password. See [`.env.example`](.env.example) for every variable.
 
----
-
-## 🔧 Run from source
+### 🔧 Run from source
 
 ```bash
 # 1. Requirements: Go 1.27, a C compiler for CGO (SQLite), and Postgres 14+ or SQLite
@@ -133,7 +159,7 @@ go run ./cmd/server
 
 Then `GET /healthz` returns `ok`, and `GET /readyz` returns `ok` once the database answers. Liveness vs. readiness is deliberate — `/healthz` never touches the database, `/readyz` does.
 
-### Required configuration
+#### Required configuration
 
 | Variable | Purpose |
 | :--- | :--- |
@@ -143,9 +169,7 @@ Then `GET /healthz` returns `ok`, and `GET /readyz` returns `ok` once the databa
 
 Real environment variables always win over `.env`, so a host can inject secrets with no file on disk (systemd, Docker secrets, CI/CD variables).
 
----
-
-## ✅ Verify
+### ✅ Verify
 
 ```bash
 gofmt -l . && go build ./... && go vet ./... && go test ./...
@@ -163,23 +187,9 @@ TASKTRACKER_TEST_POSTGRES_URL="postgres://postgres:postgres@localhost:55432/task
 
 For day-to-day work, the fast loop is the packages you touched: `go test ./internal/<pkg>`. `scripts/check.sh all` (or `race`) is the release gate, not a per-change check.
 
----
-
-## 🗄 Database & migrations
+### 🗄 Database & migrations
 
 Schema is versioned SQL in `internal/db/migrations/`, one file per driver sharing a version number (`0001_initial.postgres.sql`, `0001_initial.sqlite.sql`). Files are embedded in the binary and applied on startup, each in its own transaction. New changes add the next version for **both** drivers — `go test ./internal/db` fails if one dialect is missing.
-
----
-
-## 📚 Documentation
-
-- [`docs/INSTALL.md`](docs/INSTALL.md) — **customer install guide**: `tt install`, `tt expose` (LAN/Tailscale/Cloudflare), Day 2 ops, troubleshooting.
-- [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) — bare-metal/systemd deployment without Docker.
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture and durable decisions.
-- [`docs/API.md`](docs/API.md) — the HTTP contract, checked against the client's DTOs.
-- [`docs/USER-MANAGEMENT.md`](docs/USER-MANAGEMENT.md) — roles, CLI bootstrap, and token lifecycle.
-- [`specs/`](specs/README.md) — the task index; one spec per unit of work in progress.
-- [`AGENTS.md`](AGENTS.md) — working agreement and wire-compatibility policy.
 
 ---
 
