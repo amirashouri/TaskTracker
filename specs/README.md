@@ -40,9 +40,11 @@ task has no spec: the diff and commit history are its verification record.
    the next step; commit it on the task branch.
 6. Keep `status: in-progress` while implementation, validation, or review
    remains. Once the contract and checks pass and the diff review is approved,
-   promote any durable non-obvious decisions into `docs/ARCHITECTURE.md` (or the
-   relevant guide) and **delete the spec** in the final task-branch commit before
-   merge. Do not leave a `status: done` spec behind.
+   fill in **Promote** — the durable decisions move into `docs/ARCHITECTURE.md`
+   (or the relevant guide) — and **delete the spec** in the final task-branch
+   commit before merge. Deletion is the only way to finish a spec: there is no
+   `done` status, so a spec with nothing left to do is a spec that has not been
+   deleted yet.
 
 ## Reading budget
 
