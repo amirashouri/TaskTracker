@@ -142,6 +142,15 @@ func (r *ProjectRepository) Delete(ctx context.Context, id ProjectID) error {
 	return err
 }
 
+// Identity returns the two project fields a notification payload needs. It
+// avoids GetByID, which also loads the member set: an inbox card needs the key
+// prefix and the name, not the roster.
+func (r *ProjectRepository) Identity(ctx context.Context, id ProjectID) (string, string, error) {
+	var prefix, name string
+	err := r.db.QueryRowContext(ctx, `SELECT key_prefix, name FROM projects WHERE id = $1`, id).Scan(&prefix, &name)
+	return prefix, name, err
+}
+
 // AllocateKey reserves the next work-item number for a project and returns the
 // formatted key. One statement both reads and increments the counter, so two
 // concurrent callers cannot be handed the same number.

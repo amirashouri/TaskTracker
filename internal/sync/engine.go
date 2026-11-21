@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -111,11 +112,18 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 	switch change.Entity {
 	case entities.OutboxEntityProject, entities.OutboxEntityWorkItem,
 		entities.OutboxEntitySprint, entities.OutboxEntitySprintMember,
-		entities.OutboxEntityComment, entities.OutboxEntityAttachment:
+		entities.OutboxEntityComment, entities.OutboxEntityAttachment,
+		entities.OutboxEntityNotification:
 	default:
 		result.Status = StatusRejected
 		result.Message = fmt.Sprintf("unknown entity %q", change.Entity)
 		return result
+	}
+
+	// A notification names no project and is scoped to its recipient rather than
+	// to a project's membership, so it takes its own authorization path.
+	if change.Entity == entities.OutboxEntityNotification {
+		return e.applyNotificationChange(ctx, userID, change)
 	}
 
 	// One transaction per change: the entity write and its log row commit
@@ -155,6 +163,11 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 			return result
 		}
 	}
+
+	// What generation needs to know about the row *before* this write. Read here,
+	// inside the same transaction, because after the write a changed assignee and
+	// an unchanged one look identical.
+	snapshot := notificationSnapshotFor(ctx, tx, change)
 
 	// Repositories bound to the transaction, so their writes join it.
 	var version string
@@ -215,6 +228,15 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 			result.Message = err.Error()
 		}
 		return result
+	}
+
+	// The inbox row and its feed entry share this transaction. A failure here is
+	// logged and swallowed: a derived notification must never fail the edit that
+	// caused it.
+	if n := notificationForChange(ctx, tx, userID, change, snapshot); n != nil {
+		if err := writeGeneratedNotification(ctx, tx, userID, n); err != nil {
+			slog.Warn("notification not written", "kind", n.Kind, "recipient", n.UserID, "error", err)
+		}
 	}
 
 	if err := appendLog(ctx, tx, projectID, change, userID, version); err != nil {
@@ -700,6 +722,11 @@ type Scope struct {
 	// no other.
 	name     string
 	entities []entities.OutboxEntity
+	// recipientScoped marks a feed whose rows belong to one user rather than to a
+	// project's members. Notifications are the only such feed: their predicate is
+	// notifications.recipient_id = the caller, and the project membership query
+	// would either leak every member's inbox or return nothing.
+	recipientScoped bool
 }
 
 // The feeds the client pulls, named after its own `SyncScope` enum. There is no
@@ -723,6 +750,13 @@ var (
 	ScopeSprintMembers = Scope{name: entities.GrantScopeSprintMembers, entities: []entities.OutboxEntity{
 		entities.OutboxEntitySprintMember,
 	}}
+	// A recipient-scoped feed of its own. It carries an entity an installed
+	// client never asks for, and its rows are visible to exactly one account.
+	ScopeNotifications = Scope{
+		name:            "notifications",
+		entities:        []entities.OutboxEntity{entities.OutboxEntityNotification},
+		recipientScoped: true,
+	}
 )
 
 // entityPlaceholders renders one `$n` per entity of the scope, starting at start, and
@@ -760,16 +794,28 @@ func (e *Engine) Pull(ctx context.Context, userID string, scope Scope, cursor st
 	// placeholders are numbered off the scope's width rather than spelled out.
 	in, args := scope.entityPlaceholders(1)
 	cursorAt := len(args) + 1
-	// The membership predicate and the `LIMIT` are positional too, so the whole query is
-	// built once instead of being concatenated from two halves that could drift.
-	query := fmt.Sprintf(`
-		SELECT id, entity, entity_id, operation, payload, version
-		  FROM sync_log
-		 WHERE entity IN (%s) AND id > $%d
-		   AND ( project_id IN (SELECT project_id FROM project_members WHERE user_id = $%d)
-		         OR (entity = 'project' AND operation = 'delete') )
-		 ORDER BY id
-		 LIMIT $%d`, in, cursorAt, cursorAt+1, cursorAt+2)
+	// The predicate and the `LIMIT` are positional too, so the whole query is built
+	// once instead of being concatenated from two halves that could drift.
+	var query string
+	if scope.recipientScoped {
+		query = fmt.Sprintf(`
+			SELECT id, entity, entity_id, operation, payload, version
+			  FROM sync_log
+			 WHERE entity IN (%s) AND id > $%d
+			   AND EXISTS (SELECT 1 FROM notifications n
+			                WHERE n.id = sync_log.entity_id AND n.recipient_id = $%d)
+			 ORDER BY id
+			 LIMIT $%d`, in, cursorAt, cursorAt+1, cursorAt+2)
+	} else {
+		query = fmt.Sprintf(`
+			SELECT id, entity, entity_id, operation, payload, version
+			  FROM sync_log
+			 WHERE entity IN (%s) AND id > $%d
+			   AND ( project_id IN (SELECT project_id FROM project_members WHERE user_id = $%d)
+			         OR (entity = 'project' AND operation = 'delete') )
+			 ORDER BY id
+			 LIMIT $%d`, in, cursorAt, cursorAt+1, cursorAt+2)
+	}
 
 	rows, err := e.db.QueryContext(ctx, query, append(args, after, userID, limit+1)...)
 	if err != nil {
@@ -813,7 +859,7 @@ func (e *Engine) Pull(ctx context.Context, userID string, scope Scope, cursor st
 
 	// A cursor that points before the oldest retained row means rows were
 	// pruned under it: the client has missed changes and must start over.
-	oldest, err := e.oldestCursor(ctx, scope)
+	oldest, err := e.oldestCursor(ctx, scope, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -867,12 +913,21 @@ func (e *Engine) retireGrant(ctx context.Context, userID string, scope Scope) er
 // It spans every entity of the scope on purpose: a pruned sprint under the cursor is just as
 // lost to a client as a pruned work item, and a check that only looked at work items would
 // report a clean sync for a gap it never noticed.
-func (e *Engine) oldestCursor(ctx context.Context, scope Scope) (int64, error) {
+func (e *Engine) oldestCursor(ctx context.Context, scope Scope, userID string) (int64, error) {
 	in, args := scope.entityPlaceholders(1)
 	var oldest int64
-	err := e.db.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT id FROM sync_log WHERE entity IN (%s) ORDER BY created_at, id LIMIT 1`, in),
-		args...).Scan(&oldest)
+	query := fmt.Sprintf(`SELECT id FROM sync_log WHERE entity IN (%s) ORDER BY created_at, id LIMIT 1`, in)
+	if scope.recipientScoped {
+		// Pruning is global; the resync check must not be. Another account's
+		// pruned inbox is not this caller's gap.
+		query = fmt.Sprintf(`SELECT id FROM sync_log
+			 WHERE entity IN (%s)
+			   AND EXISTS (SELECT 1 FROM notifications n
+			                WHERE n.id = sync_log.entity_id AND n.recipient_id = $%d)
+			 ORDER BY created_at, id LIMIT 1`, in, len(args)+1)
+		args = append(args, userID)
+	}
+	err := e.db.QueryRowContext(ctx, query, args...).Scan(&oldest)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}

@@ -689,6 +689,152 @@ func TestThePullResponseIsWhatTheClientDecodes(t *testing.T) {
 	}
 }
 
+// The notification feed is new and recipient-scoped. Its response is pinned the
+// same way every other sync payload is: the client's declared keys by exact
+// name, and the payload is a JSON *string* holding that object.
+func TestTheNotificationWireShapeIsWhatTheClientDecodes(t *testing.T) {
+	env := newContractEnv(t)
+	owner := env.signIn(t)
+
+	const memberEmail = "grace@example.com"
+	const memberPassword = "grace-password"
+	createdMember := env.do(t, http.MethodPost, "/v1/admin/users", owner.AccessToken, map[string]string{
+		"email": memberEmail, "password": memberPassword, "displayName": "Grace Hopper",
+	})
+	if createdMember.Code != http.StatusCreated {
+		t.Fatalf("create member = %d, body = %s", createdMember.Code, createdMember.Body.String())
+	}
+	var member clientUser
+	if err := json.Unmarshal(createdMember.Body.Bytes(), &member); err != nil {
+		t.Fatalf("decode member: %v", err)
+	}
+
+	projects := entities.NewProjectRepository(env.database.DB)
+	project, err := projects.GetByID(context.Background(), env.project.ID)
+	if err != nil || project == nil {
+		t.Fatalf("reload project: %v", err)
+	}
+	project.MemberIDs = append(project.MemberIDs, entities.UserID(member.ID))
+	if err := projects.Update(context.Background(), project); err != nil {
+		t.Fatalf("add the member: %v", err)
+	}
+
+	const itemID = "44444444-5555-6666-7777-888888888888"
+	workItem := `{"id":"` + itemID + `","projectId":"` + string(env.project.ID) + `",` +
+		`"key":"TT-1","title":"Fix the thing","details":"","status":"todo","priority":"medium",` +
+		`"assigneeId":"` + member.ID + `","blockedByIds":[],"rank":0,` +
+		`"createdAt":"2026-09-26T20:13:32Z","updatedAt":"2026-09-26T20:13:32Z","version":"v-1"}`
+
+	pushed := env.do(t, http.MethodPost, "/v1/sync/push", owner.AccessToken, clientPushBody{
+		Changes: []clientPushChange{{
+			ID: "assign-1", Entity: "workItem", EntityID: itemID, Operation: "upsert", Payload: workItem,
+		}},
+	})
+	if pushed.Code != http.StatusOK {
+		t.Fatalf("push = %d, body = %s", pushed.Code, pushed.Body.String())
+	}
+	if verdicts := decodeInto[clientPushResponse](t, pushed); len(verdicts.Results) != 1 || verdicts.Results[0].Status != "accepted" {
+		t.Fatalf("work item push = %+v, want one accepted change", verdicts.Results)
+	}
+
+	signedIn := env.do(t, http.MethodPost, "/v1/auth/login", "", map[string]string{
+		"email": memberEmail, "password": memberPassword,
+	})
+	if signedIn.Code != http.StatusOK {
+		t.Fatalf("member login = %d, body = %s", signedIn.Code, signedIn.Body.String())
+	}
+	memberTokens := decodeInto[clientTokenPair](t, signedIn)
+
+	rec := env.do(t, http.MethodGet, "/v1/sync/changes/notifications?limit=50", memberTokens.AccessToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pull = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	page := decodeInto[clientChangesPage](t, rec)
+	if len(page.Changes) != 1 {
+		t.Fatalf("recipient pull = %d changes, want 1: %s", len(page.Changes), rec.Body.String())
+	}
+
+	assertWireKeys(t, "the notification pull page", rec.Body.Bytes(),
+		[]string{"changes", "nextCursor", "hasMore"}, []string{"resyncRequired"})
+
+	if page.Changes[0].Entity != "notification" {
+		t.Errorf("entity = %q, want notification", page.Changes[0].Entity)
+	}
+
+	var rawNotification map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(page.Changes[0].Payload), &rawNotification); err != nil {
+		t.Fatalf("the payload is not a notification object: %v", err)
+	}
+	assertWireKeySet(t, "a notification", rawNotification,
+		[]string{"id", "userID", "kind", "payload", "isRead", "createdAt", "updatedAt"}, nil)
+
+	var note struct {
+		ID        string             `json:"id"`
+		UserID    string             `json:"userID"`
+		Kind      string             `json:"kind"`
+		Payload   string             `json:"payload"`
+		IsRead    bool               `json:"isRead"`
+		CreatedAt entities.Timestamp `json:"createdAt"`
+		UpdatedAt entities.Timestamp `json:"updatedAt"`
+	}
+	if err := json.Unmarshal([]byte(page.Changes[0].Payload), &note); err != nil {
+		t.Fatalf("decode notification: %v", err)
+	}
+	if note.UserID != member.ID || note.Kind != "task_assigned" || note.IsRead {
+		t.Errorf("notification = %+v, want an unread task_assigned for the assignee", note)
+	}
+	var payload entities.NotificationPayload
+	if err := json.Unmarshal([]byte(note.Payload), &payload); err != nil {
+		t.Fatalf("decode the notification payload: %v", err)
+	}
+	if payload.WorkItemID != itemID || payload.TaskTitle != "Fix the thing" || payload.ProjectID != string(env.project.ID) {
+		t.Errorf("payload = %+v, want the assigned item and its project", payload)
+	}
+
+	// The owner is a project member but not the recipient, so their inbox is empty.
+	ownersPage := decodeInto[clientChangesPage](t, env.do(t, http.MethodGet, "/v1/sync/changes/notifications?limit=50", owner.AccessToken, nil))
+	if len(ownersPage.Changes) != 0 {
+		t.Errorf("the assigner's inbox = %d changes, want 0", len(ownersPage.Changes))
+	}
+
+	// The only client write is read state, and the feed re-serves the whole
+	// stored document rather than the patch.
+	read := env.do(t, http.MethodPost, "/v1/sync/push", memberTokens.AccessToken, clientPushBody{
+		Changes: []clientPushChange{{
+			ID: "read-1", Entity: "notification", EntityID: note.ID, Operation: "upsert", Payload: `{"isRead":true}`,
+		}},
+	})
+	if verdict := decodeInto[clientPushResponse](t, read); len(verdict.Results) != 1 || verdict.Results[0].Status != "accepted" {
+		t.Fatalf("read push = %+v, want accepted", verdict.Results)
+	}
+
+	after := decodeInto[clientChangesPage](t, env.do(t, http.MethodGet, "/v1/sync/changes/notifications?limit=50", memberTokens.AccessToken, nil))
+	if len(after.Changes) < 2 {
+		t.Fatalf("the read update did not reach the feed: %+v", after.Changes)
+	}
+	var updated map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(after.Changes[len(after.Changes)-1].Payload), &updated); err != nil {
+		t.Fatalf("the read update is not a notification object: %v", err)
+	}
+	assertWireKeySet(t, "the read update", updated,
+		[]string{"id", "userID", "kind", "payload", "isRead", "createdAt", "updatedAt"}, nil)
+	var readNote struct {
+		IsRead bool `json:"isRead"`
+	}
+	if err := json.Unmarshal([]byte(after.Changes[len(after.Changes)-1].Payload), &readNote); err != nil || !readNote.IsRead {
+		t.Errorf("the pulled read update is not read: %s (%v)", after.Changes[len(after.Changes)-1].Payload, err)
+	}
+
+	steal := decodeInto[clientPushResponse](t, env.do(t, http.MethodPost, "/v1/sync/push", owner.AccessToken, clientPushBody{
+		Changes: []clientPushChange{{
+			ID: "read-2", Entity: "notification", EntityID: note.ID, Operation: "upsert", Payload: `{"isRead":false}`,
+		}},
+	}))
+	if len(steal.Results) != 1 || steal.Results[0].Status != "rejected" {
+		t.Errorf("another user's read push = %+v, want rejected", steal.Results)
+	}
+}
+
 // `hasMore` has no default on the client, so its presence is part of the
 // contract rather than a detail of the value.
 func TestThePullPageAlwaysStatesHasMore(t *testing.T) {

@@ -22,14 +22,16 @@ type SprintID string
 type SprintMemberID string
 type CommentID string
 type AttachmentID string
+type NotificationID string
 type TagID string
 
-func NewUserID() UserID             { return UserID(uuid.New().String()) }
-func NewProjectID() ProjectID       { return ProjectID(uuid.New().String()) }
-func NewWorkItemID() WorkItemID     { return WorkItemID(uuid.New().String()) }
-func NewSprintID() SprintID         { return SprintID(uuid.New().String()) }
-func NewCommentID() CommentID       { return CommentID(uuid.New().String()) }
-func NewAttachmentID() AttachmentID { return AttachmentID(uuid.New().String()) }
+func NewUserID() UserID                 { return UserID(uuid.New().String()) }
+func NewProjectID() ProjectID           { return ProjectID(uuid.New().String()) }
+func NewWorkItemID() WorkItemID         { return WorkItemID(uuid.New().String()) }
+func NewSprintID() SprintID             { return SprintID(uuid.New().String()) }
+func NewCommentID() CommentID           { return CommentID(uuid.New().String()) }
+func NewAttachmentID() AttachmentID     { return AttachmentID(uuid.New().String()) }
+func NewNotificationID() NotificationID { return NotificationID(uuid.New().String()) }
 
 // ============ User ============
 
@@ -336,6 +338,63 @@ type Attachment struct {
 	Version    string       `json:"version"`
 }
 
+// ============ Notification ============
+
+// The two events this server generates. A kind is a value, not a key, so a new
+// one never changes the notification object's shape.
+const (
+	NotificationKindTaskAssigned = "task_assigned"
+	NotificationKindCommentAdded = "comment_added"
+)
+
+// What produced a notification. Together with SourceID it is the idempotency
+// key of generation: a replayed change cannot create a second row for the same
+// event.
+const (
+	NotificationSourceWorkItem = "workItem"
+	NotificationSourceComment  = "comment"
+)
+
+// Notification is one inbox row, server-generated for a single recipient.
+//
+// The wire object is deliberately narrow: the KMP client declares exactly these
+// keys and its decoder leaves `ignoreUnknownKeys` off, so a gained key is a
+// decoding failure. `Payload` is a JSON *string* holding the kind-specific
+// document, because that is how the client's model declares it — the same
+// double encoding a sync change's payload uses.
+//
+// Version, SourceKind, SourceID and DismissedAt are storage concerns and are
+// never on the wire.
+type Notification struct {
+	ID        NotificationID `json:"id"`
+	UserID    UserID         `json:"userID"`
+	Kind      string         `json:"kind"`
+	Payload   string         `json:"payload"`
+	IsRead    bool           `json:"isRead"`
+	CreatedAt Timestamp      `json:"createdAt"`
+	UpdatedAt Timestamp      `json:"updatedAt"`
+
+	Version     string     `json:"-"`
+	SourceKind  string     `json:"-"`
+	SourceID    string     `json:"-"`
+	DismissedAt *Timestamp `json:"-"`
+}
+
+// NotificationPayload is the kind-specific document inside Notification.Payload.
+// It carries enough for a card and its navigation target without a join: the
+// task's key and title, the project, and who acted.
+type NotificationPayload struct {
+	WorkItemID       string `json:"workItemId"`
+	WorkItemKey      string `json:"workItemKey"`
+	TaskTitle        string `json:"taskTitle"`
+	ProjectID        string `json:"projectId"`
+	ProjectKeyPrefix string `json:"projectKeyPrefix"`
+	ProjectName      string `json:"projectName"`
+	ActorName        string `json:"actorName"`
+	CommentID        string `json:"commentId,omitempty"`
+	CommentPreview   string `json:"commentPreview,omitempty"`
+}
+
 // ============ Sync Types ============
 
 type OutboxEntity string
@@ -347,6 +406,9 @@ const (
 	OutboxEntitySprintMember OutboxEntity = "sprintMember"
 	OutboxEntityComment      OutboxEntity = "comment"
 	OutboxEntityAttachment   OutboxEntity = "attachment"
+	// Notifications are the one entity a client never creates: a push may only
+	// change the caller's own read state or dismiss its own row.
+	OutboxEntityNotification OutboxEntity = "notification"
 )
 
 type OutboxOperation string
@@ -429,6 +491,10 @@ func (p *Project) ToJSON() ([]byte, error) {
 	return json.Marshal(p)
 }
 
+func (n *Notification) ToJSON() ([]byte, error) {
+	return json.Marshal(n)
+}
+
 // payloadJSON normalises a change payload to the JSON document it carries.
 //
 // A payload reaches this server in one of two shapes, and they mean the same
@@ -496,4 +562,26 @@ func ProjectFromJSON(data []byte) (*Project, error) {
 	var p Project
 	err := json.Unmarshal(payloadJSON(data), &p)
 	return &p, err
+}
+
+// NotificationFromJSON decodes one notification document. The client sends the
+// full document on a read-state push, so a decode that ignores storage-only
+// fields is enough here.
+func NotificationFromJSON(data []byte) (*Notification, error) {
+	var n Notification
+	err := json.Unmarshal(payloadJSON(data), &n)
+	return &n, err
+}
+
+// NotificationReadStateFromJSON reads the only field a push is allowed to
+// change. A nil answer means the key was absent, which the engine rejects rather
+// than guessing "unread".
+func NotificationReadStateFromJSON(data []byte) (*bool, error) {
+	var patch struct {
+		IsRead *bool `json:"isRead"`
+	}
+	if err := json.Unmarshal(payloadJSON(data), &patch); err != nil {
+		return nil, err
+	}
+	return patch.IsRead, nil
 }

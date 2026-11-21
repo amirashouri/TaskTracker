@@ -67,6 +67,10 @@ func (h *Handler) PullSprintMember(w http.ResponseWriter, r *http.Request) {
 	h.pull(w, r, ScopeSprintMembers)
 }
 
+func (h *Handler) PullNotification(w http.ResponseWriter, r *http.Request) {
+	h.pull(w, r, ScopeNotifications)
+}
+
 func (h *Handler) pull(w http.ResponseWriter, r *http.Request, scope Scope) {
 	userID, ok := auth.UserFrom(r.Context())
 	if !ok {
