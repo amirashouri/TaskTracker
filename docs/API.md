@@ -496,6 +496,7 @@ policy, and the client never computes a merge.
 | `sprint` | sprint object |
 | `sprintMember` | sprint member object |
 | `comment` | comment object |
+| `notification` | notification object — **server-generated**; a client may only change its read state or dismiss it |
 
 A `sprintMember` is one person's stated capacity in a sprint. Its `id` is
 client-minted from the sprint and user ids, so a re-push updates one row rather
@@ -609,6 +610,7 @@ Query parameters:
 | `projects` | Project changes, plus every project delete, to every authenticated user |
 | `workItems` | Work item changes — and the project changes that affect them, because renaming a project has to reach a client that never asked for projects |
 | `sprintMembers` | Sprint membership changes only. A separate scope because an installed client never requests it and so cannot decode a payload whose keys it does not declare |
+| `notifications` | The caller's own notifications, **recipient-scoped** rather than project-membership scoped. A separate feed because an installed client never requests it, and because another project member must never see this account's inbox |
 
 The singular spellings `project` and `workItem` are still served as aliases.
 `sprintMember` is also served as an alias of `sprintMembers`.
@@ -654,6 +656,60 @@ The client must drop its cursor and start the scope from the beginning. A
 | `400` | `{"error": "invalid limit"}` |
 | `401` | `{"error": "unauthenticated"}` |
 | `500` | `{"error": "sync failed"}` |
+
+### Notifications — generated, recipient-scoped
+
+A notification is created by the server when a work item is assigned to somebody
+or when a comment is added to an item that has an assignee. A client never
+creates one: the only client-writable fields are `isRead` and dismissal, and a
+push of any other shape is `rejected`.
+
+Generation is idempotent through `(recipient, source_kind, source_id)`, and it
+is best-effort inside the transaction of the change that caused it — a derived
+notification can never fail a user's edit. Nobody is notified about their own
+action.
+
+The notification object:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "userID": "550e8400-e29b-41d4-a716-446655440000",
+  "kind": "task_assigned",
+  "payload": "{\"workItemId\":\"…\",\"workItemKey\":\"TT-12\",…}",
+  "isRead": false,
+  "createdAt": "2026-11-21T10:00:00Z",
+  "updatedAt": "2026-11-21T10:00:00Z"
+}
+```
+
+`kind` is `task_assigned` or `comment_added`. `payload` is a JSON **string**
+holding the kind-specific document, because that is how the client's model
+declares it. Both kinds carry `workItemId`, `workItemKey`, `taskTitle`,
+`projectId`, `projectKeyPrefix`, `projectName` and `actorName`; a comment also
+carries `commentId` and a `commentPreview` truncated at 160 characters.
+
+There is deliberately **no `version` key**: the client declares no such field,
+and a gained key is a decoding failure. Read state is last-write-wins.
+
+**Pulling.** `GET /v1/sync/changes/notifications?cursor=&limit=` returns the
+caller's rows only — the predicate is `notifications.recipient_id`, not project
+membership. Its envelope is the ordinary one (`changes`, `nextCursor`,
+`hasMore`, `resyncRequired`), and `resyncRequired` is computed from the caller's
+own rows so another account's pruning cannot force a resync here.
+
+**Pushing.** A change with `entity: "notification"` is applied as follows, and
+never resolves a project:
+
+| `operation` | Body | Result |
+| --- | --- | --- |
+| `upsert` | `{"isRead": true}` or `false` | Updates the caller's own row. An unknown id or somebody else's row is `rejected` — the same answer, so it is not an existence oracle. The change feed re-serves the whole stored document, not the patch |
+| `delete` | the bare id | Dismisses the caller's own row. An already dismissed, unknown or somebody else's row is still `accepted`, so an offline delete is idempotent |
+
+A pull replayed from an empty cursor delivers a create and its later dismissal;
+the client's sink must apply both idempotently. The server does not generate
+mentions, due-date or status-change notifications, and does not deliver these
+rows over email or an OS push channel.
 
 ### A known gap
 
