@@ -32,18 +32,7 @@ func (osPreflightEnv) LookPath(name string) (string, error) {
 }
 
 func (osPreflightEnv) DockerRoot(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", "info", "--format", "{{.DockerRootDir}}")
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		detail := strings.TrimSpace(stderr.String())
-		if detail != "" {
-			return "", fmt.Errorf("%w: %s", err, detail)
-		}
-		return "", err
-	}
-	return strings.TrimSpace(stdout.String()), nil
+	return runCapture(ctx, true, "docker", "info", "--format", "{{.DockerRootDir}}")
 }
 
 func (osPreflightEnv) Listen(network, address string) (io.Closer, error) {

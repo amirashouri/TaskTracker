@@ -59,39 +59,38 @@ type httpResult struct {
 
 type osCheckEnv struct{}
 
-func (osCheckEnv) Compose(ctx context.Context, state State, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", composeArgs(state, args...)...)
+// runCapture runs a host command and returns its trimmed stdout. strict errors on
+// a non-zero exit, folding stderr into the error. A lenient call treats a
+// non-zero exit as a result when stdout is non-empty: `systemctl is-active`
+// prints the unit state and then exits non-zero for an inactive unit.
+func runCapture(ctx context.Context, strict bool, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	out := strings.TrimSpace(stdout.String())
+	if err != nil {
+		if !strict && out != "" {
+			return out, nil
+		}
 		if detail := strings.TrimSpace(stderr.String()); detail != "" {
 			return "", fmt.Errorf("%w: %s", err, detail)
 		}
 		return "", err
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return out, nil
+}
+
+func (osCheckEnv) Compose(ctx context.Context, state State, args ...string) (string, error) {
+	return runCapture(ctx, true, "docker", composeArgs(state, args...)...)
 }
 
 // Service asks systemd for the unit's state. `is-active` exits non-zero for an
 // inactive unit while still printing its state, so a non-zero exit is a result
 // and only empty output is a failure to inspect.
 func (osCheckEnv) Service(ctx context.Context, state State) (string, error) {
-	cmd := exec.CommandContext(ctx, "systemctl", "is-active", state.ServiceName())
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	out := strings.TrimSpace(stdout.String())
-	if out == "" {
-		if err != nil {
-			if detail := strings.TrimSpace(stderr.String()); detail != "" {
-				return "", fmt.Errorf("%w: %s", err, detail)
-			}
-			return "", err
-		}
-	}
-	return out, nil
+	return runCapture(ctx, false, "systemctl", "is-active", state.ServiceName())
 }
 
 func (osCheckEnv) Stat(path string) (os.FileInfo, error) {

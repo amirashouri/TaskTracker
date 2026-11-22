@@ -72,6 +72,22 @@ func defaultInstallOptions() installOptions {
 	}
 }
 
+// commandFromOptions builds the base command both the dry-run preview and the
+// real plan use. A field wired into only one of them is a preview that lies.
+func commandFromOptions(opts installOptions, deps installDeps) install.Command {
+	return install.Command{
+		Action:       install.ActionInstall,
+		Runtime:      install.Runtime(opts.runtime),
+		Mode:         install.Mode(opts.mode),
+		Provider:     install.Provider(opts.provider),
+		DataDir:      opts.dataDir,
+		InstanceName: opts.name,
+		Version:      deps.buildVersion,
+		ServerPort:   opts.port,
+		BinaryPath:   opts.serverBinary,
+	}
+}
+
 func runInstall(
 	ctx context.Context,
 	args []string,
@@ -180,17 +196,7 @@ func installWith(ctx context.Context, opts installOptions, deps installDeps) int
 	// Dry-run is deliberately before preflight and prompts. It must work on a
 	// machine with no Docker daemon and leave no state behind.
 	if opts.dryRun {
-		cmd := install.Command{
-			Action:       install.ActionInstall,
-			Runtime:      install.Runtime(opts.runtime),
-			Mode:         install.Mode(opts.mode),
-			Provider:     install.Provider(opts.provider),
-			DataDir:      opts.dataDir,
-			InstanceName: opts.name,
-			Version:      deps.buildVersion,
-			ServerPort:   opts.port,
-			BinaryPath:   opts.serverBinary,
-		}
+		cmd := commandFromOptions(opts, deps)
 		if cmd.Runtime == install.RuntimeNative && strings.TrimSpace(cmd.BinaryPath) == "" {
 			binary := state.BinaryPath
 			if !wasInstalled {
@@ -426,20 +432,10 @@ func freshInstall(ctx context.Context, opts installOptions, deps installDeps) in
 		}
 	}
 
-	cmd := install.Command{
-		Action:           install.ActionInstall,
-		Runtime:          install.Runtime(opts.runtime),
-		Mode:             install.Mode(opts.mode),
-		Provider:         install.Provider(opts.provider),
-		DataDir:          opts.dataDir,
-		InstanceName:     opts.name,
-		Version:          deps.buildVersion,
-		ServerPort:       opts.port,
-		BinaryPath:       opts.serverBinary,
-		AdminEmail:       admin.Email,
-		AdminPassword:    admin.Password,
-		AdminDisplayName: admin.DisplayName,
-	}
+	cmd := commandFromOptions(opts, deps)
+	cmd.AdminEmail = admin.Email
+	cmd.AdminPassword = admin.Password
+	cmd.AdminDisplayName = admin.DisplayName
 	if err := fillSecrets(&cmd); err != nil {
 		return fail(ctx, deps.stderr, "tt install", err)
 	}

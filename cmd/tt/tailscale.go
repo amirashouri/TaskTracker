@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -99,24 +97,4 @@ func tailscaleInstallHint(goos string) string {
 
 func lookTailscale() (string, error) {
 	return exec.LookPath("tailscale")
-}
-
-// runTailscaleCommand is the production adapter. The CLI is already known to be
-// on PATH; stderr is folded into the error so a Funnel ACL refusal is visible.
-func runTailscaleCommand(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "tailscale", args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		detail := strings.TrimSpace(stderr.String())
-		if detail == "" {
-			detail = strings.TrimSpace(stdout.String())
-		}
-		if detail != "" {
-			return "", fmt.Errorf("tailscale %s: %w: %s", strings.Join(args, " "), err, detail)
-		}
-		return "", fmt.Errorf("tailscale %s: %w", strings.Join(args, " "), err)
-	}
-	return stdout.String(), nil
 }

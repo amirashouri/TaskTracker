@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -482,22 +481,4 @@ func ensureCloudflareTunnel(ctx context.Context, deps exposeDeps, domain string)
 		}
 	}
 	return "", fmt.Errorf("could not parse tunnel ID from output: %s", output)
-}
-
-func runCloudflareCommand(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "cloudflared", args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		detail := strings.TrimSpace(stderr.String())
-		if detail == "" {
-			detail = strings.TrimSpace(stdout.String())
-		}
-		if detail != "" {
-			return "", fmt.Errorf("cloudflared %s: %w: %s", strings.Join(args, " "), err, detail)
-		}
-		return "", fmt.Errorf("cloudflared %s: %w", strings.Join(args, " "), err)
-	}
-	return stdout.String(), nil
 }
