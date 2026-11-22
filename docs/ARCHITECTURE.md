@@ -438,6 +438,10 @@ validation runs, counts, handoffs and per-task file lists were dropped.
 - **Only the blob routes get longer deadlines.** Global timeouts stay 15 s read /
   15 s write / 60 s idle for slowloris protection; the two blob routes use
   `http.ResponseController` with `max(15s, cap / 1 MiB/s)`.
+- **One capture adapter, two exit-code readings.** Compose and `docker info`
+  calls are strict; `systemctl is-active` is lenient, because it prints the unit
+  state and then exits non-zero for an inactive unit. Collapsing that distinction
+  turns a stopped-but-inspectable server into "cannot inspect".
 - **`status` and `doctor` are read-only.** They print an instruction, never run
   a repair, and never print an install secret. `doctor` fails only on a failed
   check; warnings and skips do not fail. A check that cannot be proven stays a
