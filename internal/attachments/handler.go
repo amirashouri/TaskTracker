@@ -34,6 +34,33 @@ func (h *Handler) caller(r *http.Request) (string, bool) {
 	return auth.UserFrom(r.Context())
 }
 
+// extendDeadlines gives one blob request the longer read/write window a large
+// upload or download needs, keeping the 15s global timeout for the JSON API. A
+// connection without deadline support (a test recorder) is not a failure: the
+// global timeout stands in.
+func (h *Handler) extendDeadlines(w http.ResponseWriter, action string) {
+	rc := http.NewResponseController(w)
+	if err := rc.SetReadDeadline(time.Now().Add(h.deadline)); err != nil {
+		slog.Debug("could not set read deadline for attachment "+action, "error", err)
+	}
+	if err := rc.SetWriteDeadline(time.Now().Add(h.deadline)); err != nil {
+		slog.Debug("could not set write deadline for attachment "+action, "error", err)
+	}
+}
+
+// blobPath reads the three path values a blob route needs. A missing one is
+// answered here, so both routes report it the same way.
+func blobPath(w http.ResponseWriter, r *http.Request) (projectID, workItemID, attachmentID string, ok bool) {
+	projectID = r.PathValue("projectId")
+	workItemID = r.PathValue("workItemId")
+	attachmentID = r.PathValue("attachmentId")
+	if projectID == "" || workItemID == "" || attachmentID == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "missing path parameters")
+		return "", "", "", false
+	}
+	return projectID, workItemID, attachmentID, true
+}
+
 // membership checks the caller belongs to the project named in the path, and
 // that the attachment row exists and belongs to that same project and work item.
 // A mismatch is reported as 404 (not 403) so a caller cannot probe whether a
@@ -57,28 +84,15 @@ func (h *Handler) authorize(ctx context.Context, userID, projectID, workItemID, 
 // (it arrives through the sync feed); only then may the blob be stored. The body
 // is capped at maxBytes so a 25 MiB photo cannot exhaust memory.
 func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
-	// Set per-request read/write deadline for this blob route.
-	// This allows large uploads over slow links while keeping the 15s global
-	// timeout for the JSON API. If the connection doesn't support deadlines
-	// (e.g., in tests), we log and continue with the global timeout.
-	rc := http.NewResponseController(w)
-	if err := rc.SetReadDeadline(time.Now().Add(h.deadline)); err != nil {
-		slog.Debug("could not set read deadline for attachment upload", "error", err)
-	}
-	if err := rc.SetWriteDeadline(time.Now().Add(h.deadline)); err != nil {
-		slog.Debug("could not set write deadline for attachment upload", "error", err)
-	}
+	h.extendDeadlines(w, "upload")
 
 	userID, ok := h.caller(r)
 	if !ok {
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	projectID := r.PathValue("projectId")
-	workItemID := r.PathValue("workItemId")
-	attachmentID := r.PathValue("attachmentId")
-	if projectID == "" || workItemID == "" || attachmentID == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "missing path parameters")
+	projectID, workItemID, attachmentID, ok := blobPath(w, r)
+	if !ok {
 		return
 	}
 
@@ -123,25 +137,15 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 
 // Download streams one attachment's bytes to a member, honouring Range requests.
 func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
-	// Set per-request read/write deadline for this blob route.
-	rc := http.NewResponseController(w)
-	if err := rc.SetReadDeadline(time.Now().Add(h.deadline)); err != nil {
-		slog.Debug("could not set read deadline for attachment download", "error", err)
-	}
-	if err := rc.SetWriteDeadline(time.Now().Add(h.deadline)); err != nil {
-		slog.Debug("could not set write deadline for attachment download", "error", err)
-	}
+	h.extendDeadlines(w, "download")
 
 	userID, ok := h.caller(r)
 	if !ok {
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	projectID := r.PathValue("projectId")
-	workItemID := r.PathValue("workItemId")
-	attachmentID := r.PathValue("attachmentId")
-	if projectID == "" || workItemID == "" || attachmentID == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "missing path parameters")
+	projectID, workItemID, attachmentID, ok := blobPath(w, r)
+	if !ok {
 		return
 	}
 

@@ -64,24 +64,47 @@ func (h *ProjectHandler) List(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
+// projectFromPath loads the project named by the {id} path value. It writes the
+// 400/500/404 response itself and reports false, so a handler states only the
+// behaviour that follows the lookup.
+func (h *ProjectHandler) projectFromPath(w http.ResponseWriter, r *http.Request) (*entities.Project, bool) {
+	id := r.PathValue("id")
+	if id == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "project id is required")
+		return nil, false
+	}
+	project, err := h.projects.GetByID(r.Context(), entities.ProjectID(id))
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not load project")
+		return nil, false
+	}
+	if project == nil {
+		httpx.WriteError(w, http.StatusNotFound, "project not found")
+		return nil, false
+	}
+	return project, true
+}
+
+// feedPayload encodes a project the way the change feed carries it: a JSON
+// *string*, not a nested object, because the client's DTO declares `payload` as
+// a String. Version travels on the envelope, and the client's Project DTO does
+// not declare it, so it is stripped before marshaling.
+func feedPayload(project entities.Project) ([]byte, error) {
+	project.Version = ""
+	encoded, err := json.Marshal(&project)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(string(encoded))
+}
+
 // Get returns one project, member or not. It is the read half of the admin edit
 // screen and returns the identical shape List and Update do, because the client
 // decodes all three into one DTO: a seed that carried a different key set would
 // build a screen whose save Update then refuses.
 func (h *ProjectHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "project id is required")
-		return
-	}
-
-	project, err := h.projects.GetByID(r.Context(), entities.ProjectID(id))
-	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not load project")
-		return
-	}
-	if project == nil {
-		httpx.WriteError(w, http.StatusNotFound, "project not found")
+	project, ok := h.projectFromPath(w, r)
+	if !ok {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, project)
@@ -101,19 +124,8 @@ type openItemsResponse struct {
 // riding the project object, because a response that gained a key would fail the
 // decode of every installed client.
 func (h *ProjectHandler) OpenItems(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "project id is required")
-		return
-	}
-
-	project, err := h.projects.GetByID(r.Context(), entities.ProjectID(id))
-	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not load project")
-		return
-	}
-	if project == nil {
-		httpx.WriteError(w, http.StatusNotFound, "project not found")
+	project, ok := h.projectFromPath(w, r)
+	if !ok {
 		return
 	}
 
@@ -208,22 +220,7 @@ func (h *ProjectHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The change feed carries the payload the way a client sends it: as a JSON
-	// *string*, not a nested object. Update spells out why -- the client's DTO
-	// declares `payload` as a String, so an object here would fail the decode of
-	// the whole page on every client rather than be skipped.
-	//
-	// Version travels on the envelope (PushChange.Version → RemoteChange.Version),
-	// not inside the project payload: the client's Project DTO does not declare it,
-	// so including it breaks decoding on every pull. Strip it before marshaling.
-	feed := *project
-	feed.Version = ""
-	encoded, err := json.Marshal(&feed)
-	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not encode project")
-		return
-	}
-	payload, err := json.Marshal(string(encoded))
+	payload, err := feedPayload(*project)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not encode project")
 		return
@@ -280,19 +277,8 @@ type updateProjectRequest struct {
 // and a full object cannot silently drop the members or the archived flag that a
 // partial one forgot to mention.
 func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "project id is required")
-		return
-	}
-
-	existing, err := h.projects.GetByID(r.Context(), entities.ProjectID(id))
-	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not load project")
-		return
-	}
-	if existing == nil {
-		httpx.WriteError(w, http.StatusNotFound, "project not found")
+	existing, ok := h.projectFromPath(w, r)
+	if !ok {
 		return
 	}
 
@@ -319,22 +305,7 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 		project.RepoURL = existing.RepoURL
 	}
 
-	// The change feed carries the payload the way a client sends it: as a JSON
-	// *string*, not a nested object. The client's DTO declares `payload` as a
-	// String and leaves ignoreUnknownKeys off, so an object here would fail the
-	// decode of the whole page on every client rather than be skipped.
-	//
-	// Version travels on the envelope (PushChange.Version → RemoteChange.Version),
-	// not inside the project payload: the client's Project DTO does not declare it,
-	// so including it breaks decoding on every pull. Strip it before marshaling.
-	feed := project
-	feed.Version = ""
-	encoded, err := json.Marshal(&feed)
-	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not encode project")
-		return
-	}
-	payload, err := json.Marshal(string(encoded))
+	payload, err := feedPayload(project)
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not encode project")
 		return
@@ -343,7 +314,7 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 	actorID, _ := auth.UserFrom(r.Context())
 	change := entities.PushChange{
 		Entity:    entities.OutboxEntityProject,
-		EntityID:  id,
+		EntityID:  string(existing.ID),
 		Operation: entities.OutboxOperationUpsert,
 		Payload:   payload,
 		Version:   project.Version,
@@ -369,7 +340,7 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	// Re-read rather than echo the request: the row now carries the server's
 	// version and updated_at, and those are what the client needs to save again.
-	stored, err := h.projects.GetByID(r.Context(), entities.ProjectID(id))
+	stored, err := h.projects.GetByID(r.Context(), existing.ID)
 	if err != nil || stored == nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not reload project")
 		return
@@ -388,25 +359,14 @@ func (h *ProjectHandler) Update(w http.ResponseWriter, r *http.Request) {
 // project they are administering, and membership is the one check a push relies
 // on. The admin route is the authorization here.
 func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "project id is required")
-		return
-	}
-
-	existing, err := h.projects.GetByID(r.Context(), entities.ProjectID(id))
-	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not load project")
-		return
-	}
-	if existing == nil {
-		httpx.WriteError(w, http.StatusNotFound, "project not found")
+	existing, ok := h.projectFromPath(w, r)
+	if !ok {
 		return
 	}
 
 	// The payload is the bare id, the shape a client's own delete push carries; a
 	// pull's delete is read from the entity id and ignores it.
-	payload, err := json.Marshal(id)
+	payload, err := json.Marshal(string(existing.ID))
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not encode project")
 		return
@@ -415,7 +375,7 @@ func (h *ProjectHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	actorID, _ := auth.UserFrom(r.Context())
 	result := h.engine.ApplyAdminProject(r.Context(), actorID, entities.PushChange{
 		Entity:    entities.OutboxEntityProject,
-		EntityID:  id,
+		EntityID:  string(existing.ID),
 		Operation: entities.OutboxOperationDelete,
 		Payload:   payload,
 	})
