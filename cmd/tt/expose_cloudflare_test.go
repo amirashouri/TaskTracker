@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/amirashouri/tasktracker-server/internal/install"
+	"github.com/amirashouri/tasktracker-server/internal/pairing"
 )
 
 type fakeCloudflare struct {
@@ -198,7 +199,7 @@ func TestExposeCloudflareCreatesTunnelAndPrintsPairingLink(t *testing.T) {
 	if !strings.Contains(stdout, "Exposed with Cloudflare Tunnel: https://tasks.example.com") {
 		t.Errorf("stdout does not name the Cloudflare URL:\n%s", stdout)
 	}
-	wantLink := connectLinkPrefix + url.QueryEscape("https://tasks.example.com")
+	wantLink := pairing.LinkPrefix + url.QueryEscape("https://tasks.example.com")
 	if !strings.Contains(stdout, "Pairing link: "+wantLink) {
 		t.Errorf("stdout has no pairing link %q:\n%s", wantLink, stdout)
 	}

@@ -1,0 +1,22 @@
+# Opt-in LAN publish for the developer stack, layered in by `make expose`.
+#
+# docker-compose.yml keeps every host publish on 127.0.0.1 so a checkout's test
+# server is not reachable from the network by default. This file republishes the
+# server on every interface so a phone on the same Wi-Fi can reach it:
+#
+#     tasktracker.apiBaseUrl=http://<this-host-LAN-IP>:8080   (TaskTrackerKMP/local.properties)
+#
+# `!override` replaces the ports list instead of appending to it — Compose
+# concatenates lists across files, which would otherwise publish 8080 twice.
+# Requires Compose 2.24.4+.
+#
+# `make up` does not load this file, so it returns the stack to loopback. The
+# tunnel profiles keep their no-host-publish shape: their sidecar reaches the
+# server over the compose network.
+services:
+  server-pg:
+    ports: !override
+      - "0.0.0.0:${SERVER_PORT:-8080}:8080"
+  server-sqlite:
+    ports: !override
+      - "0.0.0.0:${SERVER_PORT:-8080}:8080"

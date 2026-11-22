@@ -107,7 +107,7 @@ feature reads.
 ```sql
 CREATE TABLE IF NOT EXISTS notifications (
     id TEXT PRIMARY KEY,
-    recipient_id TEXT NOT NULL,
+    recipient_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     kind TEXT NOT NULL,
     payload TEXT NOT NULL,
     source_kind TEXT NOT NULL,
@@ -125,6 +125,11 @@ CREATE INDEX IF NOT EXISTS idx_notifications_recipient
 
 `source_kind` is `workItem` or `comment`; `source_id` is the work item id plus the new
 version for an assignment, and the comment id for a comment.
+
+`recipient_id` must be `UUID` on Postgres, not `TEXT`: it references `users.id`, which
+is `UUID` there, and a foreign key across those types cannot be created. SQLite spells
+both sides `TEXT`. `id` stays `TEXT` on both dialects because `sync_log.entity_id` is
+text.
 
 ## Non-goal
 
@@ -204,8 +209,10 @@ version for an assignment, and the comment id for a comment.
 ### Pending / next
 
 - Branch `feat/notifications`; pending review and merge.
-- Postgres execution was not verified: `TASKTRACKER_TEST_POSTGRES_URL` is unset, so the
-  repository test ran against SQLite only. Run it once with that URL before merging.
+- Postgres execution was verified after fixing `0007`: `recipient_id` is `UUID`
+  referencing `users(id)`. The original `TEXT` column failed the migration with
+  SQLSTATE 42804 on Postgres and was never exercised because the Postgres suite had not
+  been run locally.
 - No device/browser visual pass of the inbox and popup yet (client side).
 
 ### Gotchas
