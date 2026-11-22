@@ -420,6 +420,37 @@ func pruneChangeFeed(ctx context.Context, engine *sync.Engine, retention time.Du
 	}
 }
 
+// openDatabase is the one-shot subcommands' bootstrap: configuration, a
+// connection, and the migrations a fresh database needs. The returned cleanup
+// closes the connection. Errors carry the prefix the subcommand prints.
+func openDatabase() (*entities.UserRepository, func(), error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	database, err := db.New(cfg.DatabaseURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to connect to database: %w", err)
+	}
+	if err := db.Migrate(database); err != nil {
+		database.Close()
+		return nil, nil, fmt.Errorf("failed to run migrations: %w", err)
+	}
+	return entities.NewUserRepository(database.DB), func() { database.Close() }, nil
+}
+
+// requireEmailPassword trims the email and rejects an invocation missing either
+// flag before the database is touched, printing the flag set's own usage.
+func requireEmailPassword(fs *flag.FlagSet, email, password *string) {
+	*email = strings.TrimSpace(*email)
+	if *email == "" || *password == "" {
+		fmt.Fprintln(os.Stderr, "email and password are required")
+		fs.Usage()
+		os.Exit(1)
+	}
+}
+
 // createUserCmd is the one-shot bootstrap command for creating the first user
 // (or any user) without an HTTP endpoint. It connects directly to the database
 // named by DATABASE_URL.
@@ -432,29 +463,13 @@ func createUserCmd(args []string) {
 	isAdmin := fs.Bool("admin", false, "create as admin")
 	fs.Parse(args)
 
-	*email = strings.TrimSpace(*email)
-	if *email == "" || *password == "" {
-		fmt.Fprintln(os.Stderr, "email and password are required")
-		fs.Usage()
-		os.Exit(1)
-	}
+	requireEmailPassword(fs, email, password)
 
-	cfg, err := config.Load()
+	userRepo, closeDB, err := openDatabase()
 	if err != nil {
-		cliFatal("invalid configuration: %v", err)
+		cliFatal("%v", err)
 	}
-
-	database, err := db.New(cfg.DatabaseURL)
-	if err != nil {
-		cliFatal("failed to connect to database: %v", err)
-	}
-	defer database.Close()
-
-	if err := db.Migrate(database); err != nil {
-		cliFatal("failed to run migrations: %v", err)
-	}
-
-	userRepo := entities.NewUserRepository(database.DB)
+	defer closeDB()
 
 	if existing, _ := userRepo.GetByEmail(context.Background(), *email); existing != nil {
 		cliFatal("email %s is already registered", *email)
@@ -494,29 +509,13 @@ func setUserPasswordCmd(args []string) {
 	password := fs.String("password", "", "new password (required)")
 	fs.Parse(args)
 
-	*email = strings.TrimSpace(*email)
-	if *email == "" || *password == "" {
-		fmt.Fprintln(os.Stderr, "email and password are required")
-		fs.Usage()
-		os.Exit(1)
-	}
+	requireEmailPassword(fs, email, password)
 
-	cfg, err := config.Load()
+	userRepo, closeDB, err := openDatabase()
 	if err != nil {
-		cliFatal("invalid configuration: %v", err)
+		cliFatal("%v", err)
 	}
-
-	database, err := db.New(cfg.DatabaseURL)
-	if err != nil {
-		cliFatal("failed to connect to database: %v", err)
-	}
-	defer database.Close()
-
-	if err := db.Migrate(database); err != nil {
-		cliFatal("failed to run migrations: %v", err)
-	}
-
-	userRepo := entities.NewUserRepository(database.DB)
+	defer closeDB()
 	user, err := userRepo.GetByEmail(context.Background(), *email)
 	if err != nil {
 		cliFatal("failed to find user: %v", err)
@@ -538,22 +537,11 @@ func setUserPasswordCmd(args []string) {
 }
 
 func listAdminsCmd(args []string) {
-	cfg, err := config.Load()
+	userRepo, closeDB, err := openDatabase()
 	if err != nil {
-		cliFatal("invalid configuration: %v", err)
+		cliFatal("%v", err)
 	}
-
-	database, err := db.New(cfg.DatabaseURL)
-	if err != nil {
-		cliFatal("failed to connect to database: %v", err)
-	}
-	defer database.Close()
-
-	if err := db.Migrate(database); err != nil {
-		cliFatal("failed to run migrations: %v", err)
-	}
-
-	userRepo := entities.NewUserRepository(database.DB)
+	defer closeDB()
 	users, err := userRepo.List(context.Background())
 	if err != nil {
 		cliFatal("failed to list users: %v", err)
@@ -566,19 +554,10 @@ func listAdminsCmd(args []string) {
 }
 
 func migrateCmd(args []string) {
-	cfg, err := config.Load()
+	_, closeDB, err := openDatabase()
 	if err != nil {
-		cliFatal("invalid configuration: %v", err)
+		cliFatal("%v", err)
 	}
-
-	database, err := db.New(cfg.DatabaseURL)
-	if err != nil {
-		cliFatal("failed to connect to database: %v", err)
-	}
-	defer database.Close()
-
-	if err := db.Migrate(database); err != nil {
-		cliFatal("failed to run migrations: %v", err)
-	}
+	closeDB()
 	fmt.Println("migrations applied")
 }
