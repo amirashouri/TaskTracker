@@ -3,6 +3,8 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -1472,5 +1474,74 @@ func TestSprintMembersPushAndPullOnTheirOwnScope(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].AvailableStoryPoints != 13 {
 		t.Fatalf("stored members = %+v, want one row with 13 points", rows)
+	}
+}
+
+// A deleted attachment row must take its bytes with it: nothing else tells the
+// blob store the file is unreachable. The root lives on the engine, so this test
+// builds its own engine rather than using newTestEngine's rootless one.
+func TestPushDeleteRemovesTheAttachmentBlob(t *testing.T) {
+	database := dbtest.NewDatabase(t)
+	root := t.TempDir()
+	users := entities.NewUserRepository(database.DB)
+	engine := NewEngine(database.DB, root)
+
+	user := createUser(t, users, "blob@example.com")
+	userID := string(user.ID)
+
+	project := newProject(userID, "66666666-6666-6666-6666-666666666666")
+	pushOne(t, engine, userID, projectChange(t, "e1", project, entities.OutboxOperationUpsert, ""))
+
+	item := &entities.WorkItem{
+		ID:        entities.WorkItemID("77777777-7777-7777-7777-777777777777"),
+		ProjectID: project.ID,
+		Key:       "TT-1",
+		Title:     "Task",
+		Status:    entities.WorkItemStatusTodo,
+		Priority:  entities.PriorityHigh,
+	}
+	itemPayload, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal work item: %v", err)
+	}
+	if res := pushOne(t, engine, userID, entities.PushChange{
+		ID: "e2", Entity: entities.OutboxEntityWorkItem, EntityID: string(item.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: itemPayload,
+	}); res.Status != StatusAccepted {
+		t.Fatalf("work item push = %s (%s)", res.Status, res.Message)
+	}
+
+	attachment := &entities.Attachment{
+		ID:         entities.AttachmentID("88888888-8888-8888-8888-888888888888"),
+		WorkItemID: item.ID,
+		ProjectID:  project.ID,
+		FileName:   "photo.png",
+		SizeBytes:  3,
+		CreatedBy:  user.ID,
+	}
+	attachmentPayload, err := json.Marshal(attachment)
+	if err != nil {
+		t.Fatalf("marshal attachment: %v", err)
+	}
+	if res := pushOne(t, engine, userID, entities.PushChange{
+		ID: "e3", Entity: entities.OutboxEntityAttachment, EntityID: string(attachment.ID),
+		Operation: entities.OutboxOperationUpsert, Payload: attachmentPayload,
+	}); res.Status != StatusAccepted {
+		t.Fatalf("attachment push = %s (%s)", res.Status, res.Message)
+	}
+
+	blobPath := filepath.Join(root, string(attachment.ID)+".blob")
+	if err := os.WriteFile(blobPath, []byte("png"), 0o600); err != nil {
+		t.Fatalf("write blob: %v", err)
+	}
+
+	if res := pushOne(t, engine, userID, entities.PushChange{
+		ID: "e4", Entity: entities.OutboxEntityAttachment, EntityID: string(attachment.ID),
+		Operation: entities.OutboxOperationDelete,
+	}); res.Status != StatusAccepted {
+		t.Fatalf("attachment delete = %s (%s)", res.Status, res.Message)
+	}
+	if _, err := os.Stat(blobPath); !os.IsNotExist(err) {
+		t.Errorf("blob still present after delete (err=%v)", err)
 	}
 }

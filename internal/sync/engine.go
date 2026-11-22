@@ -468,6 +468,66 @@ func currentVersion(ctx context.Context, q entities.Querier, change entities.Pus
 	return "", nil
 }
 
+// syncOps is the per-entity wiring applyUpsert needs. Every queued change
+// follows the same sequence — delete, decode, load, create or compare-and-swap
+// — and only the repository and the fields the server owns differ. Keeping that
+// difference in a table rather than five copies of the sequence is what stops
+// the version rule drifting between entities.
+type syncOps[T any] struct {
+	name   string
+	decode func([]byte) (*T, error)
+	load   func(context.Context, string) (*T, error)
+	create func(context.Context, *T) error
+	update func(context.Context, *T) error
+	remove func(context.Context, string) error
+	setID  func(*T, string)
+	// adopt copies the fields the server owns — id, creation time and the
+	// version this update compares against — from the stored row onto the
+	// payload's copy, so a client cannot rewrite them.
+	adopt   func(existing, incoming *T)
+	version func(*T) string
+	// onCreate and onDelete are optional: a new sprint member needs a
+	// timestamp default, and an attachment's bytes go with its row.
+	onCreate func(*T)
+	onDelete func(string)
+}
+
+func applyUpsert[T any](ctx context.Context, change entities.PushChange, ops syncOps[T]) (string, error) {
+	if change.Operation == entities.OutboxOperationDelete {
+		if ops.onDelete != nil {
+			ops.onDelete(change.EntityID)
+		}
+		return "", ops.remove(ctx, change.EntityID)
+	}
+
+	entity, err := ops.decode(change.Payload)
+	if err != nil {
+		return "", fmt.Errorf("decode %s: %w", ops.name, err)
+	}
+	existing, err := ops.load(ctx, change.EntityID)
+	if err != nil {
+		return "", err
+	}
+	if existing == nil {
+		ops.setID(entity, change.EntityID)
+		if ops.onCreate != nil {
+			ops.onCreate(entity)
+		}
+		if err := ops.create(ctx, entity); err != nil {
+			return "", err
+		}
+		return ops.version(entity), nil
+	}
+	if change.Version != "" && ops.version(existing) != change.Version {
+		return "", &versionConflict{current: ops.version(existing)}
+	}
+	ops.adopt(existing, entity)
+	if err := ops.update(ctx, entity); err != nil {
+		return "", err
+	}
+	return ops.version(entity), nil
+}
+
 func applyProject(ctx context.Context, projects *entities.ProjectRepository, change entities.PushChange) (string, error) {
 	if change.Operation == entities.OutboxOperationDelete {
 		return "", projects.Delete(ctx, entities.ProjectID(change.EntityID))
@@ -524,173 +584,127 @@ func applyProject(ctx context.Context, projects *entities.ProjectRepository, cha
 }
 
 func applyWorkItem(ctx context.Context, workItems *entities.WorkItemRepository, change entities.PushChange) (string, error) {
-	if change.Operation == entities.OutboxOperationDelete {
-		return "", workItems.Delete(ctx, entities.WorkItemID(change.EntityID))
-	}
-
-	workItem, err := entities.WorkItemFromJSON(change.Payload)
-	if err != nil {
-		return "", fmt.Errorf("decode work item: %w", err)
-	}
-	existing, err := workItems.GetByID(ctx, entities.WorkItemID(change.EntityID))
-	if err != nil {
-		return "", err
-	}
-	if existing == nil {
-		workItem.ID = entities.WorkItemID(change.EntityID)
-		if err := workItems.Create(ctx, workItem); err != nil {
-			return "", err
-		}
-		return workItem.Version, nil
-	}
-	if change.Version != "" && existing.Version != change.Version {
-		return "", &versionConflict{current: existing.Version}
-	}
-	workItem.ID = existing.ID
-	workItem.CreatedAt = existing.CreatedAt
-	workItem.Version = existing.Version
-	if err := workItems.Update(ctx, workItem); err != nil {
-		return "", err
-	}
-	return workItem.Version, nil
+	return applyUpsert(ctx, change, syncOps[entities.WorkItem]{
+		name:   "work item",
+		decode: entities.WorkItemFromJSON,
+		load: func(ctx context.Context, id string) (*entities.WorkItem, error) {
+			return workItems.GetByID(ctx, entities.WorkItemID(id))
+		},
+		create: workItems.Create,
+		update: workItems.Update,
+		remove: func(ctx context.Context, id string) error {
+			return workItems.Delete(ctx, entities.WorkItemID(id))
+		},
+		setID: func(item *entities.WorkItem, id string) { item.ID = entities.WorkItemID(id) },
+		adopt: func(existing, incoming *entities.WorkItem) {
+			incoming.ID = existing.ID
+			incoming.CreatedAt = existing.CreatedAt
+			incoming.Version = existing.Version
+		},
+		version: func(item *entities.WorkItem) string { return item.Version },
+	})
 }
 
 func applySprint(ctx context.Context, sprints *entities.SprintRepository, change entities.PushChange) (string, error) {
-	if change.Operation == entities.OutboxOperationDelete {
-		return "", sprints.Delete(ctx, entities.SprintID(change.EntityID))
-	}
-
-	sprint, err := entities.SprintFromJSON(change.Payload)
-	if err != nil {
-		return "", fmt.Errorf("decode sprint: %w", err)
-	}
-	existing, err := sprints.GetByID(ctx, entities.SprintID(change.EntityID))
-	if err != nil {
-		return "", err
-	}
-	if existing == nil {
-		sprint.ID = entities.SprintID(change.EntityID)
-		if err := sprints.Create(ctx, sprint); err != nil {
-			return "", err
-		}
-		return sprint.Version, nil
-	}
-	if change.Version != "" && existing.Version != change.Version {
-		return "", &versionConflict{current: existing.Version}
-	}
-	sprint.ID = existing.ID
-	sprint.CreatedAt = existing.CreatedAt
-	sprint.Version = existing.Version
-	if err := sprints.Update(ctx, sprint); err != nil {
-		return "", err
-	}
-	return sprint.Version, nil
+	return applyUpsert(ctx, change, syncOps[entities.Sprint]{
+		name:   "sprint",
+		decode: entities.SprintFromJSON,
+		load: func(ctx context.Context, id string) (*entities.Sprint, error) {
+			return sprints.GetByID(ctx, entities.SprintID(id))
+		},
+		create: sprints.Create,
+		update: sprints.Update,
+		remove: func(ctx context.Context, id string) error {
+			return sprints.Delete(ctx, entities.SprintID(id))
+		},
+		setID: func(sprint *entities.Sprint, id string) { sprint.ID = entities.SprintID(id) },
+		adopt: func(existing, incoming *entities.Sprint) {
+			incoming.ID = existing.ID
+			incoming.CreatedAt = existing.CreatedAt
+			incoming.Version = existing.Version
+		},
+		version: func(sprint *entities.Sprint) string { return sprint.Version },
+	})
 }
 
 // applySprintMember never trusts the client to name the row's sprint: the
 // authoritative id is change.EntityID, and the payload's capacity is floored
 // in the repository. A re-push of the same sprint/user pair updates one row.
 func applySprintMember(ctx context.Context, members *entities.SprintMemberRepository, change entities.PushChange) (string, error) {
-	if change.Operation == entities.OutboxOperationDelete {
-		return "", members.Delete(ctx, entities.SprintMemberID(change.EntityID))
-	}
-
-	member, err := entities.SprintMemberFromJSON(change.Payload)
-	if err != nil {
-		return "", fmt.Errorf("decode sprint member: %w", err)
-	}
-	existing, err := members.GetByID(ctx, entities.SprintMemberID(change.EntityID))
-	if err != nil {
-		return "", err
-	}
-	if existing == nil {
-		member.ID = entities.SprintMemberID(change.EntityID)
-		if member.CreatedAt == 0 {
-			member.CreatedAt = entities.Now()
-		}
-		if err := members.Create(ctx, member); err != nil {
-			return "", err
-		}
-		return member.Version, nil
-	}
-	if change.Version != "" && existing.Version != change.Version {
-		return "", &versionConflict{current: existing.Version}
-	}
-	member.ID = existing.ID
-	member.CreatedAt = existing.CreatedAt
-	member.Version = existing.Version
-	if err := members.Update(ctx, member); err != nil {
-		return "", err
-	}
-	return member.Version, nil
+	return applyUpsert(ctx, change, syncOps[entities.SprintMember]{
+		name:   "sprint member",
+		decode: entities.SprintMemberFromJSON,
+		load: func(ctx context.Context, id string) (*entities.SprintMember, error) {
+			return members.GetByID(ctx, entities.SprintMemberID(id))
+		},
+		create: members.Create,
+		update: members.Update,
+		remove: func(ctx context.Context, id string) error {
+			return members.Delete(ctx, entities.SprintMemberID(id))
+		},
+		setID: func(member *entities.SprintMember, id string) { member.ID = entities.SprintMemberID(id) },
+		onCreate: func(member *entities.SprintMember) {
+			if member.CreatedAt == 0 {
+				member.CreatedAt = entities.Now()
+			}
+		},
+		adopt: func(existing, incoming *entities.SprintMember) {
+			incoming.ID = existing.ID
+			incoming.CreatedAt = existing.CreatedAt
+			incoming.Version = existing.Version
+		},
+		version: func(member *entities.SprintMember) string { return member.Version },
+	})
 }
 
 func applyComment(ctx context.Context, comments *entities.CommentRepository, change entities.PushChange) (string, error) {
-	if change.Operation == entities.OutboxOperationDelete {
-		return "", comments.Delete(ctx, entities.CommentID(change.EntityID))
-	}
-
-	comment, err := entities.CommentFromJSON(change.Payload)
-	if err != nil {
-		return "", fmt.Errorf("decode comment: %w", err)
-	}
-	existing, err := comments.GetByID(ctx, entities.CommentID(change.EntityID))
-	if err != nil {
-		return "", err
-	}
-	if existing == nil {
-		comment.ID = entities.CommentID(change.EntityID)
-		if err := comments.Create(ctx, comment); err != nil {
-			return "", err
-		}
-		return comment.Version, nil
-	}
-	if change.Version != "" && existing.Version != change.Version {
-		return "", &versionConflict{current: existing.Version}
-	}
-	comment.ID = existing.ID
-	comment.CreatedAt = existing.CreatedAt
-	comment.Version = existing.Version
-	if err := comments.Update(ctx, comment); err != nil {
-		return "", err
-	}
-	return comment.Version, nil
+	return applyUpsert(ctx, change, syncOps[entities.Comment]{
+		name:   "comment",
+		decode: entities.CommentFromJSON,
+		load: func(ctx context.Context, id string) (*entities.Comment, error) {
+			return comments.GetByID(ctx, entities.CommentID(id))
+		},
+		create: comments.Create,
+		update: comments.Update,
+		remove: func(ctx context.Context, id string) error {
+			return comments.Delete(ctx, entities.CommentID(id))
+		},
+		setID: func(comment *entities.Comment, id string) { comment.ID = entities.CommentID(id) },
+		adopt: func(existing, incoming *entities.Comment) {
+			incoming.ID = existing.ID
+			incoming.CreatedAt = existing.CreatedAt
+			incoming.Version = existing.Version
+		},
+		version: func(comment *entities.Comment) string { return comment.Version },
+	})
 }
 
 // applyAttachment mirrors applyComment. On a delete it also removes the on-disk
 // blob, because the row's removal is the only signal the blob store gets — a
 // failed file delete is best-effort and must not fail the metadata delete.
 func applyAttachment(ctx context.Context, attachmentRoot string, attachments *entities.AttachmentRepository, change entities.PushChange) (string, error) {
-	if change.Operation == entities.OutboxOperationDelete {
-		removeAttachmentBlob(attachmentRoot, change.EntityID)
-		return "", attachments.Delete(ctx, entities.AttachmentID(change.EntityID))
-	}
-
-	attachment, err := entities.AttachmentFromJSON(change.Payload)
-	if err != nil {
-		return "", fmt.Errorf("decode attachment: %w", err)
-	}
-	existing, err := attachments.GetByID(ctx, entities.AttachmentID(change.EntityID))
-	if err != nil {
-		return "", err
-	}
-	if existing == nil {
-		attachment.ID = entities.AttachmentID(change.EntityID)
-		if err := attachments.Create(ctx, attachment); err != nil {
-			return "", err
-		}
-		return attachment.Version, nil
-	}
-	if change.Version != "" && existing.Version != change.Version {
-		return "", &versionConflict{current: existing.Version}
-	}
-	attachment.ID = existing.ID
-	attachment.CreatedAt = existing.CreatedAt
-	attachment.Version = existing.Version
-	if err := attachments.Update(ctx, attachment); err != nil {
-		return "", err
-	}
-	return attachment.Version, nil
+	return applyUpsert(ctx, change, syncOps[entities.Attachment]{
+		name:   "attachment",
+		decode: entities.AttachmentFromJSON,
+		load: func(ctx context.Context, id string) (*entities.Attachment, error) {
+			return attachments.GetByID(ctx, entities.AttachmentID(id))
+		},
+		create: attachments.Create,
+		update: attachments.Update,
+		remove: func(ctx context.Context, id string) error {
+			return attachments.Delete(ctx, entities.AttachmentID(id))
+		},
+		setID: func(attachment *entities.Attachment, id string) { attachment.ID = entities.AttachmentID(id) },
+		onDelete: func(id string) {
+			removeAttachmentBlob(attachmentRoot, id)
+		},
+		adopt: func(existing, incoming *entities.Attachment) {
+			incoming.ID = existing.ID
+			incoming.CreatedAt = existing.CreatedAt
+			incoming.Version = existing.Version
+		},
+		version: func(attachment *entities.Attachment) string { return attachment.Version },
+	})
 }
 
 // removeAttachmentBlob deletes an attachment's on-disk bytes, best-effort. The
