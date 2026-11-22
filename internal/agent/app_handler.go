@@ -35,6 +35,19 @@ const (
 	pairingCodeTTL = 10 * time.Minute
 )
 
+// validateRunnerFields answers the 400 for a runner label that is too long.
+// Both ways a machine registers enforce the same limits, so they are checked
+// once.
+func validateRunnerFields(w http.ResponseWriter, name, provider, modelLabel string) bool {
+	for _, field := range []string{name, provider, modelLabel} {
+		if utf8.RuneCountInString(field) > maxRunnerNameLength {
+			httpx.WriteError(w, http.StatusBadRequest, "name, provider and modelLabel must be at most 120 characters")
+			return false
+		}
+	}
+	return true
+}
+
 // Membership is the one question this surface asks about a project: may this
 // user see and dispatch its work? sync.Engine satisfies it, so the check is the
 // same query the change feed and the attachment API use.
@@ -483,11 +496,8 @@ func (h *AppHandler) RegisterRunner(w http.ResponseWriter, r *http.Request) {
 	}
 	provider := strings.TrimSpace(req.Provider)
 	modelLabel := strings.TrimSpace(req.ModelLabel)
-	for _, field := range []string{name, provider, modelLabel} {
-		if utf8.RuneCountInString(field) > maxRunnerNameLength {
-			httpx.WriteError(w, http.StatusBadRequest, "name, provider and modelLabel must be at most 120 characters")
-			return
-		}
+	if !validateRunnerFields(w, name, provider, modelLabel) {
+		return
 	}
 
 	token, err := newRunnerToken()

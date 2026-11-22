@@ -192,13 +192,12 @@ func Login(ctx context.Context, serverURL, email, password string) (string, erro
 	return body.AccessToken, nil
 }
 
-// Register pairs a machine and returns the runner token exactly once.
-func Register(ctx context.Context, serverURL, accessToken, name, provider, modelLabel string) (Registration, error) {
-	data, err := postJSON(ctx, strings.TrimRight(serverURL, "/")+"/v1/agent/runners", accessToken, map[string]string{
-		"name":       name,
-		"provider":   provider,
-		"modelLabel": modelLabel,
-	})
+// postRegistration sends a machine registration and reads the runner token the
+// server returns exactly once. Register and Pair differ only in endpoint,
+// credential and body, so the wire shape is decoded here once. `what` names the
+// flow in errors ("registration" or "pairing").
+func postRegistration(ctx context.Context, endpoint, token string, payload any, what string) (Registration, error) {
+	data, err := postJSON(ctx, endpoint, token, payload)
 	if err != nil {
 		return Registration{}, err
 	}
@@ -212,10 +211,10 @@ func Register(ctx context.Context, serverURL, accessToken, name, provider, model
 		Token string `json:"token"`
 	}
 	if err := json.Unmarshal(data, &body); err != nil {
-		return Registration{}, fmt.Errorf("decode registration: %w", err)
+		return Registration{}, fmt.Errorf("decode %s: %w", what, err)
 	}
 	if body.Runner.ID == "" || body.Token == "" {
-		return Registration{}, errors.New("registration returned no runner id or token")
+		return Registration{}, fmt.Errorf("%s returned no runner id or token", what)
 	}
 	return Registration{
 		RunnerID:   body.Runner.ID,
@@ -226,37 +225,21 @@ func Register(ctx context.Context, serverURL, accessToken, name, provider, model
 	}, nil
 }
 
+// Register pairs a machine and returns the runner token exactly once.
+func Register(ctx context.Context, serverURL, accessToken, name, provider, modelLabel string) (Registration, error) {
+	return postRegistration(ctx, strings.TrimRight(serverURL, "/")+"/v1/agent/runners", accessToken, map[string]string{
+		"name":       name,
+		"provider":   provider,
+		"modelLabel": modelLabel,
+	}, "registration")
+}
+
 // Pair redeems a client-issued pairing code. The code is the credential for
 // this one call: the server spends it and returns the runner token once.
 func Pair(ctx context.Context, serverURL, code, name, provider, modelLabel string) (Registration, error) {
-	data, err := postJSON(ctx, strings.TrimRight(serverURL, "/")+"/v1/agent/pair", "", map[string]string{
+	return postRegistration(ctx, strings.TrimRight(serverURL, "/")+"/v1/agent/pair", "", map[string]string{
 		"code": code, "name": name, "provider": provider, "modelLabel": modelLabel,
-	})
-	if err != nil {
-		return Registration{}, err
-	}
-	var body struct {
-		Runner struct {
-			ID         string `json:"id"`
-			Name       string `json:"name"`
-			Provider   string `json:"provider"`
-			ModelLabel string `json:"modelLabel"`
-		} `json:"runner"`
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(data, &body); err != nil {
-		return Registration{}, fmt.Errorf("decode pairing: %w", err)
-	}
-	if body.Runner.ID == "" || body.Token == "" {
-		return Registration{}, errors.New("pairing returned no runner id or token")
-	}
-	return Registration{
-		RunnerID:   body.Runner.ID,
-		Name:       body.Runner.Name,
-		Provider:   body.Runner.Provider,
-		ModelLabel: body.Runner.ModelLabel,
-		Token:      body.Token,
-	}, nil
+	}, "pairing")
 }
 
 func (c *Client) post(ctx context.Context, path string, payload any) ([]byte, error) {

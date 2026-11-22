@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/amirashouri/tasktracker-server/internal/entities"
 	"github.com/amirashouri/tasktracker-server/internal/httpx"
@@ -386,11 +385,8 @@ func (h *Handler) Pair(w http.ResponseWriter, r *http.Request) {
 	}
 	provider := strings.TrimSpace(req.Provider)
 	modelLabel := strings.TrimSpace(req.ModelLabel)
-	for _, field := range []string{name, provider, modelLabel} {
-		if utf8.RuneCountInString(field) > maxRunnerNameLength {
-			httpx.WriteError(w, http.StatusBadRequest, "name, provider and modelLabel must be at most 120 characters")
-			return
-		}
+	if !validateRunnerFields(w, name, provider, modelLabel) {
+		return
 	}
 
 	token, err := newRunnerToken()
