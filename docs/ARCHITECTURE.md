@@ -481,6 +481,9 @@ validation runs, counts, handoffs and per-task file lists were dropped.
   line on older releases — keep both paths or it works only on the author's
   machine. Fake-Docker e2e must put an executable `docker` on `PATH` and isolate
   `HOME`, or it writes to the developer's real install state.
+- **`mountTestMux` is the one test composition root.** Keep the limiter and JWT
+  manager caller-owned: the contract suite needs a 100-request budget and a
+  720 h refresh token, the route tests a 5-request budget and a 1 h one.
 
 ### Agent execution
 
