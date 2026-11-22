@@ -383,6 +383,12 @@ validation runs, counts, handoffs and per-task file lists were dropped.
   whether a locked sprint may take an edit is the client's call. The sprint
   overlap check lives in the repository (inside the push transaction), because
   only that layer sees the project's other sprints.
+- **The upsert sequence is one table-driven path.** `applyUpsert` runs
+  delete / decode / load / create-or-compare-and-swap for every entity; each
+  `syncOps` entry must supply `adopt` for the server-owned fields (id, creation
+  time, version) and `onDelete` where a row owns external bytes. A new entity
+  that copies the sequence by hand is how the version rule drifts between
+  entities.
 
 ### Install and exposure
 
