@@ -379,6 +379,11 @@ validation runs, counts, handoffs and per-task file lists were dropped.
   `rejected`; FK, unique and serialization failures are retryable. `rejected`
   is terminal on the client, so a wrongly dead-lettered change is silent data
   loss. `sqlite3.ErrConstraintDatatype` does not exist in the pinned driver.
+- **A generated notification must never fail the write that caused it.**
+  `notificationBase` logs and returns nil when the project identity cannot be
+  read; a notification is derived state, so losing one is better than rejecting
+  the edit. The comment fields stay `omitempty` so an assignment payload does
+  not gain `commentId`/`commentPreview`.
 - **Domain rules stay out of the sync engine.** It routes opaque payloads;
   whether a locked sprint may take an edit is the client's call. The sprint
   overlap check lives in the repository (inside the push transaction), because
