@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/amirashouri/tasktracker-server/internal/install"
+	"github.com/amirashouri/tasktracker-server/internal/pairing"
 )
 
 // scriptedRunner returns one error per call, then succeeds. It lets a test
@@ -97,7 +98,7 @@ func TestExposePublishesTheLANAddressAndPrintsThePairingLink(t *testing.T) {
 	if !strings.Contains(stdout, "Exposed on the LAN: http://192.168.1.20:8080") {
 		t.Errorf("stdout does not name the LAN URL:\n%s", stdout)
 	}
-	wantLink := connectLinkPrefix + url.QueryEscape("http://192.168.1.20:8080")
+	wantLink := pairing.LinkPrefix + url.QueryEscape("http://192.168.1.20:8080")
 	if !strings.Contains(stdout, "Pairing link: "+wantLink) {
 		t.Errorf("stdout has no pairing link %q:\n%s", wantLink, stdout)
 	}

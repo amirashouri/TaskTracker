@@ -3,6 +3,13 @@
 # Every target names an explicit --profile: docker-compose.yml puts both services behind
 # profiles, so none of them is enabled without one.
 COMPOSE ?= docker compose
+# A -f anywhere stops Compose from auto-loading docker-compose.yml, so name the
+# base file explicitly and let the optional overlays append to it.
+COMPOSE += -f docker-compose.yml
+# SHARED_DATA=1 points the source stack at the data volumes created by `tt install`.
+# The overlay declares them as external, so Compose neither creates nor deletes them.
+SHARED_DATA ?= 0
+COMPOSE += $(if $(filter 1,$(SHARED_DATA)),-f docker-compose.tt-volumes.yml)
 PROFILE ?= postgres
 VERSION ?= dev
 DIST ?= dist
@@ -18,7 +25,7 @@ SERVER_PLATFORMS ?= linux/amd64
 SERVER_SERVICE ?= $(if $(filter sqlite,$(PROFILE)),server-sqlite,$(if $(filter expose,$(PROFILE)),server-pg-expose,server-pg))
 
 .DEFAULT_GOAL := help
-.PHONY: help up rebuild down destroy logs ps admin admin-reset-password tt release release-tt clean-desktop-cache
+.PHONY: help up rebuild down destroy logs ps admin admin-reset-password tt expose release release-tt clean-desktop-cache
 
 help:
 	@printf '%s\n' \
@@ -26,6 +33,7 @@ help:
 		'' \
 		'  make up                 start the server, detached' \
 		'  make up PROFILE=sqlite  start the single-container SQLite stack instead' \
+		'  make up SHARED_DATA=1    use the tt install data volumes (one stack at a time)' \
 		'  make rebuild            start and rebuild the image from the working tree' \
 		'  make down               stop and remove everything this project started' \
 		'  make destroy            make down, then delete the database volume (destroys data)' \
@@ -34,6 +42,7 @@ help:
 		'  make admin              list users and roles in the running stack' \
 		'  make admin-reset-password EMAIL=... PASSWORD=...  change an existing password' \
 		'  make tt                 build the tt CLI for this host' \
+		'  make expose             publish the running stack on the LAN and print the pairing QR' \
 		'  make release VERSION=v1.2.3  build static tt binaries for every platform' \
 		'  make release-tt VERSION=v1.2.3  build the curl-installable tt + server bundles' \
 		'  make clean-desktop-cache  uninstall the desktop app: remove TaskTracker.app, its macOS state (Application Support/Caches/Preferences), and the KMP build caches' \
@@ -77,6 +86,18 @@ admin-reset-password:
 tt:
 	@mkdir -p $(DIST)
 	go build -trimpath -o $(DIST)/tt ./cmd/tt
+
+# `make expose` layers docker-compose.lan.yml over the stack `make up` started
+# so the server is reachable from other devices on the same network, then prints
+# the URL, pairing link and QR code. A plain `make up` republishes on loopback.
+# It targets the compose stack, not a `tt install` instance — for that one, run
+# `tt expose --provider=lan`.
+COMPOSE_LAN = $(COMPOSE) -f docker-compose.lan.yml
+
+expose:
+	$(COMPOSE_LAN) --profile $(PROFILE) up -d
+	@port=$$($(COMPOSE_LAN) --profile $(PROFILE) port $(SERVER_SERVICE) 8080 | sed 's/.*://'); \
+		go run ./scripts/pair --port "$${port:-8080}"
 
 # Static because a customer installing a runtime first is where the funnel
 # dies. The tag in the binary is the server image tag it will pull.

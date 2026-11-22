@@ -4,7 +4,7 @@
 -- when a change is applied twice.
 CREATE TABLE IF NOT EXISTS notifications (
     id TEXT PRIMARY KEY,
-    recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    recipient_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     kind TEXT NOT NULL,
     payload TEXT NOT NULL,
     source_kind TEXT NOT NULL,

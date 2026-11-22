@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/amirashouri/tasktracker-server/internal/install"
+	"github.com/amirashouri/tasktracker-server/internal/pairing"
 )
 
 type fakeTailscale struct {
@@ -192,7 +193,7 @@ func TestExposeTailscalePublishesFunnelAndPrintsThePairingLink(t *testing.T) {
 	if !strings.Contains(stdout, "Exposed with Tailscale Funnel: https://host.tailnet.ts.net") {
 		t.Errorf("stdout does not name the Funnel URL:\n%s", stdout)
 	}
-	wantLink := connectLinkPrefix + url.QueryEscape("https://host.tailnet.ts.net")
+	wantLink := pairing.LinkPrefix + url.QueryEscape("https://host.tailnet.ts.net")
 	if !strings.Contains(stdout, "Pairing link: "+wantLink) {
 		t.Errorf("stdout has no pairing link %q:\n%s", wantLink, stdout)
 	}
