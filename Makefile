@@ -6,7 +6,7 @@ COMPOSE ?= docker compose
 # SHARED_DATA=1 points the source stack at the data volumes created by `tt install`.
 # The overlay declares them as external, so Compose neither creates nor deletes them.
 SHARED_DATA ?= 0
-COMPOSE += $(if $(filter 1,$(SHARED_DATA)),-f docker-compose.tt-volumes.yml)
+COMPOSE += $(if $(filter 1,$(SHARED_DATA)),-f docker-compose.yml -f docker-compose.tt-volumes.yml)
 PROFILE ?= postgres
 VERSION ?= dev
 DIST ?= dist
