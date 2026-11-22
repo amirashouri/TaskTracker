@@ -12,17 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/amirashouri/tasktracker-server/internal/admin"
 	"github.com/amirashouri/tasktracker-server/internal/agent"
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/db"
 	"github.com/amirashouri/tasktracker-server/internal/dbtest"
 	"github.com/amirashouri/tasktracker-server/internal/entities"
-	"github.com/amirashouri/tasktracker-server/internal/me"
 	"github.com/amirashouri/tasktracker-server/internal/middleware"
-	"github.com/amirashouri/tasktracker-server/internal/profile"
 	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
-	"github.com/amirashouri/tasktracker-server/internal/sync"
 )
 
 // The types in this file are the *client's* DTOs, transcribed from
@@ -136,7 +132,6 @@ func newContractEnv(t *testing.T) *contractEnv {
 
 	database := dbtest.NewDatabase(t)
 	users := entities.NewUserRepository(database.DB)
-	tokens := auth.NewTokenStore(database.DB)
 	jwtManager := auth.NewJWTManager(strings.Repeat("s", 32), time.Hour, 720*time.Hour)
 
 	user := &entities.User{
@@ -161,33 +156,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 	}
 
 	return &contractEnv{
-		mux: mount(
-			auth.NewHandler(jwtManager, users, tokens, ratelimit.New(100, time.Minute), nil),
-			admin.NewHandler(users, tokens),
-			profile.NewHandler(users),
-			me.NewHandler(users),
-			admin.NewProjectHandler(
-				entities.NewProjectRepository(database.DB),
-				entities.NewWorkItemRepository(database.DB),
-				sync.NewEngine(database.DB, ""),
-			),
-			sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),
-			agent.NewHandler(entities.NewAgentRepository(database.DB), time.Minute),
-			agent.NewAppHandler(
-				entities.NewAgentRepository(database.DB),
-				entities.NewWorkItemRepository(database.DB),
-				entities.NewProjectRepository(database.DB),
-				entities.NewCommentRepository(database.DB),
-				users,
-				sync.NewEngine(database.DB, ""),
-			),
-			jwtManager,
-			database.DB,
-			sync.NewEngine(database.DB, ""),
-			"",
-			int64(25*1024*1024),
-			30*time.Second,
-		),
+		mux:      mountTestMux(t, database, ratelimit.New(100, time.Minute), jwtManager),
 		project:  project,
 		user:     user,
 		database: database,

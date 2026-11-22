@@ -9,15 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/amirashouri/tasktracker-server/internal/admin"
-	"github.com/amirashouri/tasktracker-server/internal/agent"
 	"github.com/amirashouri/tasktracker-server/internal/auth"
 	"github.com/amirashouri/tasktracker-server/internal/dbtest"
-	"github.com/amirashouri/tasktracker-server/internal/entities"
-	"github.com/amirashouri/tasktracker-server/internal/me"
-	"github.com/amirashouri/tasktracker-server/internal/profile"
 	"github.com/amirashouri/tasktracker-server/internal/ratelimit"
-	"github.com/amirashouri/tasktracker-server/internal/sync"
 )
 
 func TestHealthzDoesNotTouchTheDatabase(t *testing.T) {
@@ -179,36 +173,10 @@ func nonLoopbackIPv4(t *testing.T) string {
 func newTestMux(t *testing.T) *http.ServeMux {
 	t.Helper()
 
-	database := dbtest.NewDatabase(t)
-	users := entities.NewUserRepository(database.DB)
-	tokens := auth.NewTokenStore(database.DB)
-	jwtManager := auth.NewJWTManager(strings.Repeat("s", 32), time.Hour, time.Hour)
-
-	return mount(
-		auth.NewHandler(jwtManager, users, tokens, ratelimit.New(5, time.Minute), nil),
-		admin.NewHandler(users, tokens),
-		profile.NewHandler(users),
-		me.NewHandler(users),
-		admin.NewProjectHandler(
-			entities.NewProjectRepository(database.DB),
-			entities.NewWorkItemRepository(database.DB),
-			sync.NewEngine(database.DB, ""),
-		),
-		sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),
-		agent.NewHandler(entities.NewAgentRepository(database.DB), time.Minute),
-		agent.NewAppHandler(
-			entities.NewAgentRepository(database.DB),
-			entities.NewWorkItemRepository(database.DB),
-			entities.NewProjectRepository(database.DB),
-			entities.NewCommentRepository(database.DB),
-			users,
-			sync.NewEngine(database.DB, ""),
-		),
-		jwtManager,
-		database.DB,
-		sync.NewEngine(database.DB, ""),
-		"",
-		int64(25*1024*1024),
-		30*time.Second,
+	return mountTestMux(
+		t,
+		dbtest.NewDatabase(t),
+		ratelimit.New(5, time.Minute),
+		auth.NewJWTManager(strings.Repeat("s", 32), time.Hour, time.Hour),
 	)
 }
