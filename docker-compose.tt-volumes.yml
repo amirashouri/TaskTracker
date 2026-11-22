@@ -1,0 +1,16 @@
+# Opt-in overlay for local development against the data volumes created by `tt install`.
+#
+# Compose scopes unqualified volume names to the project. The source checkout's project is
+# `tasktrackerserver`, so `pg-data` normally becomes `tasktrackerserver_pg-data`. The installer
+# runs as project `tasktracker` and declares `tasktracker-pg-data`, so its volume is
+# `tasktracker_tasktracker-pg-data`. Declaring both volumes here as external with their full
+# names makes `make up SHARED_DATA=1` use the CLI-created data instead.
+#
+# Run only one stack at a time: two Postgres servers cannot own the same data directory.
+volumes:
+  pg-data:
+    external: true
+    name: tasktracker_tasktracker-pg-data
+  blob-data:
+    external: true
+    name: tasktracker_tasktracker-blob-data

@@ -3,6 +3,10 @@
 # Every target names an explicit --profile: docker-compose.yml puts both services behind
 # profiles, so none of them is enabled without one.
 COMPOSE ?= docker compose
+# SHARED_DATA=1 points the source stack at the data volumes created by `tt install`.
+# The overlay declares them as external, so Compose neither creates nor deletes them.
+SHARED_DATA ?= 0
+COMPOSE += $(if $(filter 1,$(SHARED_DATA)),-f docker-compose.tt-volumes.yml)
 PROFILE ?= postgres
 VERSION ?= dev
 DIST ?= dist
@@ -26,6 +30,7 @@ help:
 		'' \
 		'  make up                 start the server, detached' \
 		'  make up PROFILE=sqlite  start the single-container SQLite stack instead' \
+		'  make up SHARED_DATA=1    use the tt install data volumes (one stack at a time)' \
 		'  make rebuild            start and rebuild the image from the working tree' \
 		'  make down               stop and remove everything this project started' \
 		'  make destroy            make down, then delete the database volume (destroys data)' \
