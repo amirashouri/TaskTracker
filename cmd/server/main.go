@@ -125,7 +125,9 @@ func runServer() {
 	// The runner API. It authenticates a per-machine token rather than a user JWT,
 	// so it does not share the sync handler's middleware, and the lease it issues
 	// is the configured window a crashed worker's run survives.
-	agentRepo := entities.NewAgentRepository(database.DB)
+	// Pass the pool, not its embedded *sql.DB: ClaimRun asks it for the dialect
+	// to choose SKIP LOCKED on Postgres.
+	agentRepo := entities.NewAgentRepository(database)
 	agentHandler := agent.NewHandler(agentRepo, cfg.AgentLeaseTTL)
 	// The app side checks membership with the same query the change feed and the
 	// attachment API use, so a project member is the one definition of access.

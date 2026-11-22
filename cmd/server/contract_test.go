@@ -293,7 +293,7 @@ func TestARunnerTokenIsRefusedOnAUserRoute(t *testing.T) {
 	if err := entities.NewUserRepository(database.DB).Create(ctx, owner); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	repo := entities.NewAgentRepository(database.DB)
+	repo := entities.NewAgentRepository(database)
 	const token = "ttag_route_probe"
 	if err := repo.RegisterRunner(ctx, &entities.AgentRunner{UserID: owner.ID, Name: "dev-machine"}, agent.HashRunnerToken(token)); err != nil {
 		t.Fatalf("register runner: %v", err)

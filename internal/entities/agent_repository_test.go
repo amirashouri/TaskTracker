@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -43,7 +44,7 @@ func newAgentFixture(t *testing.T) agentFixture {
 		t.Fatalf("create work item: %v", err)
 	}
 
-	return agentFixture{database: database, repo: NewAgentRepository(database.DB), user: user, project: project, item: item}
+	return agentFixture{database: database, repo: NewAgentRepository(database), user: user, project: project, item: item}
 }
 
 func (f agentFixture) mustRegisterRunner(t *testing.T, user *User, name, hash string) *AgentRunner {
@@ -168,7 +169,7 @@ func TestClaimRunRequiresProjectMembership(t *testing.T) {
 		t.Fatalf("create item: %v", err)
 	}
 
-	repo := NewAgentRepository(database.DB)
+	repo := NewAgentRepository(database)
 	runner := &AgentRunner{UserID: user.ID, Name: "dev-machine"}
 	if err := repo.RegisterRunner(ctx, runner, "hash-outsider"); err != nil {
 		t.Fatalf("register: %v", err)
@@ -191,6 +192,20 @@ func TestClaimRunRequiresProjectMembership(t *testing.T) {
 // Two runners waking at the same instant must not receive the same run. The claim
 // is one statement with the status predicate in the outer WHERE, which is what
 // makes the loser match zero rows instead of updating the winner's row.
+// The claim clause is chosen from the connection's dialect, not the call site:
+// Postgres needs SKIP LOCKED, SQLite rejects the syntax. Passing the embedded
+// *sql.DB instead of the pool hides IsPostgres and silently restores the race.
+func TestClaimRunSQLUsesSkipLockedOnlyOnPostgres(t *testing.T) {
+	postgres := claimRunSQL(&db.DB{Driver: db.DriverPostgres})
+	if !strings.Contains(postgres, "FOR UPDATE SKIP LOCKED") {
+		t.Fatalf("postgres claim lacks SKIP LOCKED:\n%s", postgres)
+	}
+	sqlite := claimRunSQL(&db.DB{Driver: db.DriverSQLite})
+	if strings.Contains(sqlite, "SKIP LOCKED") {
+		t.Fatalf("sqlite claim carries SKIP LOCKED:\n%s", sqlite)
+	}
+}
+
 func TestClaimRunIsAtomicAcrossRunners(t *testing.T) {
 	f := newAgentFixture(t)
 	ctx := context.Background()
@@ -376,7 +391,7 @@ func TestRunnerTokensAreOwnerScopedAndRevocable(t *testing.T) {
 	users := NewUserRepository(database.DB)
 	owner := mustCreateUser(t, users, "owner@example.com")
 	stranger := mustCreateUser(t, users, "stranger@example.com")
-	repo := NewAgentRepository(database.DB)
+	repo := NewAgentRepository(database)
 
 	runner := &AgentRunner{UserID: owner.ID, Name: "dev-machine", Provider: "openai-compatible", ModelLabel: "llama3.1"}
 	if err := repo.RegisterRunner(ctx, runner, "hash-registered"); err != nil {

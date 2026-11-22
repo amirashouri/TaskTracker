@@ -300,35 +300,49 @@ func (r *AgentRepository) runByIdempotencyKey(ctx context.Context, workItemID Wo
 // run stays queued; pruning it is the queue's job, not the claim's.
 //
 // Returns (nil, nil) when nothing is queued, which is what the long poll waits on.
-func (r *AgentRepository) ClaimRun(ctx context.Context, runnerID AgentRunnerID, userID UserID, leaseUntil Timestamp) (*AgentRun, error) {
-	row := r.db.QueryRowContext(ctx, `UPDATE agent_runs
+// claimRunSQL is the claim statement for the connection's dialect. Postgres needs
+// SKIP LOCKED: without it every contender's candidate sub-select reads the same
+// snapshot, picks the same oldest row, and the losers re-check `status = 'queued'`
+// after the winner commits, returning "nothing queued" while work remains.
+// SQLite serialises writers and rejects the clause outright.
+func claimRunSQL(q Querier) string {
+	lock := ""
+	if pg, ok := q.(interface{ IsPostgres() bool }); ok && pg.IsPostgres() {
+		lock = " FOR UPDATE SKIP LOCKED"
+	}
+	return fmt.Sprintf(claimRunTemplate, lock) + agentRunColumns
+}
+
+const claimRunTemplate = `UPDATE agent_runs
 	          SET status = 'claimed',
 	              runner_id = $1,
 	              lease_expires_at = $2,
 	              started_at = COALESCE(started_at, $3)
 	          WHERE id = (
-	                  SELECT id FROM agent_runs				   WHERE status = 'queued'
-				     AND requested_by = $4
-				     AND (requested_runner_id IS NULL OR requested_runner_id = $1)
-				     AND project_id IN (SELECT project_id FROM project_members WHERE user_id = $4)
-	                     -- A project-scoped machine sees only its own project's
-	                     -- queue. The condition belongs inside the candidate
-	                     -- selection: after LIMIT 1 it would let an older run from
-	                     -- another project hide this runner's own work.
-	                     AND EXISTS (
-	                         SELECT 1 FROM agent_runners ar
-	                          WHERE ar.id = $1
-	                            AND (ar.project_id IS NULL OR ar.project_id = agent_runs.project_id)
-	                     )
-	                   ORDER BY created_at, id
-	                   LIMIT 1
+	                  SELECT id FROM agent_runs
+	                    WHERE status = 'queued'
+	                    AND requested_by = $4
+	                    AND (requested_runner_id IS NULL OR requested_runner_id = $1)
+	                    AND project_id IN (SELECT project_id FROM project_members WHERE user_id = $4)
+	                    -- A project-scoped machine sees only its own project's
+	                    -- queue. The condition belongs inside the candidate
+	                    -- selection: after LIMIT 1 it would let an older run from
+	                    -- another project hide this runner's own work.
+	                    AND EXISTS (
+	                        SELECT 1 FROM agent_runners ar
+	                         WHERE ar.id = $1
+	                           AND (ar.project_id IS NULL OR ar.project_id = agent_runs.project_id)
+	                    )
+	                  ORDER BY created_at, id
+	                  LIMIT 1%s
 	                )
 	            AND status = 'queued'
 	            -- A stopped machine keeps its token but is owed no new work.
 	            AND NOT EXISTS (SELECT 1 FROM agent_runners WHERE id = $1 AND paused_at IS NOT NULL)
-	          RETURNING `+agentRunColumns,
-		runnerID, leaseUntil, Now(), userID)
+	          RETURNING `
 
+func (r *AgentRepository) ClaimRun(ctx context.Context, runnerID AgentRunnerID, userID UserID, leaseUntil Timestamp) (*AgentRun, error) {
+	row := r.db.QueryRowContext(ctx, claimRunSQL(r.db), runnerID, leaseUntil, Now(), userID)
 	return oneOrNil(row, scanAgentRun)
 }
 

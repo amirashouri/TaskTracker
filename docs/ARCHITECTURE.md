@@ -500,6 +500,14 @@ validation runs, counts, handoffs and per-task file lists were dropped.
   stored run. A claim is a *lease*, not a lock: `RunLeaseReaper` fails runs whose
   heartbeats stop, so a crashed worker cannot leave a task looking started.
   `agentEnabled` on the project refuses dispatch with 409.
+- **Claims take `FOR UPDATE SKIP LOCKED` on Postgres.** Without it, concurrent
+  claims evaluate the candidate sub-select on one snapshot, pick the same oldest
+  queued row, and the losers re-check `status = 'queued'` after the winner commits
+  — returning "nothing queued" while work remains. SQLite serialises writers and
+  rejects the clause, so `claimRunSQL` picks it from the pool's dialect
+  (`db.DB.IsPostgres`). `NewAgentRepository` must receive the pool, not its
+  embedded `*sql.DB`: the embedded handle hides the dialect method and silently
+  restores the race.
 - **`agent_runners.project_id` is nullable on purpose.** NULL is a legacy
   machine-wide registration that claims across its owner's projects; a paired
   runner sees only its own project. Claim, events and finish enforce both

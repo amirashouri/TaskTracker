@@ -46,8 +46,13 @@ func NewDatabase(t *testing.T) *db.DB {
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(func() {
-		if _, err := database.Exec("DROP SCHEMA " + schema + " CASCADE"); err != nil {
-			t.Errorf("drop schema %s: %v", schema, err)
+		// A test may close the database itself (the readiness probe does, to
+		// prove the 503 path); dropping the schema through a closed handle would
+		// turn that assertion into a cleanup failure.
+		if err := database.Ping(); err == nil {
+			if _, err := database.Exec("DROP SCHEMA " + schema + " CASCADE"); err != nil {
+				t.Errorf("drop schema %s: %v", schema, err)
+			}
 		}
 		database.Close()
 	})

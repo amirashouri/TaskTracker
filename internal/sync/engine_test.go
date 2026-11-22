@@ -1535,9 +1535,15 @@ func TestPushDeleteRemovesTheAttachmentBlob(t *testing.T) {
 		t.Fatalf("write blob: %v", err)
 	}
 
+	// A delete's payload is the bare id as JSON, as the client sends it; an empty
+	// payload is not a valid JSONB value on Postgres.
+	deletePayload, err := json.Marshal(string(attachment.ID))
+	if err != nil {
+		t.Fatalf("marshal delete payload: %v", err)
+	}
 	if res := pushOne(t, engine, userID, entities.PushChange{
 		ID: "e4", Entity: entities.OutboxEntityAttachment, EntityID: string(attachment.ID),
-		Operation: entities.OutboxOperationDelete,
+		Operation: entities.OutboxOperationDelete, Payload: deletePayload,
 	}); res.Status != StatusAccepted {
 		t.Fatalf("attachment delete = %s (%s)", res.Status, res.Message)
 	}

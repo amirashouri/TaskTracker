@@ -36,9 +36,9 @@ func mountTestMux(t *testing.T, database *db.DB, limiter *ratelimit.Limiter, jwt
 			sync.NewEngine(database.DB, ""),
 		),
 		sync.NewHandler(sync.NewEngine(database.DB, ""), jwtManager),
-		agent.NewHandler(entities.NewAgentRepository(database.DB), time.Minute),
+		agent.NewHandler(entities.NewAgentRepository(database), time.Minute),
 		agent.NewAppHandler(
-			entities.NewAgentRepository(database.DB),
+			entities.NewAgentRepository(database),
 			entities.NewWorkItemRepository(database.DB),
 			entities.NewProjectRepository(database.DB),
 			entities.NewCommentRepository(database.DB),

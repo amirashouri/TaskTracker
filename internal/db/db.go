@@ -27,6 +27,11 @@ type DB struct {
 	Driver string // DriverPostgres or DriverSQLite
 }
 
+// IsPostgres reports whether this pool speaks Postgres. Repositories that need a
+// dialect-specific SQL clause assert this method instead of importing db, so a
+// transaction — which carries no dialect — simply uses the portable statement.
+func (d *DB) IsPostgres() bool { return d.Driver == DriverPostgres }
+
 func New(databaseURL string) (*DB, error) {
 	driverName, dsn, err := parseURL(databaseURL)
 	if err != nil {

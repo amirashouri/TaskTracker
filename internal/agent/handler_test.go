@@ -53,7 +53,7 @@ func newAgentEnv(t *testing.T) agentEnv {
 		t.Fatalf("create work item: %v", err)
 	}
 
-	repo := entities.NewAgentRepository(database.DB)
+	repo := entities.NewAgentRepository(database)
 	handler := NewHandler(repo, time.Minute)
 	// A fixed clock makes the lease value predictable; nothing here needs time to
 	// pass, and the claim tests use waitSeconds 0.
