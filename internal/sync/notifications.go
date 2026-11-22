@@ -113,27 +113,37 @@ func notificationForChange(
 	return nil
 }
 
-func assignmentNotification(
-	ctx context.Context,
-	q entities.Querier,
-	actorID string,
-	item *entities.WorkItem,
-) *entities.Notification {
+// notificationBase builds the payload fields both generated kinds share: the
+// work item, its project identity, and the actor. A failed identity read yields
+// nil because the notification cannot be rendered without its project name.
+func notificationBase(ctx context.Context, q entities.Querier, item *entities.WorkItem, actor entities.UserID) *entities.NotificationPayload {
 	prefix, projectName, err := entities.NewProjectRepository(q).Identity(ctx, item.ProjectID)
 	if err != nil {
 		slog.Warn("notification: read project identity", "project", item.ProjectID, "error", err)
 		return nil
 	}
-
-	payload, err := json.Marshal(entities.NotificationPayload{
+	return &entities.NotificationPayload{
 		WorkItemID:       string(item.ID),
 		WorkItemKey:      item.Key,
 		TaskTitle:        item.Title,
 		ProjectID:        string(item.ProjectID),
 		ProjectKeyPrefix: prefix,
 		ProjectName:      projectName,
-		ActorName:        actorName(ctx, q, entities.UserID(actorID)),
-	})
+		ActorName:        actorName(ctx, q, actor),
+	}
+}
+
+func assignmentNotification(
+	ctx context.Context,
+	q entities.Querier,
+	actorID string,
+	item *entities.WorkItem,
+) *entities.Notification {
+	payload := notificationBase(ctx, q, item, entities.UserID(actorID))
+	if payload == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil
 	}
@@ -141,7 +151,7 @@ func assignmentNotification(
 	return &entities.Notification{
 		UserID:     *item.AssigneeID,
 		Kind:       entities.NotificationKindTaskAssigned,
-		Payload:    string(payload),
+		Payload:    string(encoded),
 		SourceKind: entities.NotificationSourceWorkItem,
 		// The new version is unique per write, so a replayed change cannot
 		// produce a second row while a later reassignment still can.
@@ -155,23 +165,13 @@ func commentNotification(
 	item *entities.WorkItem,
 	comment *entities.Comment,
 ) *entities.Notification {
-	prefix, projectName, err := entities.NewProjectRepository(q).Identity(ctx, item.ProjectID)
-	if err != nil {
-		slog.Warn("notification: read project identity", "project", item.ProjectID, "error", err)
+	payload := notificationBase(ctx, q, item, comment.AuthorID)
+	if payload == nil {
 		return nil
 	}
-
-	payload, err := json.Marshal(entities.NotificationPayload{
-		WorkItemID:       string(item.ID),
-		WorkItemKey:      item.Key,
-		TaskTitle:        item.Title,
-		ProjectID:        string(item.ProjectID),
-		ProjectKeyPrefix: prefix,
-		ProjectName:      projectName,
-		ActorName:        actorName(ctx, q, comment.AuthorID),
-		CommentID:        string(comment.ID),
-		CommentPreview:   preview(comment.Body),
-	})
+	payload.CommentID = string(comment.ID)
+	payload.CommentPreview = preview(comment.Body)
+	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil
 	}
@@ -179,7 +179,7 @@ func commentNotification(
 	return &entities.Notification{
 		UserID:     *item.AssigneeID,
 		Kind:       entities.NotificationKindCommentAdded,
-		Payload:    string(payload),
+		Payload:    string(encoded),
 		SourceKind: entities.NotificationSourceComment,
 		SourceID:   string(comment.ID),
 	}
