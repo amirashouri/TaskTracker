@@ -116,6 +116,19 @@ func (r *UserRepository) VerifyPassword(ctx context.Context, email, password str
 	return u, nil
 }
 
+// FirstByRole returns the oldest non-deleted account holding role, or nil when
+// there is none. "Oldest" is the bootstrap administrator on a normal install,
+// which is what an epic with no explicit owner falls back to. Inactive still
+// counts: only a deleted account cannot act.
+func (r *UserRepository) FirstByRole(ctx context.Context, role string) (*User, error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+` FROM users
+		  WHERE role = $1 AND COALESCE(status, '') <> $2
+		  ORDER BY created_at, id
+		  LIMIT 1`, role, StatusDeleted)
+	return oneOrNil(row, scanUser)
+}
+
 // CountByRole returns how many accounts hold the role and have not been
 // soft-deleted. Deleting the last admin is what it exists to prevent: an
 // account that has been deleted cannot manage users, so it must not count.

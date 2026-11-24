@@ -87,6 +87,49 @@ func TestPullEpicReachesEveryLinkedProject(t *testing.T) {
 	}
 }
 
+// The owner is authored state, not derived: a picker's choice must survive the
+// opaque document round-trip and come back on the epic feed unchanged.
+func TestEpicOwnerSurvivesSyncUpsert(t *testing.T) {
+	engine, users, _, _, ownerID := newTestEngine(t)
+	ctx := context.Background()
+
+	project := newProject(ownerID, "f2f2f2f2-f2f2-f2f2-f2f2-f2f2f2f2f2f2")
+	pushProject(t, engine, ownerID, project)
+	admin := &entities.User{
+		Email:        "epic-owner@example.com",
+		PasswordHash: "secret",
+		Role:         entities.RoleAdmin,
+	}
+	if err := users.Create(ctx, admin); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+
+	epic := &entities.Epic{
+		ID:         entities.EpicID("e4e4e4e4-e4e4-e4e4-e4e4-e4e4e4e4e4e4"),
+		ProjectIDs: []entities.ProjectID{project.ID},
+		Title:      "Owned checkout",
+		OwnerID:    &admin.ID,
+	}
+	if res := pushOne(t, engine, ownerID, epicChange(t, "epic-owner-1", epic, entities.OutboxOperationUpsert, "")); res.Status != StatusAccepted {
+		t.Fatalf("create owned epic = %s (%s)", res.Status, res.Message)
+	}
+
+	page, err := engine.Pull(ctx, ownerID, ScopeEpics, "", 0)
+	if err != nil {
+		t.Fatalf("pull epics: %v", err)
+	}
+	if len(page.Changes) != 1 {
+		t.Fatalf("pulled %d epic changes, want 1", len(page.Changes))
+	}
+	pulled, err := entities.EpicFromJSON([]byte(page.Changes[0].Payload))
+	if err != nil {
+		t.Fatalf("decode pulled epic: %v", err)
+	}
+	if pulled.OwnerID == nil || *pulled.OwnerID != admin.ID {
+		t.Errorf("pulled owner = %v, want %s", pulled.OwnerID, admin.ID)
+	}
+}
+
 // The epic has a feed of its own. It must not leak onto the scopes the client
 // already pulls, and the work item must not leak onto the epic feed.
 func TestEpicScopeIsolation(t *testing.T) {

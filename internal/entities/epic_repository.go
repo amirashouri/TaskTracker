@@ -14,16 +14,64 @@ func NewEpicRepository(db Querier) *EpicRepository {
 	return &EpicRepository{db: db}
 }
 
-const epicColumns = `id, title, details, due_date, is_archived, created_at, updated_at, version`
+const epicColumns = `id, title, details, due_date, is_archived, owner_id, created_at, updated_at, version`
 
 func scanEpic(row scanner, e *Epic) error {
 	var dueDate sql.NullInt64
-	if err := row.Scan(&e.ID, &e.Title, &e.Details, &dueDate, &e.IsArchived,
+	var ownerID sql.NullString
+	if err := row.Scan(&e.ID, &e.Title, &e.Details, &dueDate, &e.IsArchived, &ownerID,
 		&e.CreatedAt, &e.UpdatedAt, &e.Version); err != nil {
 		return err
 	}
 	e.DueDate = timestampOrNil(dueDate)
+	e.OwnerID = nil
+	if ownerID.Valid {
+		id := UserID(ownerID.String)
+		e.OwnerID = &id
+	}
 	return nil
+}
+
+// ensureEpicOwner gives a new epic with no owner the bootstrap admin. The
+// repository owns this default rather than the client: an offline device may
+// push a payload written before the field existed, and the document it serves
+// back must still name one owner.
+func ensureEpicOwner(ctx context.Context, q Querier, e *Epic) error {
+	if e.OwnerID != nil {
+		return nil
+	}
+	admin, err := NewUserRepository(q).FirstByRole(ctx, RoleAdmin)
+	if err != nil {
+		return err
+	}
+	if admin != nil {
+		e.OwnerID = &admin.ID
+	}
+	return nil
+}
+
+// preserveEpicOwner keeps the stored owner when an update payload omits the
+// field. Falling back to the admin here would silently reassign an epic every
+// time an older client saved it; a row with no stored owner still gets the
+// default.
+func preserveEpicOwner(ctx context.Context, q Querier, e *Epic) error {
+	if e.OwnerID != nil {
+		return nil
+	}
+	var owner sql.NullString
+	err := q.QueryRowContext(ctx, `SELECT owner_id FROM epics WHERE id = $1`, e.ID).Scan(&owner)
+	if err == sql.ErrNoRows {
+		return ensureEpicOwner(ctx, q, e)
+	}
+	if err != nil {
+		return err
+	}
+	if owner.Valid {
+		id := UserID(owner.String)
+		e.OwnerID = &id
+		return nil
+	}
+	return ensureEpicOwner(ctx, q, e)
 }
 
 // EpicLinkError reports a work item naming an epic that does not list the
@@ -44,9 +92,12 @@ func (r *EpicRepository) Create(ctx context.Context, e *Epic) error {
 	e.CreatedAt, e.UpdatedAt, e.Version = createStamp(e.CreatedAt)
 
 	return inTx(ctx, r.db, func(q Querier) error {
+		if err := ensureEpicOwner(ctx, q, e); err != nil {
+			return err
+		}
 		if _, err := q.ExecContext(ctx,
-			`INSERT INTO epics (`+epicColumns+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			e.ID, e.Title, e.Details, e.DueDate, e.IsArchived,
+			`INSERT INTO epics (`+epicColumns+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			e.ID, e.Title, e.Details, e.DueDate, e.IsArchived, e.OwnerID,
 			e.CreatedAt, e.UpdatedAt, e.Version); err != nil {
 			return err
 		}
@@ -72,12 +123,15 @@ func (r *EpicRepository) Update(ctx context.Context, e *Epic) error {
 	e.Version = newVersion()
 
 	return inTx(ctx, r.db, func(q Querier) error {
+		if err := preserveEpicOwner(ctx, q, e); err != nil {
+			return err
+		}
 		if err := execOneRow(ctx, q, conflict("epic", e.ID),
 			`UPDATE epics SET title=$1, details=$2, due_date=$3, is_archived=$4,
-			        updated_at=$5, version=$6
-			  WHERE id=$7 AND version=$8`,
-			e.Title, e.Details, e.DueDate, e.IsArchived, e.UpdatedAt, e.Version,
-			e.ID, previous); err != nil {
+			        owner_id=$5, updated_at=$6, version=$7
+			  WHERE id=$8 AND version=$9`,
+			e.Title, e.Details, e.DueDate, e.IsArchived, e.OwnerID,
+			e.UpdatedAt, e.Version, e.ID, previous); err != nil {
 			return err
 		}
 		return replaceEpicProjects(ctx, q, e.ID, e.ProjectIDs)

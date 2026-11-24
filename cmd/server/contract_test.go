@@ -2393,6 +2393,7 @@ func TestTheEpicScopeIsWhatTheClientDecodes(t *testing.T) {
 	const epicID = "e6e6e6e6-e6e6-e6e6-e6e6-e6e6e6e6e6e6"
 	payload := `{"id":"` + epicID + `",` +
 		`"projectIds":["` + string(env.project.ID) + `","` + string(second.ID) + `"],` +
+		`"ownerId":"` + string(env.user.ID) + `",` +
 		`"title":"Checkout","details":"One feature across both apps",` +
 		`"dueDate":"2026-12-01T00:00:00Z","isArchived":false,` +
 		`"createdAt":"2026-11-24T10:00:00Z","updatedAt":"2026-11-24T10:00:00Z","version":"v1"}`
@@ -2439,7 +2440,7 @@ func TestTheEpicScopeIsWhatTheClientDecodes(t *testing.T) {
 		t.Fatalf("decode epic payload: %v", err)
 	}
 	assertWireKeySet(t, "an epic document", document,
-		[]string{"id", "projectIds", "title", "details", "isArchived", "createdAt", "updatedAt", "version"},
+		[]string{"id", "projectIds", "ownerId", "title", "details", "isArchived", "createdAt", "updatedAt", "version"},
 		[]string{"dueDate"})
 
 	var epic struct {

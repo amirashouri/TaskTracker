@@ -15,6 +15,21 @@ func createEpicProject(t *testing.T, projects *ProjectRepository, keyPrefix, nam
 	return project
 }
 
+func createEpicUser(t *testing.T, users *UserRepository, email, role, status string, createdAt int64) *User {
+	t.Helper()
+	user := &User{
+		Email:        email,
+		PasswordHash: "x",
+		Role:         role,
+		Status:       status,
+		CreatedAt:    createdAt,
+	}
+	if err := users.Create(context.Background(), user); err != nil {
+		t.Fatalf("create user %s: %v", email, err)
+	}
+	return user
+}
+
 func TestEpicRoundTripPreservesProjectOrder(t *testing.T) {
 	database := newTestDB(t)
 	projects := NewProjectRepository(database.DB)
@@ -168,5 +183,69 @@ func TestEpicLinkStateSeparatesMissingFromUnlisted(t *testing.T) {
 	}
 	if !exists || !lists {
 		t.Errorf("listed project reported exists=%v lists=%v, want true/true", exists, lists)
+	}
+}
+
+// The default is the oldest *active* admin: a member created earlier must not
+// be picked, and an explicitly chosen owner must survive both create and update.
+func TestEpicOwnerRoundTripAndDefault(t *testing.T) {
+	database := newTestDB(t)
+	users := NewUserRepository(database.DB)
+	projects := NewProjectRepository(database.DB)
+	epics := NewEpicRepository(database.DB)
+	ctx := context.Background()
+
+	frontend := createEpicProject(t, projects, "FE", "Frontend")
+	createEpicUser(t, users, "member@example.com", RoleMember, "", 1)
+	oldestAdmin := createEpicUser(t, users, "first@example.com", RoleAdmin, "", 2)
+	createEpicUser(t, users, "second@example.com", RoleAdmin, "", 3)
+	deletedAdmin := createEpicUser(t, users, "gone@example.com", RoleAdmin, StatusDeleted, 0)
+
+	defaulted := &Epic{ProjectIDs: []ProjectID{frontend.ID}, Title: "No owner sent"}
+	if err := epics.Create(ctx, defaulted); err != nil {
+		t.Fatalf("create ownerless epic: %v", err)
+	}
+	stored, err := epics.GetByID(ctx, defaulted.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("get ownerless epic = %v, %v", stored, err)
+	}
+	if stored.OwnerID == nil || *stored.OwnerID != oldestAdmin.ID {
+		t.Errorf("default owner = %v, want oldest active admin %s", stored.OwnerID, oldestAdmin.ID)
+	}
+	if stored.OwnerID != nil && (*stored.OwnerID == deletedAdmin.ID) {
+		t.Error("a deleted admin was chosen as the default owner")
+	}
+
+	chosen := createEpicUser(t, users, "chosen@example.com", RoleMember, "", 4)
+	explicit := &Epic{
+		ProjectIDs: []ProjectID{frontend.ID},
+		Title:      "Chosen owner",
+		OwnerID:    &chosen.ID,
+	}
+	if err := epics.Create(ctx, explicit); err != nil {
+		t.Fatalf("create epic with explicit owner: %v", err)
+	}
+	storedExplicit, err := epics.GetByID(ctx, explicit.ID)
+	if err != nil || storedExplicit == nil {
+		t.Fatalf("get explicit epic = %v, %v", storedExplicit, err)
+	}
+	if storedExplicit.OwnerID == nil || *storedExplicit.OwnerID != chosen.ID {
+		t.Errorf("explicit owner = %v, want %s", storedExplicit.OwnerID, chosen.ID)
+	}
+
+	// An update payload from an older client omits the field. The repository
+	// must refill it rather than clearing the owner on every save.
+	update := *storedExplicit
+	update.OwnerID = nil
+	update.Title = "Still chosen"
+	if err := epics.Update(ctx, &update); err != nil {
+		t.Fatalf("update epic without owner: %v", err)
+	}
+	after, err := epics.GetByID(ctx, update.ID)
+	if err != nil || after == nil {
+		t.Fatalf("get updated epic = %v, %v", after, err)
+	}
+	if after.OwnerID == nil || *after.OwnerID != chosen.ID {
+		t.Errorf("owner after ownerless update = %v, want %s", after.OwnerID, chosen.ID)
 	}
 }

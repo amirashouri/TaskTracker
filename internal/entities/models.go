@@ -329,13 +329,16 @@ func (s *Sprint) Overlaps(other *Sprint) bool {
 type Epic struct {
 	ID         EpicID      `json:"id"`
 	ProjectIDs []ProjectID `json:"projectIds"`
-	Title      string      `json:"title"`
-	Details    string      `json:"details"`
-	DueDate    *Timestamp  `json:"dueDate,omitempty"`
-	IsArchived bool        `json:"isArchived"`
-	CreatedAt  Timestamp   `json:"createdAt"`
-	UpdatedAt  Timestamp   `json:"updatedAt"`
-	Version    string      `json:"version"`
+	// OwnerID is who answers for the epic. It is omitted only when the server
+	// has no admin to fall back to; a normal row always carries one.
+	OwnerID    *UserID    `json:"ownerId,omitempty"`
+	Title      string     `json:"title"`
+	Details    string     `json:"details"`
+	DueDate    *Timestamp `json:"dueDate,omitempty"`
+	IsArchived bool       `json:"isArchived"`
+	CreatedAt  Timestamp  `json:"createdAt"`
+	UpdatedAt  Timestamp  `json:"updatedAt"`
+	Version    string     `json:"version"`
 }
 
 // ProjectIDSet is the epic's project list with duplicates removed, preserving

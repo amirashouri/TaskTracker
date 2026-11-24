@@ -505,13 +505,14 @@ than creating a second membership. No existing entity gains a key: membership
 is a new entity and a new pull scope, which installed clients neither push nor
 request.
 
-An `epic` groups work items across **two or more** projects, so unlike every
+An `epic` groups work items across **one or more** projects, so unlike every
 other entity it belongs to a set of projects rather than one:
 
 ```json
 {
   "id": "66666666-6666-6666-6666-666666666666",
   "projectIds": ["22222222-2222-2222-2222-222222222222", "77777777-7777-7777-7777-777777777777"],
+  "ownerId": "550e8400-e29b-41d4-a716-446655440000",
   "title": "Checkout",
   "details": "One feature across the web app and the API",
   "dueDate": "2026-12-01T00:00:00Z",
@@ -524,12 +525,16 @@ other entity it belongs to a set of projects rather than one:
 
 `projectIds` is the whole set, in the order the client chose, and an update
 replaces it wholesale. The server accepts a set of one even though the product
-requires two: an edit that removes a project must not be refused, and the
-creation rule is the client's. An epic's status and progress are **derived from
-its work items and never stored or synced**: no status, count or percentage key
-exists, because a stored one would be a second answer that drifts the moment an
-item moves. `dueDate` is omitted when unset. Nobody may write an epic unless
-they are a member of every project in `projectIds`.
+requires one: an edit that removes a project must not be refused, and the
+creation rule is the client's. `ownerId` names the member who answers for the
+epic. A create that omits it gets the oldest non-deleted administrator as the
+default; an update that omits it keeps the stored owner, so an older offline
+client cannot reassign an owner it never knew about.
+An epic's status and progress are **derived from its work items and never stored
+or synced**: no status, count or percentage key exists, because a stored one
+would be a second answer that drifts the moment an item moves. `dueDate` is
+omitted when unset. Nobody may write an epic unless they are a member of every
+project in `projectIds`.
 
 A work item references at most one epic through `epicID`, omitted when the item
 has no epic. The link is valid only when the item's project is one of the

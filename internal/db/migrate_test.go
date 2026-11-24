@@ -178,6 +178,57 @@ func TestMigrateUpgradesDatabaseWithoutVersionTable(t *testing.T) {
 	}
 }
 
+// migrateBeforeSQLite returns a freshly migrated SQLite database whose schema
+// stops just short of target. It is how a test can insert the legacy row a
+// backfill is supposed to see: a fully migrated database has no such row to
+// write.
+func migrateBeforeSQLite(t *testing.T, target string) *DB {
+	t.Helper()
+	database, err := New("sqlite://" + filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	if _, err := database.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version TEXT PRIMARY KEY,
+		applied_at BIGINT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+	migrations, err := loadMigrations(DriverSQLite)
+	if err != nil {
+		t.Fatalf("load sqlite migrations: %v", err)
+	}
+	for _, m := range migrations {
+		if m.version >= target {
+			break
+		}
+		if err := applyMigration(database, m); err != nil {
+			t.Fatalf("apply %s: %v", m.version, err)
+		}
+	}
+	return database
+}
+
+func applyNamedMigration(t *testing.T, database *DB, version string) {
+	t.Helper()
+	migrations, err := loadMigrations(database.Driver)
+	if err != nil {
+		t.Fatalf("load %s migrations: %v", database.Driver, err)
+	}
+	for _, m := range migrations {
+		if m.version != version {
+			continue
+		}
+		if err := applyMigration(database, m); err != nil {
+			t.Fatalf("apply %s: %v", version, err)
+		}
+		return
+	}
+	t.Fatalf("%s has no migration %s", database.Driver, version)
+}
+
 // The migration runner records versions, not checksums of the SQL. A 0004 file
 // that exists but forgets an ALTER still "applies" cleanly, so pin the resulting
 // columns rather than the file's presence. The defaults matter too: a legacy row
@@ -346,6 +397,90 @@ func TestEpicMigrationAddsItsObjects(t *testing.T) {
 			if !strings.Contains(sql0008, object) {
 				t.Errorf("%s 0008 does not mention %q", driver, object)
 			}
+		}
+	}
+}
+
+// 0009 must adopt an existing epics table: add the column, then give every
+// ownerless epic the oldest non-deleted admin. A deleted admin created earlier
+// must not win, because it can no longer act as an owner.
+func TestEpicOwnerMigrationBackfillsAdmins(t *testing.T) {
+	database := migrateBeforeSQLite(t, "0009")
+
+	legacy := "11111111-1111-1111-1111-111111111111"
+	deletedAdmin := "22222222-2222-2222-2222-222222222222"
+	activeAdmin := "33333333-3333-3333-3333-333333333333"
+	for _, user := range []struct {
+		id, email, role, status string
+		createdAt               int64
+	}{
+		{deletedAdmin, "gone@example.com", "admin", "deleted", 1},
+		{activeAdmin, "first@example.com", "admin", "active", 2},
+	} {
+		if _, err := database.Exec(`INSERT INTO users
+			(id, email, password_hash, role, status, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			user.id, user.email, "x", user.role, user.status, user.createdAt); err != nil {
+			t.Fatalf("insert user %s: %v", user.id, err)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO epics
+		(id, title, details, is_archived, created_at, updated_at, version)
+		VALUES ($1, 'Legacy', '', 0, 1, 1, '')`, legacy); err != nil {
+		t.Fatalf("insert legacy epic: %v", err)
+	}
+
+	applyNamedMigration(t, database, "0009")
+
+	var owner sql.NullString
+	if err := database.QueryRow(`SELECT owner_id FROM epics WHERE id = $1`, legacy).Scan(&owner); err != nil {
+		t.Fatalf("read owner_id: %v", err)
+	}
+	if !owner.Valid || owner.String != activeAdmin {
+		t.Errorf("backfilled owner = %+v, want %s", owner, activeAdmin)
+	}
+
+	assertEpicOwnerMigrationMentionsBothDialects(t, "owner_id")
+}
+
+func TestEpicOwnerMigrationLeavesOwnerNullWithoutAdmin(t *testing.T) {
+	database := migrateBeforeSQLite(t, "0009")
+	legacy := "44444444-4444-4444-4444-444444444444"
+	if _, err := database.Exec(`INSERT INTO epics
+		(id, title, details, is_archived, created_at, updated_at, version)
+		VALUES ($1, 'Legacy', '', 0, 1, 1, '')`, legacy); err != nil {
+		t.Fatalf("insert legacy epic: %v", err)
+	}
+
+	applyNamedMigration(t, database, "0009")
+
+	var owner sql.NullString
+	if err := database.QueryRow(`SELECT owner_id FROM epics WHERE id = $1`, legacy).Scan(&owner); err != nil {
+		t.Fatalf("read owner_id: %v", err)
+	}
+	if owner.Valid {
+		t.Errorf("owner = %q with no admin in the directory, want NULL", owner.String)
+	}
+}
+
+func assertEpicOwnerMigrationMentionsBothDialects(t *testing.T, object string) {
+	t.Helper()
+	for _, driver := range []string{DriverSQLite, DriverPostgres} {
+		migrations, err := loadMigrations(driver)
+		if err != nil {
+			t.Fatalf("load %s migrations: %v", driver, err)
+		}
+		var sql0009 string
+		for _, m := range migrations {
+			if m.version == "0009" {
+				sql0009 = m.sql
+			}
+		}
+		if sql0009 == "" {
+			t.Fatalf("%s has no 0009 migration", driver)
+		}
+		if !strings.Contains(sql0009, object) {
+			t.Errorf("%s 0009 does not mention %q", driver, object)
 		}
 	}
 }
