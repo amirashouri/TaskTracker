@@ -2369,3 +2369,159 @@ func TestSprintMemberHasItsOwnScopeAndClientDeclaredKeys(t *testing.T) {
 	assertWireKeySet(t, "a sprintMember document", document,
 		[]string{"id", "projectID", "sprintID", "userID", "availableStoryPoints", "createdAt", "updatedAt", "version"}, nil)
 }
+
+// The epic feed is the cross-project one. Its payload is a new document, so its
+// key set is pinned exactly: the client leaves `ignoreUnknownKeys` off, and a
+// gained or renamed key fails its decoder.
+func TestTheEpicScopeIsWhatTheClientDecodes(t *testing.T) {
+	env := newContractEnv(t)
+	tokens := env.signIn(t)
+	ctx := context.Background()
+
+	// A second project the same user belongs to: an epic's point is spanning
+	// more than one, and its visibility is one row per linked project.
+	second := &entities.Project{
+		KeyPrefix:      "API",
+		Name:           "API",
+		MemberIDs:      []entities.UserID{env.user.ID},
+		NextItemNumber: 1,
+	}
+	if err := entities.NewProjectRepository(env.database.DB).Create(ctx, second); err != nil {
+		t.Fatalf("create second project: %v", err)
+	}
+
+	const epicID = "e6e6e6e6-e6e6-e6e6-e6e6-e6e6e6e6e6e6"
+	payload := `{"id":"` + epicID + `",` +
+		`"projectIds":["` + string(env.project.ID) + `","` + string(second.ID) + `"],` +
+		`"title":"Checkout","details":"One feature across both apps",` +
+		`"dueDate":"2026-12-01T00:00:00Z","isArchived":false,` +
+		`"createdAt":"2026-11-24T10:00:00Z","updatedAt":"2026-11-24T10:00:00Z","version":"v1"}`
+
+	pushed := env.do(t, http.MethodPost, "/v1/sync/push", tokens.AccessToken, clientPushBody{
+		Changes: []clientPushChange{{
+			ID: "epic-1", Entity: "epic", EntityID: epicID,
+			Operation: "upsert", Payload: payload,
+		}},
+	})
+	if pushed.Code != http.StatusOK {
+		t.Fatalf("push = %d, body = %s", pushed.Code, pushed.Body.String())
+	}
+	if verdicts := decodeInto[clientPushResponse](t, pushed); len(verdicts.Results) != 1 || verdicts.Results[0].Status != "accepted" {
+		t.Fatalf("epic push = %+v, want one accepted change", verdicts.Results)
+	}
+
+	rec := env.do(t, http.MethodGet, "/v1/sync/changes/epics?limit=50", tokens.AccessToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pull = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	assertWireKeys(t, "the epic pull page", rec.Body.Bytes(),
+		[]string{"changes", "nextCursor", "hasMore"}, []string{"resyncRequired"})
+
+	var envelope struct {
+		Changes []json.RawMessage `json:"changes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode changes: %v", err)
+	}
+	if len(envelope.Changes) != 1 {
+		t.Fatalf("epics page has %d changes, want 1", len(envelope.Changes))
+	}
+	assertWireKeys(t, "an epic change", envelope.Changes[0],
+		[]string{"entity", "entityId", "operation", "payload", "version"}, nil)
+
+	page := decodeInto[clientChangesPage](t, rec)
+	if page.Changes[0].Entity != "epic" || page.Changes[0].EntityID != epicID {
+		t.Fatalf("pulled change = %+v, want the epic that was pushed", page.Changes[0])
+	}
+
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(page.Changes[0].Payload), &document); err != nil {
+		t.Fatalf("decode epic payload: %v", err)
+	}
+	assertWireKeySet(t, "an epic document", document,
+		[]string{"id", "projectIds", "title", "details", "isArchived", "createdAt", "updatedAt", "version"},
+		[]string{"dueDate"})
+
+	var epic struct {
+		ProjectIDs []string `json:"projectIds"`
+		Title      string   `json:"title"`
+	}
+	if err := json.Unmarshal([]byte(page.Changes[0].Payload), &epic); err != nil {
+		t.Fatalf("decode epic: %v", err)
+	}
+	if len(epic.ProjectIDs) != 2 || epic.ProjectIDs[0] != string(env.project.ID) || epic.ProjectIDs[1] != string(second.ID) {
+		t.Errorf("projectIds = %v, want both linked projects in order", epic.ProjectIDs)
+	}
+	if epic.Title != "Checkout" {
+		t.Errorf("title = %q, want Checkout", epic.Title)
+	}
+}
+
+// The only existing payload that gains a key is the work item: `epicID`, omitted
+// when the item has no epic. Pinning the name matters because the server decodes
+// it to enforce the link, and Go matches JSON keys case-insensitively while the
+// client does not.
+func TestTheWorkItemEpicKeyIsWhatTheClientDecodes(t *testing.T) {
+	env := newContractEnv(t)
+	tokens := env.signIn(t)
+
+	const epicID = "e7e7e7e7-e7e7-e7e7-e7e7-e7e7e7e7e7e7"
+	epicPayload := `{"id":"` + epicID + `","projectIds":["` + string(env.project.ID) + `"],` +
+		`"title":"Checkout","details":"","isArchived":false,` +
+		`"createdAt":"2026-11-24T10:00:00Z","updatedAt":"2026-11-24T10:00:00Z","version":"v1"}`
+	if res := env.do(t, http.MethodPost, "/v1/sync/push", tokens.AccessToken, clientPushBody{
+		Changes: []clientPushChange{{
+			ID: "epic-1", Entity: "epic", EntityID: epicID, Operation: "upsert", Payload: epicPayload,
+		}},
+	}); res.Code != http.StatusOK {
+		t.Fatalf("epic push = %d, body = %s", res.Code, res.Body.String())
+	}
+
+	const itemID = "e8e8e8e8-e8e8-e8e8-e8e8-e8e8e8e8e8e8"
+	itemPayload := `{"id":"` + itemID + `","projectId":"` + string(env.project.ID) + `",` +
+		`"key":"TT-1","title":"Wire the cart","details":"","status":"todo","priority":"medium",` +
+		`"epicID":"` + epicID + `","blockedByIds":[],"rank":0,` +
+		`"createdAt":"2026-11-24T10:00:00Z","updatedAt":"2026-11-24T10:00:00Z","version":"v1"}`
+	pushed := env.do(t, http.MethodPost, "/v1/sync/push", tokens.AccessToken, clientPushBody{
+		Changes: []clientPushChange{{
+			ID: "item-1", Entity: "workItem", EntityID: itemID, Operation: "upsert", Payload: itemPayload,
+		}},
+	})
+	if pushed.Code != http.StatusOK {
+		t.Fatalf("work item push = %d, body = %s", pushed.Code, pushed.Body.String())
+	}
+	if verdicts := decodeInto[clientPushResponse](t, pushed); len(verdicts.Results) != 1 || verdicts.Results[0].Status != "accepted" {
+		t.Fatalf("work item push = %+v, want one accepted change", verdicts.Results)
+	}
+
+	// The server read the key: a case-only mismatch would leave EpicID nil and
+	// the link unenforced.
+	stored, err := entities.NewWorkItemRepository(env.database.DB).GetByID(context.Background(), entities.WorkItemID(itemID))
+	if err != nil || stored == nil {
+		t.Fatalf("get the pushed item = %v, %v", stored, err)
+	}
+	if stored.EpicID == nil || *stored.EpicID != entities.EpicID(epicID) {
+		t.Fatalf("stored EpicID = %v, want %s", stored.EpicID, epicID)
+	}
+
+	rec := env.do(t, http.MethodGet, "/v1/sync/changes/workItems?limit=50", tokens.AccessToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pull = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	page := decodeInto[clientChangesPage](t, rec)
+	for _, change := range page.Changes {
+		if change.EntityID != itemID {
+			continue
+		}
+		var document map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(change.Payload), &document); err != nil {
+			t.Fatalf("decode work item payload: %v", err)
+		}
+		if _, ok := document["epicID"]; !ok {
+			t.Errorf("the work item payload carries no epicID; it has %s",
+				strings.Join(keysOf(document), ", "))
+		}
+		return
+	}
+	t.Fatalf("the pushed item %s did not come back on the workItems feed", itemID)
+}

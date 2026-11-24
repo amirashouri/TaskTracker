@@ -24,6 +24,7 @@ type CommentID string
 type AttachmentID string
 type NotificationID string
 type TagID string
+type EpicID string
 
 func NewUserID() UserID                 { return UserID(uuid.New().String()) }
 func NewProjectID() ProjectID           { return ProjectID(uuid.New().String()) }
@@ -32,6 +33,7 @@ func NewSprintID() SprintID             { return SprintID(uuid.New().String()) }
 func NewCommentID() CommentID           { return CommentID(uuid.New().String()) }
 func NewAttachmentID() AttachmentID     { return AttachmentID(uuid.New().String()) }
 func NewNotificationID() NotificationID { return NotificationID(uuid.New().String()) }
+func NewEpicID() EpicID                 { return EpicID(uuid.New().String()) }
 
 // ============ User ============
 
@@ -228,8 +230,12 @@ type WorkItem struct {
 	// StatusKey names the project's StatusDefinition this item sits in. Empty is
 	// "no catalog adopted" and the client derives the column from Status; omitted
 	// when empty so an installed client that predates the field still decodes.
-	StatusKey  string     `json:"statusKey,omitempty"`
-	SprintID   *SprintID  `json:"sprintId,omitempty"`
+	StatusKey string    `json:"statusKey,omitempty"`
+	SprintID  *SprintID `json:"sprintId,omitempty"`
+	// EpicID links the item to at most one epic. The epic's status and progress
+	// are derived from its items, so nothing about them is stored here. Omitted
+	// when unset, which is what keeps the key off a work item that has no epic.
+	EpicID     *EpicID    `json:"epicID,omitempty"`
 	Rank       int        `json:"rank"`
 	CreatedAt  Timestamp  `json:"createdAt"`
 	UpdatedAt  Timestamp  `json:"updatedAt"`
@@ -307,6 +313,44 @@ func (s *Sprint) StatusAt(now Timestamp) SprintStatus {
 
 func (s *Sprint) Overlaps(other *Sprint) bool {
 	return s.StartDate <= other.EndDate && other.StartDate <= s.EndDate
+}
+
+// ============ Epic ============
+
+// Epic groups work items across two or more projects. Its status and progress
+// are derived from its items on the client and never stored or synced: a stored
+// status would be a second answer that drifts the moment an item moves, and a
+// stored count would leak work the reader cannot see.
+//
+// ProjectIDs is the set of projects the epic spans, in the order the client
+// chose. It is also the epic's visibility set: the change feed writes one
+// visibility row per project so every member of every linked project receives
+// the epic.
+type Epic struct {
+	ID         EpicID      `json:"id"`
+	ProjectIDs []ProjectID `json:"projectIds"`
+	Title      string      `json:"title"`
+	Details    string      `json:"details"`
+	DueDate    *Timestamp  `json:"dueDate,omitempty"`
+	IsArchived bool        `json:"isArchived"`
+	CreatedAt  Timestamp   `json:"createdAt"`
+	UpdatedAt  Timestamp   `json:"updatedAt"`
+	Version    string      `json:"version"`
+}
+
+// ProjectIDSet is the epic's project list with duplicates removed, preserving
+// order. The wire may repeat an id; the join table cannot.
+func (e *Epic) ProjectIDSet() []ProjectID {
+	seen := make(map[ProjectID]struct{}, len(e.ProjectIDs))
+	out := make([]ProjectID, 0, len(e.ProjectIDs))
+	for _, id := range e.ProjectIDs {
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 // ============ Comment ============
@@ -406,6 +450,7 @@ const (
 	OutboxEntitySprintMember OutboxEntity = "sprintMember"
 	OutboxEntityComment      OutboxEntity = "comment"
 	OutboxEntityAttachment   OutboxEntity = "attachment"
+	OutboxEntityEpic         OutboxEntity = "epic"
 	// Notifications are the one entity a client never creates: a push may only
 	// change the caller's own read state or dismiss its own row.
 	OutboxEntityNotification OutboxEntity = "notification"
@@ -487,6 +532,10 @@ func (a *Attachment) ToJSON() ([]byte, error) {
 	return json.Marshal(a)
 }
 
+func (e *Epic) ToJSON() ([]byte, error) {
+	return json.Marshal(e)
+}
+
 func (p *Project) ToJSON() ([]byte, error) {
 	return json.Marshal(p)
 }
@@ -556,6 +605,12 @@ func AttachmentFromJSON(data []byte) (*Attachment, error) {
 	var a Attachment
 	err := json.Unmarshal(payloadJSON(data), &a)
 	return &a, err
+}
+
+func EpicFromJSON(data []byte) (*Epic, error) {
+	var e Epic
+	err := json.Unmarshal(payloadJSON(data), &e)
+	return &e, err
 }
 
 func ProjectFromJSON(data []byte) (*Project, error) {

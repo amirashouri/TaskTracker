@@ -335,9 +335,10 @@ const (
 	GrantScopeWorkItems     = "workItems"
 	GrantScopeSprintMembers = "sprintMembers"
 	GrantScopeAttachments   = "attachments"
+	GrantScopeEpics         = "epics"
 )
 
-var grantScopes = []string{GrantScopeProjects, GrantScopeWorkItems, GrantScopeSprintMembers, GrantScopeAttachments}
+var grantScopes = []string{GrantScopeProjects, GrantScopeWorkItems, GrantScopeSprintMembers, GrantScopeAttachments, GrantScopeEpics}
 
 // memberSet reads the project's current members, as a set.
 func memberSet(ctx context.Context, q Querier, projectID ProjectID) (map[UserID]struct{}, error) {

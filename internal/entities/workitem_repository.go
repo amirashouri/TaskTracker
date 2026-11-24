@@ -16,19 +16,19 @@ func NewWorkItemRepository(db Querier) *WorkItemRepository {
 	return &WorkItemRepository{db: db}
 }
 
-const workItemColumns = `id, project_id, key, title, details, status, priority, assignee_id, due_date, recurrence, story_points, blocked_by_ids, tag_ids, sprint_id, rank, created_at, updated_at, resolved_at, version, status_key`
+const workItemColumns = `id, project_id, key, title, details, status, priority, assignee_id, due_date, recurrence, story_points, blocked_by_ids, tag_ids, sprint_id, rank, created_at, updated_at, resolved_at, version, status_key, epic_id`
 
 // scanWorkItem reads one row selected with workItemColumns. Both GetByID and
 // the list queries scan through it, so the column order and the nullable
 // conversions are stated once.
 func scanWorkItem(row scanner, w *WorkItem) error {
 	var blockedJSON, tagJSON, recurrenceJSON []byte
-	var assigneeID, sprintID, statusKey sql.NullString
+	var assigneeID, sprintID, statusKey, epicID sql.NullString
 	var dueDate, resolvedAt, storyPoints sql.NullInt64
 
 	if err := row.Scan(&w.ID, &w.ProjectID, &w.Key, &w.Title, &w.Details, &w.Status, &w.Priority,
 		&assigneeID, &dueDate, &recurrenceJSON, &storyPoints, &blockedJSON, &tagJSON, &sprintID, &w.Rank,
-		&w.CreatedAt, &w.UpdatedAt, &resolvedAt, &w.Version, &statusKey); err != nil {
+		&w.CreatedAt, &w.UpdatedAt, &resolvedAt, &w.Version, &statusKey, &epicID); err != nil {
 		return err
 	}
 
@@ -40,6 +40,9 @@ func scanWorkItem(row scanner, w *WorkItem) error {
 	}
 	if statusKey.Valid {
 		w.StatusKey = statusKey.String
+	}
+	if epicID.Valid {
+		w.EpicID = (*EpicID)(&epicID.String)
 	}
 	w.DueDate = timestampOrNil(dueDate)
 	w.ResolvedAt = timestampOrNil(resolvedAt)
@@ -69,17 +72,20 @@ func scanWorkItem(row scanner, w *WorkItem) error {
 func (r *WorkItemRepository) Create(ctx context.Context, w *WorkItem) error {
 	w.ID = orNewID(w.ID, NewWorkItemID)
 	w.CreatedAt, w.UpdatedAt, w.Version = createStamp(w.CreatedAt)
+	if err := r.refuseUnlinkedEpic(ctx, w); err != nil {
+		return err
+	}
 
 	blockedJSON, _ := json.Marshal(w.BlockedByIDs)
 	tagJSON, _ := json.Marshal(w.TagIDs)
 	recurrenceJSON, _ := json.Marshal(w.Recurrence)
 
 	query := `INSERT INTO work_items (` + workItemColumns + `)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`
 	_, err := r.db.ExecContext(ctx, query,
 		w.ID, w.ProjectID, w.Key, w.Title, w.Details, w.Status, w.Priority,
 		w.AssigneeID, w.DueDate, recurrenceJSON, w.StoryPoints, blockedJSON, tagJSON,
-		w.SprintID, w.Rank, w.CreatedAt, w.UpdatedAt, w.ResolvedAt, w.Version, w.StatusKey)
+		w.SprintID, w.Rank, w.CreatedAt, w.UpdatedAt, w.ResolvedAt, w.Version, w.StatusKey, w.EpicID)
 	return err
 }
 
@@ -117,17 +123,41 @@ func (r *WorkItemRepository) Update(ctx context.Context, w *WorkItem) error {
 	previous := w.Version
 	w.UpdatedAt = Now()
 	w.Version = newVersion()
+	if err := r.refuseUnlinkedEpic(ctx, w); err != nil {
+		return err
+	}
 
 	blockedJSON, _ := json.Marshal(w.BlockedByIDs)
 	tagJSON, _ := json.Marshal(w.TagIDs)
 	recurrenceJSON, _ := json.Marshal(w.Recurrence)
 
-	query := `UPDATE work_items SET project_id=$1, key=$2, title=$3, details=$4, status=$5, priority=$6, assignee_id=$7, due_date=$8, recurrence=$9, story_points=$10, blocked_by_ids=$11, tag_ids=$12, sprint_id=$13, rank=$14, updated_at=$15, resolved_at=$16, version=$17, status_key=$18
-	          WHERE id=$19 AND version=$20`
+	query := `UPDATE work_items SET project_id=$1, key=$2, title=$3, details=$4, status=$5, priority=$6, assignee_id=$7, due_date=$8, recurrence=$9, story_points=$10, blocked_by_ids=$11, tag_ids=$12, sprint_id=$13, rank=$14, updated_at=$15, resolved_at=$16, version=$17, status_key=$18, epic_id=$19
+	          WHERE id=$20 AND version=$21`
 	return execOneRow(ctx, r.db, conflict("work item", w.ID), query,
 		w.ProjectID, w.Key, w.Title, w.Details, w.Status, w.Priority,
 		w.AssigneeID, w.DueDate, recurrenceJSON, w.StoryPoints, blockedJSON, tagJSON,
-		w.SprintID, w.Rank, w.UpdatedAt, w.ResolvedAt, w.Version, w.StatusKey, w.ID, previous)
+		w.SprintID, w.Rank, w.UpdatedAt, w.ResolvedAt, w.Version, w.StatusKey, w.EpicID, w.ID, previous)
+}
+
+// refuseUnlinkedEpic enforces the one link rule the join table cannot: an item
+// may join an epic only if the epic spans the item's project. A missing epic is
+// not refused here — the foreign key reports it and the engine keeps that
+// change retryable, because the epic may simply arrive later.
+func (r *WorkItemRepository) refuseUnlinkedEpic(ctx context.Context, w *WorkItem) error {
+	if w.EpicID != nil && *w.EpicID == "" {
+		w.EpicID = nil
+	}
+	if w.EpicID == nil {
+		return nil
+	}
+	exists, lists, err := NewEpicRepository(r.db).LinkState(ctx, *w.EpicID, w.ProjectID)
+	if err != nil {
+		return err
+	}
+	if exists && !lists {
+		return &EpicLinkError{EpicID: *w.EpicID, ProjectID: w.ProjectID}
+	}
+	return nil
 }
 
 // OpenCount counts a project's unfinished work: everything that is not done or

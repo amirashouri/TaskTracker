@@ -51,6 +51,8 @@ internal/db/migrations    versioned SQL, one file per driver
 | `/v1/sync/changes/workItems` | GET | + Auth | cursor-paged pull; carries project changes too |
 | `/v1/sync/changes/project` | GET | + Auth | alias for `/projects`, kept for a build that shipped against it |
 | `/v1/sync/changes/workItem` | GET | + Auth | alias for `/workItems` |
+| `/v1/sync/changes/epics` | GET | + Auth | cursor-paged pull; delivered to a member of any project the epic spans |
+| `/v1/sync/changes/epic` | GET | + Auth | alias for `/epics` |
 | `/v1/admin/users` | POST, GET | + Auth + AdminOnly | admin creates users and lists them in the `active`/`deleted` buckets; no self-signup |
 | `/v1/admin/users/{id}` | PATCH, DELETE | + Auth + AdminOnly | admin updates, soft-deletes or reactivates a user |
 | `/v1/admin/projects` | GET | + Auth + AdminOnly | admin lists every project in the `active`/`archived` buckets |
@@ -394,6 +396,37 @@ validation runs, counts, handoffs and per-task file lists were dropped.
   time, version) and `onDelete` where a row owns external bytes. A new entity
   that copies the sequence by hand is how the version rule drifts between
   entities.
+
+### Sync visibility and epics
+
+- **A change's visibility is a set of projects, not one.** `sync_log_projects`
+  (`log_id`, `project_id`) replaced `sync_log.project_id`; the pull predicate is
+  one `EXISTS` against the caller's memberships. Every entity writes a single
+  visibility row, and a cross-project entity writes one per project, so the
+  predicate needs no special case. Keep one answer to "who may see this row":
+  never reintroduce a project column beside the join. `project_id` in this table
+  is deliberately not a foreign key — a feed row must outlive the project it
+  names — unlike `epic_projects.project_id`, which cascades with the project.
+- **An epic is one row over a set of projects.** It spans two or more projects,
+  and `epic_projects` holds the ordered set. An update replaces that set
+  wholesale, because the client always sends the whole document. Writing or
+  deleting an epic requires membership of **every** project it names, so a
+  device cannot plant one in a project it cannot see; a project that does not
+  exist yet keeps the change `retry_later`. The server only insists the set is
+  non-empty: "two or more" is the client's creation rule, and an edit that
+  removes a project must not be refused mid-flight.
+- **One epic per work item, and only from a project the epic spans.**
+  `work_items.epic_id` is the only link; there is no second item-side table. A
+  missing epic is a parent that may arrive (FK → `retry_later`), but an epic
+  that exists without listing the item's project is `rejected` for good — no
+  retry can widen the set, and `rejected` is terminal on the client.
+- **An epic's status and progress are derived, never stored or synced.** The
+  server keeps only the authored fields (`title`, `details`, `due_date`,
+  `is_archived`). A stored status or count would be a second answer that drifts
+  the moment an item moves, and a count would leak work the reader cannot see.
+  The client derives both from the items it can see, read only at the coarse
+  `category` level. Archive is the removal path in v1 and is a plain
+  `is_archived` upsert: the server cascades nothing to the epic's items.
 
 ### Install and exposure
 

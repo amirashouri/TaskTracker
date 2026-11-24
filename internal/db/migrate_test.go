@@ -270,6 +270,86 @@ func TestAgentTargetingMigrationAddsItsColumns(t *testing.T) {
 	}
 }
 
+// 0008 adds the epic tables and replaces sync_log's single project column with
+// the visibility join. Pin the end state on SQLite and check both dialect files
+// mention every object, because a driver-specific edit can drift unnoticed.
+func TestEpicMigrationAddsItsObjects(t *testing.T) {
+	database, err := New("sqlite://" + filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer database.Close()
+
+	if err := Migrate(database); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	for _, table := range []string{"epics", "epic_projects", "sync_log_projects"} {
+		var name string
+		if err := database.QueryRow(
+			`SELECT name FROM sqlite_master WHERE type = 'table' AND name = $1`, table).Scan(&name); err != nil {
+			t.Errorf("%s table is missing: %v", table, err)
+		}
+	}
+
+	// Selecting each column is what proves it exists, rather than the file
+	// mentioning it somewhere.
+	for _, query := range []string{
+		`SELECT epic_id FROM work_items LIMIT 0`,
+		`SELECT log_id, project_id FROM sync_log_projects LIMIT 0`,
+	} {
+		rows, err := database.Query(query)
+		if err != nil {
+			t.Errorf("%s: %v", query, err)
+			continue
+		}
+		rows.Close()
+	}
+
+	// The single project column is replaced, not kept beside the join: two
+	// answers to "who may see this row" can disagree.
+	rows, err := database.Query(`PRAGMA table_info(sync_log)`)
+	if err != nil {
+		t.Fatalf("describe sync_log: %v", err)
+	}
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, kind string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &dflt, &pk); err != nil {
+			t.Fatalf("scan sync_log column: %v", err)
+		}
+		if name == "project_id" {
+			t.Error("sync_log still has project_id; visibility must come only from sync_log_projects")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate sync_log columns: %v", err)
+	}
+	rows.Close()
+
+	for _, driver := range []string{DriverSQLite, DriverPostgres} {
+		migrations, err := loadMigrations(driver)
+		if err != nil {
+			t.Fatalf("load %s migrations: %v", driver, err)
+		}
+		var sql0008 string
+		for _, m := range migrations {
+			if m.version == "0008" {
+				sql0008 = m.sql
+			}
+		}
+		if sql0008 == "" {
+			t.Fatalf("%s has no 0008 migration", driver)
+		}
+		for _, object := range []string{"epics", "epic_projects", "sync_log_projects", "epic_id"} {
+			if !strings.Contains(sql0008, object) {
+				t.Errorf("%s 0008 does not mention %q", driver, object)
+			}
+		}
+	}
+}
+
 func versionsOf(migrations []migration) []string {
 	versions := make([]string, len(migrations))
 	for i, m := range migrations {
