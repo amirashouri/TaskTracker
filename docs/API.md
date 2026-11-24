@@ -493,6 +493,7 @@ policy, and the client never computes a merge.
 | --- | --- |
 | `project` | project object |
 | `workItem` | work item object |
+| `epic` | epic object |
 | `sprint` | sprint object |
 | `sprintMember` | sprint member object |
 | `comment` | comment object |
@@ -503,6 +504,44 @@ client-minted from the sprint and user ids, so a re-push updates one row rather
 than creating a second membership. No existing entity gains a key: membership
 is a new entity and a new pull scope, which installed clients neither push nor
 request.
+
+An `epic` groups work items across **one or more** projects, so unlike every
+other entity it belongs to a set of projects rather than one:
+
+```json
+{
+  "id": "66666666-6666-6666-6666-666666666666",
+  "projectIds": ["22222222-2222-2222-2222-222222222222", "77777777-7777-7777-7777-777777777777"],
+  "ownerId": "550e8400-e29b-41d4-a716-446655440000",
+  "title": "Checkout",
+  "details": "One feature across the web app and the API",
+  "dueDate": "2026-12-01T00:00:00Z",
+  "isArchived": false,
+  "createdAt": "2026-11-24T10:00:00Z",
+  "updatedAt": "2026-11-24T10:00:00Z",
+  "version": "the-version-now-stored"
+}
+```
+
+`projectIds` is the whole set, in the order the client chose, and an update
+replaces it wholesale. The server accepts a set of one even though the product
+requires one: an edit that removes a project must not be refused, and the
+creation rule is the client's. `ownerId` names the member who answers for the
+epic. A create that omits it gets the oldest non-deleted administrator as the
+default; an update that omits it keeps the stored owner, so an older offline
+client cannot reassign an owner it never knew about.
+An epic's status and progress are **derived from its work items and never stored
+or synced**: no status, count or percentage key exists, because a stored one
+would be a second answer that drifts the moment an item moves. `dueDate` is
+omitted when unset. Nobody may write an epic unless they are a member of every
+project in `projectIds`.
+
+A work item references at most one epic through `epicID`, omitted when the item
+has no epic. The link is valid only when the item's project is one of the
+epic's `projectIds`; an item that names an epic not spanning its project is
+`rejected` with a message naming the epic, because no retry can make the link
+valid. An item pushed before its epic arrives stays `retry_later` until the epic
+exists — the same ordering rule every other parent/child pair follows.
 
 ```json
 {
@@ -592,7 +631,9 @@ this rule.
 | `500` | `{"error": "sync failed"}` |
 
 A change is only accepted if the caller is a member of the project it belongs to.
-A project's own delete is the exception on the pull side — see below.
+An epic belongs to its whole set of projects, so writing one — including a delete
+— requires membership of **every** project it names. A project's own delete is
+the exception on the pull side — see below.
 
 ### `GET /v1/sync/changes/{scope}`
 
@@ -609,11 +650,12 @@ Query parameters:
 | --- | --- |
 | `projects` | Project changes, plus every project delete, to every authenticated user |
 | `workItems` | Work item changes — and the project changes that affect them, because renaming a project has to reach a client that never asked for projects |
+| `epics` | Epic changes, delivered to a member of **any** project the epic spans. A separate scope because an installed client never requests it, and because its payload's keys are not a work item's |
 | `sprintMembers` | Sprint membership changes only. A separate scope because an installed client never requests it and so cannot decode a payload whose keys it does not declare |
 | `notifications` | The caller's own notifications, **recipient-scoped** rather than project-membership scoped. A separate feed because an installed client never requests it, and because another project member must never see this account's inbox |
 
-The singular spellings `project` and `workItem` are still served as aliases.
-`sprintMember` is also served as an alias of `sprintMembers`.
+The singular spellings `project`, `workItem` and `epic` are still served as
+aliases. `sprintMember` is also served as an alias of `sprintMembers`.
 
 **Response:**
 
@@ -714,8 +756,8 @@ rows over email or an OS push channel.
 ### A known gap
 
 `push` accepts all four original entities and the engine applies all four. But
-only `projects`, `workItems`, `attachments` and the newer `sprintMembers` have
-pull scopes, so **sprint and comment changes are still push-only**: the server
+only `projects`, `workItems`, `attachments` and the newer `sprintMembers` and
+`epics` have pull scopes, so **sprint and comment changes are still push-only**: the server
 stores them, and no pull returns them to any other client. A comment that stays
 on the device that wrote it is worthless to every other member, so this is a gap
 rather than a design. Sprint membership deliberately did not widen `workItems`:

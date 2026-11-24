@@ -92,12 +92,13 @@ func applyMigration(database *DB, m migration) error {
 
 	for i, statement := range statements {
 		if _, err := tx.Exec(statement); err != nil {
-			// SQLite does not support ADD COLUMN IF NOT EXISTS. When
-			// re-running migrations over a schema that already has the column
-			// (e.g. schema_migrations was dropped), the ALTER TABLE fails with
-			// "duplicate column name". This is safe to skip: the column exists,
-			// which is the desired end state.
-			if database.Driver == DriverSQLite && isDuplicateColumn(err) {
+			// SQLite has no IF NOT EXISTS for column changes. When re-running
+			// migrations over a schema that already reached the end state (e.g.
+			// schema_migrations was dropped), ADD COLUMN fails with "duplicate
+			// column name" and DROP COLUMN with "no such column". Both mean the
+			// column is already in the state the migration wanted, so they are
+			// safe to skip.
+			if database.Driver == DriverSQLite && (isDuplicateColumn(err) || isMissingColumn(err)) {
 				continue
 			}
 			return fmt.Errorf("statement %d: %w", i+1, err)
@@ -174,6 +175,13 @@ func versionFromName(name string) (string, error) {
 // already has the column.
 func isDuplicateColumn(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "duplicate column name")
+}
+
+// isMissingColumn reports whether err is SQLite's "no such column" error, which
+// happens when ALTER TABLE DROP COLUMN is re-run on a schema that no longer has
+// the column.
+func isMissingColumn(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no such column")
 }
 
 // splitStatements cuts a migration file into statements on top-level semicolons.

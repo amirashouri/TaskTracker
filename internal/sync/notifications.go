@@ -198,7 +198,7 @@ func writeGeneratedNotification(ctx context.Context, q entities.Querier, actorID
 	if err != nil {
 		return err
 	}
-	return appendLog(ctx, q, "", entities.PushChange{
+	return appendLog(ctx, q, nil, entities.PushChange{
 		ID:        "notification:" + string(n.ID),
 		Entity:    entities.OutboxEntityNotification,
 		EntityID:  string(n.ID),
@@ -280,7 +280,7 @@ func (e *Engine) applyNotificationChange(ctx context.Context, userID string, cha
 			result.Message = err.Error()
 			return result
 		}
-		if err := appendLog(ctx, tx, "", entities.PushChange{
+		if err := appendLog(ctx, tx, nil, entities.PushChange{
 			Entity:    entities.OutboxEntityNotification,
 			EntityID:  change.EntityID,
 			Operation: entities.OutboxOperationUpsert,
@@ -302,7 +302,7 @@ func (e *Engine) applyNotificationChange(ctx context.Context, userID string, cha
 		// is still accepted so an offline delete does not dead-letter.
 		if dismissed {
 			payload, _ := json.Marshal(change.EntityID)
-			if err := appendLog(ctx, tx, "", entities.PushChange{
+			if err := appendLog(ctx, tx, nil, entities.PushChange{
 				Entity:    entities.OutboxEntityNotification,
 				EntityID:  change.EntityID,
 				Operation: entities.OutboxOperationDelete,

@@ -113,7 +113,7 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 	case entities.OutboxEntityProject, entities.OutboxEntityWorkItem,
 		entities.OutboxEntitySprint, entities.OutboxEntitySprintMember,
 		entities.OutboxEntityComment, entities.OutboxEntityAttachment,
-		entities.OutboxEntityNotification:
+		entities.OutboxEntityEpic, entities.OutboxEntityNotification:
 	default:
 		result.Status = StatusRejected
 		result.Message = fmt.Sprintf("unknown entity %q", change.Entity)
@@ -138,20 +138,21 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 	defer tx.Rollback()
 
 	// Authorize before writing: a change is applied only if the caller may see
-	// the project it belongs to.
-	projectID, err := resolveProject(ctx, tx, change)
+	// every project it belongs to. Most entities name one; an epic names its
+	// whole project set, and the caller must be a member of all of it.
+	projectIDs, err := resolveProjects(ctx, tx, change)
 	if err != nil {
 		result.Status = StatusRetryLater
 		result.Message = err.Error()
 		return result
 	}
-	if projectID == "" && change.Operation != entities.OutboxOperationDelete {
+	if len(projectIDs) == 0 && change.Operation != entities.OutboxOperationDelete {
 		result.Status = StatusRejected
 		result.Message = errNoProject.Error()
 		return result
 	}
-	if projectID != "" && checkMembership {
-		allowed, err := canWrite(ctx, tx, userID, change, projectID)
+	if len(projectIDs) > 0 && checkMembership {
+		allowed, err := canWrite(ctx, tx, userID, change, projectIDs)
 		if err != nil {
 			result.Status = StatusRetryLater
 			result.Message = err.Error()
@@ -184,12 +185,15 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 		version, err = applyComment(ctx, entities.NewCommentRepository(tx), change)
 	case entities.OutboxEntityAttachment:
 		version, err = applyAttachment(ctx, e.attachmentRoot, entities.NewAttachmentRepository(tx), change)
+	case entities.OutboxEntityEpic:
+		version, err = applyEpic(ctx, entities.NewEpicRepository(tx), change)
 	}
 
 	if err != nil {
 		var conflict *versionConflict
 		var metadata *invalidProjectMetadata
 		var overlap *entities.SprintWindowOverlapError
+		var unlinked *entities.EpicLinkError
 		switch {
 		case errors.As(err, &conflict):
 			result.Status = StatusConflict
@@ -208,6 +212,11 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 			// field, and `rejected` is what stops the client resending it.
 			result.Status = StatusRejected
 			result.Message = metadata.Error()
+		case errors.As(err, &unlinked):
+			// The epic exists and does not span the item's project, so no retry
+			// can make the link valid. The message names the epic in the way.
+			result.Status = StatusRejected
+			result.Message = unlinked.Error()
 		case errors.As(err, &overlap):
 			// The window collides with a sibling's row, so re-sending this
 			// payload cannot clear it: `rejected` is what stops the client
@@ -239,7 +248,7 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 		}
 	}
 
-	if err := appendLog(ctx, tx, projectID, change, userID, version); err != nil {
+	if err := appendLog(ctx, tx, projectIDs, change, userID, version); err != nil {
 		result.Status = StatusRetryLater
 		result.Message = err.Error()
 		return result
@@ -256,43 +265,45 @@ func (e *Engine) applyChange(ctx context.Context, userID string, change entities
 	return result
 }
 
-// resolveProject reports which project a change belongs to, so it can be
-// authorized and recorded on the log row. An empty id means the change names
-// no project: for a delete that is a no-op, for an upsert it is rejected.
-func resolveProject(ctx context.Context, q entities.Querier, change entities.PushChange) (string, error) {
+// resolveProjects reports which projects a change belongs to, so it can be
+// authorized and recorded as visible to each one. Most entities name exactly
+// one project; an epic names its whole set, which is what lets one log row reach
+// every linked project's members. An empty set means the change names no
+// project: for a delete that is a no-op, for an upsert it is rejected.
+func resolveProjects(ctx context.Context, q entities.Querier, change entities.PushChange) ([]string, error) {
 	switch change.Entity {
 	case entities.OutboxEntityProject:
-		return change.EntityID, nil
+		return projectSet(change.EntityID), nil
 
 	case entities.OutboxEntityWorkItem:
 		if change.Operation == entities.OutboxOperationDelete {
-			return projectOfWorkItem(ctx, q, change.EntityID)
+			return oneProject(projectOfWorkItem(ctx, q, change.EntityID))
 		}
 		item, err := entities.WorkItemFromJSON(change.Payload)
 		if err != nil {
-			return "", fmt.Errorf("decode work item: %w", err)
+			return nil, fmt.Errorf("decode work item: %w", err)
 		}
-		return string(item.ProjectID), nil
+		return projectSet(string(item.ProjectID)), nil
 
 	case entities.OutboxEntitySprint:
 		if change.Operation == entities.OutboxOperationDelete {
-			return projectOfSprint(ctx, q, change.EntityID)
+			return oneProject(projectOfSprint(ctx, q, change.EntityID))
 		}
 		sprint, err := entities.SprintFromJSON(change.Payload)
 		if err != nil {
-			return "", fmt.Errorf("decode sprint: %w", err)
+			return nil, fmt.Errorf("decode sprint: %w", err)
 		}
-		return string(sprint.ProjectID), nil
+		return projectSet(string(sprint.ProjectID)), nil
 
 	case entities.OutboxEntitySprintMember:
 		if change.Operation == entities.OutboxOperationDelete {
-			return projectOfSprintMember(ctx, q, change.EntityID)
+			return oneProject(projectOfSprintMember(ctx, q, change.EntityID))
 		}
 		member, err := entities.SprintMemberFromJSON(change.Payload)
 		if err != nil {
-			return "", fmt.Errorf("decode sprint member: %w", err)
+			return nil, fmt.Errorf("decode sprint member: %w", err)
 		}
-		return string(member.ProjectID), nil
+		return projectSet(string(member.ProjectID)), nil
 
 	case entities.OutboxEntityComment:
 		// A comment names a work item, not a project; the work item names the
@@ -301,23 +312,23 @@ func resolveProject(ctx context.Context, q entities.Querier, change entities.Pus
 		if change.Operation == entities.OutboxOperationDelete {
 			comment, err := entities.NewCommentRepository(q).GetByID(ctx, entities.CommentID(change.EntityID))
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 			if comment == nil {
-				return "", nil
+				return nil, nil
 			}
 			workItemID = string(comment.WorkItemID)
 		} else {
 			comment, err := entities.CommentFromJSON(change.Payload)
 			if err != nil {
-				return "", fmt.Errorf("decode comment: %w", err)
+				return nil, fmt.Errorf("decode comment: %w", err)
 			}
 			workItemID = string(comment.WorkItemID)
 		}
 		if workItemID == "" {
-			return "", nil
+			return nil, nil
 		}
-		return projectOfWorkItem(ctx, q, workItemID)
+		return oneProject(projectOfWorkItem(ctx, q, workItemID))
 
 	case entities.OutboxEntityAttachment:
 		// An attachment names a work item, not a project; the work item names the
@@ -326,25 +337,68 @@ func resolveProject(ctx context.Context, q entities.Querier, change entities.Pus
 		if change.Operation == entities.OutboxOperationDelete {
 			att, err := entities.NewAttachmentRepository(q).GetByID(ctx, entities.AttachmentID(change.EntityID))
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 			if att == nil {
-				return "", nil
+				return nil, nil
 			}
 			workItemID = string(att.WorkItemID)
 		} else {
 			att, err := entities.AttachmentFromJSON(change.Payload)
 			if err != nil {
-				return "", fmt.Errorf("decode attachment: %w", err)
+				return nil, fmt.Errorf("decode attachment: %w", err)
 			}
 			workItemID = string(att.WorkItemID)
 		}
 		if workItemID == "" {
-			return "", nil
+			return nil, nil
 		}
-		return projectOfWorkItem(ctx, q, workItemID)
+		return oneProject(projectOfWorkItem(ctx, q, workItemID))
+
+	case entities.OutboxEntityEpic:
+		if change.Operation == entities.OutboxOperationDelete {
+			epic, err := entities.NewEpicRepository(q).GetByID(ctx, entities.EpicID(change.EntityID))
+			if err != nil || epic == nil {
+				return nil, err
+			}
+			return projectIDStrings(epic.ProjectIDSet()), nil
+		}
+		epic, err := entities.EpicFromJSON(change.Payload)
+		if err != nil {
+			return nil, fmt.Errorf("decode epic: %w", err)
+		}
+		return projectIDStrings(epic.ProjectIDSet()), nil
 	}
-	return "", fmt.Errorf("unknown entity %q", change.Entity)
+	return nil, fmt.Errorf("unknown entity %q", change.Entity)
+}
+
+// oneProject wraps a single owning project, dropping the empty id a missing row
+// reports so the caller sees "names no project" rather than a blank membership.
+func oneProject(projectID string, err error) ([]string, error) {
+	if err != nil {
+		return nil, err
+	}
+	return projectSet(projectID), nil
+}
+
+// projectSet is a single owning project as a set. An empty id means the payload
+// named none, which the caller rejects for an upsert — the same answer the
+// single-project engine gave before the set existed.
+func projectSet(projectID string) []string {
+	if projectID == "" {
+		return nil
+	}
+	return []string{projectID}
+}
+
+func projectIDStrings(ids []entities.ProjectID) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			out = append(out, string(id))
+		}
+	}
+	return out
 }
 
 func projectOfWorkItem(ctx context.Context, q entities.Querier, workItemID string) (string, error) {
@@ -375,9 +429,15 @@ func projectOfSprintMember(ctx context.Context, q entities.Querier, memberID str
 // does not exist yet has no membership rows, so the payload's member list is
 // what authorizes its creation — which keeps creation open to anyone who names
 // themselves a member without letting anyone join a project they cannot see.
-func canWrite(ctx context.Context, q entities.Querier, userID string, change entities.PushChange, projectID string) (bool, error) {
+//
+// An epic is the one entity with more than one project: the caller must be a
+// member of every project it names, so a device cannot plant an epic in a
+// project it cannot see. A project that does not exist yet is an error rather
+// than a refusal, because the project may still arrive and a refusal is
+// terminal on the client.
+func canWrite(ctx context.Context, q entities.Querier, userID string, change entities.PushChange, projectIDs []string) (bool, error) {
 	if change.Entity == entities.OutboxEntityProject && change.Operation != entities.OutboxOperationDelete {
-		exists, err := projectExists(ctx, q, projectID)
+		exists, err := projectExists(ctx, q, projectIDs[0])
 		if err != nil {
 			return false, err
 		}
@@ -389,7 +449,28 @@ func canWrite(ctx context.Context, q entities.Querier, userID string, change ent
 			return containsUser(project.MemberIDs, userID), nil
 		}
 	}
-	return isMember(ctx, q, userID, projectID)
+
+	if change.Entity == entities.OutboxEntityEpic {
+		for _, projectID := range projectIDs {
+			exists, err := projectExists(ctx, q, projectID)
+			if err != nil {
+				return false, err
+			}
+			if !exists {
+				return false, fmt.Errorf("epic names project %s, which does not exist yet", projectID)
+			}
+			member, err := isMember(ctx, q, userID, projectID)
+			if err != nil {
+				return false, err
+			}
+			if !member {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+
+	return isMember(ctx, q, userID, projectIDs[0])
 }
 
 func projectExists(ctx context.Context, q entities.Querier, projectID string) (bool, error) {
@@ -460,6 +541,12 @@ func currentVersion(ctx context.Context, q entities.Querier, change entities.Pus
 		return row.Version, nil
 	case entities.OutboxEntityAttachment:
 		row, err := entities.NewAttachmentRepository(q).GetByID(ctx, entities.AttachmentID(change.EntityID))
+		if err != nil || row == nil {
+			return "", err
+		}
+		return row.Version, nil
+	case entities.OutboxEntityEpic:
+		row, err := entities.NewEpicRepository(q).GetByID(ctx, entities.EpicID(change.EntityID))
 		if err != nil || row == nil {
 			return "", err
 		}
@@ -707,6 +794,31 @@ func applyAttachment(ctx context.Context, attachmentRoot string, attachments *en
 	})
 }
 
+// applyEpic runs the shared upsert sequence. Its project set is part of the
+// payload, so the repository replaces the link rows in the same transaction as
+// the epic row; a project added or removed is a single accepted change.
+func applyEpic(ctx context.Context, epics *entities.EpicRepository, change entities.PushChange) (string, error) {
+	return applyUpsert(ctx, change, syncOps[entities.Epic]{
+		name:   "epic",
+		decode: entities.EpicFromJSON,
+		load: func(ctx context.Context, id string) (*entities.Epic, error) {
+			return epics.GetByID(ctx, entities.EpicID(id))
+		},
+		create: epics.Create,
+		update: epics.Update,
+		remove: func(ctx context.Context, id string) error {
+			return epics.Delete(ctx, entities.EpicID(id))
+		},
+		setID: func(epic *entities.Epic, id string) { epic.ID = entities.EpicID(id) },
+		adopt: func(existing, incoming *entities.Epic) {
+			incoming.ID = existing.ID
+			incoming.CreatedAt = existing.CreatedAt
+			incoming.Version = existing.Version
+		},
+		version: func(epic *entities.Epic) string { return epic.Version },
+	})
+}
+
 // removeAttachmentBlob deletes an attachment's on-disk bytes, best-effort. The
 // blob store is keyed flat by attachment id under attachmentRoot; a missing file
 // (already removed, or never uploaded) is not worth failing the metadata delete.
@@ -763,6 +875,12 @@ var (
 	// request it, so they never decode a payload whose keys they do not declare.
 	ScopeSprintMembers = Scope{name: entities.GrantScopeSprintMembers, entities: []entities.OutboxEntity{
 		entities.OutboxEntitySprintMember,
+	}}
+	// A cross-project epic reaches every member of every linked project. It has
+	// its own feed because an installed client never asks for it, and because its
+	// payload's keys are not the work item's.
+	ScopeEpics = Scope{name: entities.GrantScopeEpics, entities: []entities.OutboxEntity{
+		entities.OutboxEntityEpic,
 	}}
 	// A recipient-scoped feed of its own. It carries an entity an installed
 	// client never asks for, and its rows are visible to exactly one account.
@@ -825,7 +943,9 @@ func (e *Engine) Pull(ctx context.Context, userID string, scope Scope, cursor st
 			SELECT id, entity, entity_id, operation, payload, version
 			  FROM sync_log
 			 WHERE entity IN (%s) AND id > $%d
-			   AND ( project_id IN (SELECT project_id FROM project_members WHERE user_id = $%d)
+			   AND ( EXISTS (SELECT 1 FROM sync_log_projects sp
+			                  WHERE sp.log_id = sync_log.id
+			                    AND sp.project_id IN (SELECT project_id FROM project_members WHERE user_id = $%d))
 			         OR (entity = 'project' AND operation = 'delete') )
 			 ORDER BY id
 			 LIMIT $%d`, in, cursorAt, cursorAt+1, cursorAt+2)
@@ -959,21 +1079,45 @@ func (e *Engine) Prune(ctx context.Context, before time.Time) (int64, error) {
 	return result.RowsAffected()
 }
 
-// appendLog writes the change feed row. It takes the caller's transaction so
-// the entity write and this row commit together.
-func appendLog(ctx context.Context, q entities.Querier, projectID string, change entities.PushChange, userID, version string) error {
-	_, err := q.ExecContext(ctx, `
-		INSERT INTO sync_log (entity, entity_id, operation, payload, version, user_id, project_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+// appendLog writes the change feed row and its visibility set. It takes the
+// caller's transaction so the entity write and this row commit together.
+//
+// Visibility is a set of projects rather than one. Most entities name a single
+// project; an epic names every project it spans, so its one log row gets one
+// visibility row per linked project and reaches all of their members. The pull
+// predicate is then one uniform EXISTS, with no special case for epics.
+func appendLog(ctx context.Context, q entities.Querier, projectIDs []string, change entities.PushChange, userID, version string) error {
+	var logID int64
+	if err := q.QueryRowContext(ctx, `
+		INSERT INTO sync_log (entity, entity_id, operation, payload, version, user_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id`,
 		string(change.Entity),
 		change.EntityID,
 		string(change.Operation),
 		string(change.Payload),
 		version,
 		nullableString(userID),
-		nullableString(projectID),
-		time.Now().UnixMilli())
-	return err
+		time.Now().UnixMilli()).Scan(&logID); err != nil {
+		return err
+	}
+
+	seen := make(map[string]struct{}, len(projectIDs))
+	for _, projectID := range projectIDs {
+		if projectID == "" {
+			continue
+		}
+		if _, duplicate := seen[projectID]; duplicate {
+			continue
+		}
+		seen[projectID] = struct{}{}
+		if _, err := q.ExecContext(ctx,
+			`INSERT INTO sync_log_projects (log_id, project_id) VALUES ($1, $2)`,
+			logID, projectID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func parseCursor(cursor string) (int64, error) {

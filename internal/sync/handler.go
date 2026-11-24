@@ -67,6 +67,10 @@ func (h *Handler) PullSprintMember(w http.ResponseWriter, r *http.Request) {
 	h.pull(w, r, ScopeSprintMembers)
 }
 
+func (h *Handler) PullEpic(w http.ResponseWriter, r *http.Request) {
+	h.pull(w, r, ScopeEpics)
+}
+
 func (h *Handler) PullNotification(w http.ResponseWriter, r *http.Request) {
 	h.pull(w, r, ScopeNotifications)
 }
